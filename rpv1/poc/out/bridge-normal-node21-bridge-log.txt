@@ -1,0 +1,19 @@
+0.028 client MODEM_CREATE side=back ok=true err=nil
+0.028 client MODEM_CREATE side=top ok=true err=nil
+0.029 client START id=rpv1 role=client local=back/4301 ender=top/4999 secs=24 auth=psk kat=true maxframe=4096
+0.031 client PSK_LOADED kind=hex fingerprint=b5a7bcb1
+4.905 client AUTH_FAIL bad hello
+4.906 client AUTH_FAIL bad hello
+4.907 client AUTH_FAIL bad hello
+4.908 client AUTH_FAIL bad hello
+4.909 client AUTH_FAIL bad hello
+4.910 client AUTH_FAIL bad hello
+4.911 client AUTH_FAIL bad hello
+4.912 client AUTH_FAIL bad hello
+5.041 client STATS auth=psk paired=false relayed=0 lan_to_link=0 link_to_lan=0 unauth=28 replay=0 policy=0 rate=0 size=0 future=0 bad=0 stp=off id=21 root=21 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+5.051 client PAIRED id=rpv1
+10.042 client STATS auth=psk paired=true relayed=9 lan_to_link=6 link_to_lan=9 unauth=28 replay=0 policy=0 rate=0 size=0 future=0 bad=0 stp=off id=21 root=21 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+15.047 client STATS auth=psk paired=true relayed=10 lan_to_link=7 link_to_lan=10 unauth=28 replay=16 policy=0 rate=0 size=1 future=0 bad=0 stp=off id=21 root=21 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+20.053 client STATS auth=psk paired=true relayed=10 lan_to_link=7 link_to_lan=10 unauth=28 replay=16 policy=0 rate=0 size=1 future=5 bad=0 stp=off id=21 root=21 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+24.056 client BRIDGE_RESULT auth=psk paired=true relayed=10 lan_to_link=7 link_to_lan=10 dropped=50 unauth=28 replay=16 policy=0 rate=0 size=1 future=5 bad=0 stp=off id=21 root=21 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+24.056 client TEST_DONE

@@ -1,0 +1,7 @@
+attack_side=top
+attack_channel=4999
+attack_secs=18
+attack_id=rpv1
+attack_forge=20
+attack_hellos=8
+attack_oversize=4096

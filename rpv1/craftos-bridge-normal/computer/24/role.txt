@@ -1,0 +1,4 @@
+role=host
+iface=back|LAN|10.0.9.3/24|4301|256|wireless
+app=udp-echo:7
+

@@ -1,0 +1,19 @@
+# Password policy for firstboot and passwd
+min_length=8
+require_digit=true
+require_letter=true
+require_upper=true
+require_symbol=false
+# Users whose names cannot be chosen at firstboot (comma separated)
+#
+# 'admin' is deliberately NOT in this list, and must not be put back: it is the
+# machine's own administrator account, not a reserved name. lib/perm.lua seeds
+# the stock accounts as root (level 2), admin (level 1) and guest (level 0), and
+# the setup wizard offers 'admin' as its DEFAULT name ("Leave blank for default
+# name 'admin'") and keeps that account when it is chosen -- firstboot.lua
+# deletes the seeded admin only when the operator picks a different name. Listing
+# it here made the default answer fail policy.check_username() with
+# "'admin' is a reserved name", and the prompt asked again for ever: a fresh
+# machine could not be set up at all. 'guest' is not listed either; the wizard
+# removes that account during setup.
+blacklist=root,daemon,bin,sys,adm,operator,mail,ftp,http,test

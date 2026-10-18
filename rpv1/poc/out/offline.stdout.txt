@@ -1,0 +1,896 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+                                                   
+CraftOS                                            CraftOS                                            CraftOS 1.9                                        
+Welcome                                            Welcome                                            Welcome to                                         Welcome to                                         Welcome to CraftOS-PC!                             Welcome to CraftOS-PC!                             Welcome to CraftOS-PC! This                        Welcome to CraftOS-PC! This                        Welcome to CraftOS-PC! This is                     Welcome to CraftOS-PC! This is                     Welcome to CraftOS-PC! This is the                 Welcome to CraftOS-PC! This is the                 Welcome to CraftOS-PC! This is the ComputerCraft   Welcome to CraftOS-PC! This is the ComputerCraft   
+shell                                              shell                                              shell prompt,                                      shell prompt,                                      shell prompt, where                                shell prompt, where                                shell prompt, where you                            shell prompt, where you                            shell prompt, where you can                        shell prompt, where you can                        shell prompt, where you can run                    shell prompt, where you can run                    shell prompt, where you can run programs.          
+*                                                  *                                                  * Type                                             * Type                                             * Type "programs"                                  * Type "programs"                                  * Type "programs" to                               * Type "programs" to                               * Type "programs" to see                           * Type "programs" to see                           * Type "programs" to see the                       * Type "programs" to see the                       * Type "programs" to see the programs              * Type "programs" to see the programs              * Type "programs" to see the programs you          * Type "programs" to see the programs you          * Type "programs" to see the programs you can      * Type "programs" to see the programs you can      * Type "programs" to see the programs you can run. 
+*                                                  *                                                  * Type                                             * Type                                             * Type "help                                       * Type "help                                       * Type "help <program>"                            * Type "help <program>"                            * Type "help <program>" to                         * Type "help <program>" to                         * Type "help <program>" to see                     * Type "help <program>" to see                     * Type "help <program>" to see help                * Type "help <program>" to see help                * Type "help <program>" to see help for            * Type "help <program>" to see help for            * Type "help <program>" to see help for a          * Type "help <program>" to see help for a          * Type "help <program>" to see help for a specific * Type "help <program>" to see help for a specific 
+ 
+program.                                           
+*                                                  *                                                  * Read                                             * Read                                             * Read the                                         * Read the                                         * Read the documentation                           * Read the documentation                           * Read the documentation at                        * Read the documentation at                        
+https://www.craftos-pc.cc/docs/.                   
+*                                                  *                                                  * Report                                           * Report                                           * Report bugs                                      * Report bugs                                      * Report bugs to                                   * Report bugs to                                   
+https://www.craftos-pc.cc/bugreport.               
+
+TEST                                               TEST                                               TEST util                                          TEST util                                          TEST util ok=true                                  
+TEST                                               TEST                                               TEST ip                                            TEST ip                                            TEST ip ok=true                                    
+TEST                                               TEST                                               TEST route                                         TEST route                                         TEST route ok=true                                 
+TEST                                               TEST                                               TEST crypto                                        TEST crypto                                        TEST crypto ok=true                                
+TEST                                               TEST                                               TEST conn                                          TEST conn                                          TEST conn ok=true                                  
+TEST                                               TEST                                               TEST wansec                                        TEST wansec                                        TEST wansec ok=true                                
+TEST                                               TEST                                               TEST nat                                           TEST nat                                           TEST nat ok=true                                   
+TEST                                               TEST                                               TEST mcast                                         TEST mcast                                         TEST mcast ok=true                                 
+Welcome to CraftOS-PC! This is the ComputerCraft   
+shell prompt, where you can run programs.          
+* Type "programs" to see the programs you can run. 
+* Type "help <program>" to see help for a specific 
+program.                                           
+* Read the documentation at                        
+https://www.craftos-pc.cc/docs/.                   
+* Report bugs to                                   
+https://www.craftos-pc.cc/bugreport.               
+                                                   
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+                                                   TEST                                               TEST                                               TEST qos                                           TEST qos                                           TEST qos ok=true                                   
+shell prompt, where you can run programs.          
+* Type "programs" to see the programs you can run. 
+* Type "help <program>" to see help for a specific 
+program.                                           
+* Read the documentation at                        
+https://www.craftos-pc.cc/docs/.                   
+* Report bugs to                                   
+https://www.craftos-pc.cc/bugreport.               
+                                                   
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+                                                   TEST                                               TEST                                               TEST topo                                          TEST topo                                          TEST topo ok=true                                  
+* Type "programs" to see the programs you can run. 
+* Type "help <program>" to see help for a specific 
+program.                                           
+* Read the documentation at                        
+https://www.craftos-pc.cc/docs/.                   
+* Report bugs to                                   
+https://www.craftos-pc.cc/bugreport.               
+                                                   
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+                                                   SCALE_TOPO                                         SCALE_TOPO                                         SCALE_TOPO nodes=100                               SCALE_TOPO nodes=100                               SCALE_TOPO nodes=100 links=180                     SCALE_TOPO nodes=100 links=180                     SCALE_TOPO nodes=100 links=180 merge_ms=32         
+* Type "help <program>" to see help for a specific 
+program.                                           
+* Read the documentation at                        
+https://www.craftos-pc.cc/docs/.                   
+* Report bugs to                                   
+https://www.craftos-pc.cc/bugreport.               
+                                                   
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+                                                   SCALE_DV                                           SCALE_DV                                           SCALE_DV nodes=100                                 SCALE_DV nodes=100                                 SCALE_DV nodes=100 links=100                       SCALE_DV nodes=100 links=100                       SCALE_DV nodes=100 links=100 diameter=7            SCALE_DV nodes=100 links=100 diameter=7            SCALE_DV nodes=100 links=100 diameter=7 rounds=8   SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+program.                                           
+* Read the documentation at                        
+https://www.craftos-pc.cc/docs/.                   
+* Report bugs to                                   
+https://www.craftos-pc.cc/bugreport.               
+                                                   
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+                                                   max_metric=7                                       max_metric=7                                       max_metric=7 dv_ms=16                              
+* Read the documentation at                        
+https://www.craftos-pc.cc/docs/.                   
+* Report bugs to                                   
+https://www.craftos-pc.cc/bugreport.               
+                                                   
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+                                                   TEST                                               TEST                                               TEST scale                                         TEST scale                                         TEST scale ok=true                                 
+https://www.craftos-pc.cc/docs/.                   
+* Report bugs to                                   
+https://www.craftos-pc.cc/bugreport.               
+                                                   
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+                                                   TEST                                               TEST                                               TEST services                                      TEST services                                      TEST services ok=true                              
+* Report bugs to                                   
+https://www.craftos-pc.cc/bugreport.               
+                                                   
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+                                                   TEST                                               TEST                                               TEST addr                                          TEST addr                                          TEST addr ok=true                                  
+https://www.craftos-pc.cc/bugreport.               
+                                                   
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+                                                   TEST                                               TEST                                               TEST compat                                        TEST compat                                        TEST compat ok=true                                
+                                                   
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+                                                   OFFLINE_RESULT                                     OFFLINE_RESULT                                     OFFLINE_RESULT pass=394                            OFFLINE_RESULT pass=394                            OFFLINE_RESULT pass=394 fail=0                     OFFLINE_RESULT pass=394 fail=0                     OFFLINE_RESULT pass=394 fail=0 groups=14           
+TEST util ok=true                                  
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+                                                   OFFLINE_PASS                                       OFFLINE_PASS                                       OFFLINE_PASS 394                                   
+TEST ip ok=true                                    
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+                                                   OFFLINE_FAIL                                       OFFLINE_FAIL                                       OFFLINE_FAIL 0                                     
+TEST route ok=true                                 
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+                                                   OFFLINE_GROUPS                                     OFFLINE_GROUPS                                     OFFLINE_GROUPS 14                                  
+TEST crypto ok=true                                
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua rule=global?           LINT_WARN file=rpv/conn.lua rule=global?           
+TEST conn ok=true                                  
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+                                                   detail=line                                        detail=line                                        detail=line 39:                                    detail=line 39:                                    detail=line 39: k_ctrl                             detail=line 39: k_ctrl                             detail=line 39: k_ctrl assigned                    detail=line 39: k_ctrl assigned                    detail=line 39: k_ctrl assigned without            detail=line 39: k_ctrl assigned without            detail=line 39: k_ctrl assigned without `local`    
+TEST wansec ok=true                                
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua rule=global?           LINT_WARN file=rpv/conn.lua rule=global?           
+TEST nat ok=true                                   
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+                                                   detail=line                                        detail=line                                        detail=line 1250:                                  detail=line 1250:                                  detail=line 1250: opts                             detail=line 1250: opts                             detail=line 1250: opts assigned                    detail=line 1250: opts assigned                    detail=line 1250: opts assigned without            detail=line 1250: opts assigned without            detail=line 1250: opts assigned without `local`    
+TEST mcast ok=true                                 
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
+TEST qos ok=true                                   
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+                                                   detail=line                                        detail=line                                        detail=line 255:                                   detail=line 255:                                   detail=line 255: salt                              detail=line 255: salt                              detail=line 255: salt assigned                     detail=line 255: salt assigned                     detail=line 255: salt assigned without             detail=line 255: salt assigned without             detail=line 255: salt assigned without `local`     
+TEST topo ok=true                                  
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
+SCALE_TOPO nodes=100 links=180 merge_ms=32         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+                                                   detail=line                                        detail=line                                        detail=line 257:                                   detail=line 257:                                   detail=line 257: info                              detail=line 257: info                              detail=line 257: info assigned                     detail=line 257: info assigned                     detail=line 257: info assigned without             detail=line 257: info assigned without             detail=line 257: info assigned without `local`     
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
+max_metric=7 dv_ms=16                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+                                                   detail=line                                        detail=line                                        detail=line 286:                                   detail=line 286:                                   detail=line 286: iters                             detail=line 286: iters                             detail=line 286: iters assigned                    detail=line 286: iters assigned                    detail=line 286: iters assigned without            detail=line 286: iters assigned without            detail=line 286: iters assigned without `local`    
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+                                                   detail=line                                        detail=line                                        detail=line 288:                                   detail=line 288:                                   detail=line 288: dklen                             detail=line 288: dklen                             detail=line 288: dklen assigned                    detail=line 288: dklen assigned                    detail=line 288: dklen assigned without            detail=line 288: dklen assigned without            detail=line 288: dklen assigned without `local`    
+TEST addr ok=true                                  
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+ 
+
+TEST compat ok=true                                
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+                                                   49:                                                49:                                                49: dv_port                                        49: dv_port                                        49: dv_port assigned                               49: dv_port assigned                               49: dv_port assigned without                       49: dv_port assigned without                       49: dv_port assigned without `local`               
+OFFLINE_RESULT pass=394 fail=0 groups=14           
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+ 
+
+OFFLINE_PASS 394                                   
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+                                                   51:                                                51:                                                51: dv_interval                                    51: dv_interval                                    51: dv_interval assigned                           51: dv_interval assigned                           51: dv_interval assigned without                   51: dv_interval assigned without                   51: dv_interval assigned without `local`           
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+ 
+
+OFFLINE_GROUPS 14                                  
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+                                                   53:                                                53:                                                53: dv_jitter                                      53: dv_jitter                                      53: dv_jitter assigned                             53: dv_jitter assigned                             53: dv_jitter assigned without                     53: dv_jitter assigned without                     53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+ 
+
+detail=line 39: k_ctrl assigned without `local`    
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+                                                   57:                                                57:                                                57: dv_timeout                                     57: dv_timeout                                     57: dv_timeout assigned                            57: dv_timeout assigned                            57: dv_timeout assigned without                    57: dv_timeout assigned without                    57: dv_timeout assigned without `local`            
+LINT_WARN file=rpv/conn.lua rule=global?           
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+57: dv_timeout assigned without `local`            
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+ 
+
+detail=line 1250: opts assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+57: dv_timeout assigned without `local`            
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+                                                   120:                                               120:                                               120: opts                                          120: opts                                          120: opts assigned                                 120: opts assigned                                 120: opts assigned without                         120: opts assigned without                         120: opts assigned without `local`                 
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+57: dv_timeout assigned without `local`            
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+120: opts assigned without `local`                 
+                                                   LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/mcast.lua                       LINT_WARN file=rpv/mcast.lua                       LINT_WARN file=rpv/mcast.lua rule=global?          LINT_WARN file=rpv/mcast.lua rule=global?          
+detail=line 255: salt assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+57: dv_timeout assigned without `local`            
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+120: opts assigned without `local`                 
+LINT_WARN file=rpv/mcast.lua rule=global?          
+                                                   detail=line                                        detail=line                                        detail=line 26:                                    detail=line 26:                                    detail=line 26: mcast                              detail=line 26: mcast                              detail=line 26: mcast assigned                     detail=line 26: mcast assigned                     detail=line 26: mcast assigned without             detail=line 26: mcast assigned without             detail=line 26: mcast assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+57: dv_timeout assigned without `local`            
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+120: opts assigned without `local`                 
+LINT_WARN file=rpv/mcast.lua rule=global?          
+detail=line 26: mcast assigned without `local`     
+                                                   LINT_RESULT                                        LINT_RESULT                                        LINT_RESULT errors=0                               LINT_RESULT errors=0                               LINT_RESULT errors=0 warnings=51                   LINT_RESULT errors=0 warnings=51                   LINT_RESULT errors=0 warnings=51 files=38          
+detail=line 257: info assigned without `local`     
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+57: dv_timeout assigned without `local`            
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+120: opts assigned without `local`                 
+LINT_WARN file=rpv/mcast.lua rule=global?          
+detail=line 26: mcast assigned without `local`     
+LINT_RESULT errors=0 warnings=51 files=38          
+                                                   LINT_ERRORS                                        LINT_ERRORS                                        LINT_ERRORS 0                                      
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+57: dv_timeout assigned without `local`            
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+120: opts assigned without `local`                 
+LINT_WARN file=rpv/mcast.lua rule=global?          
+detail=line 26: mcast assigned without `local`     
+LINT_RESULT errors=0 warnings=51 files=38          
+LINT_ERRORS 0                                      
+                                                   LINT_WARNINGS                                      LINT_WARNINGS                                      LINT_WARNINGS 51                                   
+detail=line 286: iters assigned without `local`    
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+57: dv_timeout assigned without `local`            
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+120: opts assigned without `local`                 
+LINT_WARN file=rpv/mcast.lua rule=global?          
+detail=line 26: mcast assigned without `local`     
+LINT_RESULT errors=0 warnings=51 files=38          
+LINT_ERRORS 0                                      
+LINT_WARNINGS 51                                   
+                                                   LINT_FILES                                         LINT_FILES                                         LINT_FILES 38                                      
+LINT_WARN file=rpv/crypto.lua rule=global?         
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+57: dv_timeout assigned without `local`            
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+120: opts assigned without `local`                 
+LINT_WARN file=rpv/mcast.lua rule=global?          
+detail=line 26: mcast assigned without `local`     
+LINT_RESULT errors=0 warnings=51 files=38          
+LINT_ERRORS 0                                      
+LINT_WARNINGS 51                                   
+LINT_FILES 38                                      
+                                                   TEST_DONE                                          
+detail=line 288: dklen assigned without `local`    
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+49: dv_port assigned without `local`               
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+51: dv_interval assigned without `local`           
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+53: dv_jitter assigned without `local`             
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+57: dv_timeout assigned without `local`            
+LINT_WARN file=rpv/dv.lua rule=global? detail=line 
+120: opts assigned without `local`                 
+LINT_WARN file=rpv/mcast.lua rule=global?          
+detail=line 26: mcast assigned without `local`     
+LINT_RESULT errors=0 warnings=51 files=38          
+LINT_ERRORS 0                                      
+LINT_WARNINGS 51                                   
+LINT_FILES 38                                      
+TEST_DONE                                          
+                                                   >                                                  >                                                  >                                                  

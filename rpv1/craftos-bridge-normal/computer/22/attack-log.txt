@@ -1,0 +1,8 @@
+0.097 attacker START side=top chan=4999 secs=18 target_id=rpv1
+2.100 attacker FORGE sent=20 (random tags)
+4.104 attacker HELLO sent=8 (unauthenticated)
+10.111 attacker REPLAY captured=16 replayed=16
+13.117 attacker OVERSIZE bytes=4122
+15.119 attacker BADTAG sent=5
+18.122 attacker ATTACK_RESULT forge=20 hello=8 replay_captured=16 replay_sent=16 oversize=1 badtag=5
+18.122 attacker TEST_DONE

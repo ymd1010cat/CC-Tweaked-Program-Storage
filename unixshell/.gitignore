@@ -1,0 +1,9 @@
+# scratch and machine-local state (not project source)
+temp/
+dsh_memory/
+__pycache__/
+*.pyc
+*.pyo
+# editor/OS noise
+Thumbs.db
+desktop.ini

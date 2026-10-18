@@ -1,0 +1,4 @@
+name=gnome
+version=1.8.5
+bin=desktop
+desc=Ubuntu GNOME (Yaru) desktop (enter with 'desktop'; 'desktop --autostart on' boots into it): near black panel, permanent left dock, orange accent, overview, windows that can be opened many times, a Terminal that runs the project's shell inside its own window (and a Console, which is the same shell under a second name), scheduled tasks, overlays, a real settings panel with a storage bar and a calculator with a clickable keypad that also takes the keyboard; leaving the desktop always ends at the machine's shell (a desktop started outside the shell starts ush rather than dropping the operator at a bare prompt)

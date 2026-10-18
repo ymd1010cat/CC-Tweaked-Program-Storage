@@ -1,0 +1,20 @@
+4.742 server MODEM_CREATE side=back ok=true err=nil
+4.742 server MODEM_CREATE side=top ok=true err=nil
+4.742 server START id=rpv1 role=server local=back/4300 ender=top/4999 secs=24 auth=psk kat=true maxframe=4096
+4.744 server PSK_LOADED kind=hex fingerprint=b5a7bcb1
+4.940 server AUTH_FAIL bad hello
+4.942 server AUTH_FAIL bad hello
+4.943 server AUTH_FAIL bad hello
+4.944 server AUTH_FAIL bad hello
+4.945 server AUTH_FAIL bad hello
+4.946 server AUTH_FAIL bad hello
+4.947 server AUTH_FAIL bad hello
+4.948 server AUTH_FAIL bad hello
+5.083 server PAIRED_BY_CLIENT id=rpv1
+5.083 server STATS auth=psk paired=true relayed=0 lan_to_link=0 link_to_lan=0 unauth=8 replay=0 policy=0 rate=0 size=0 future=0 bad=0 stp=off id=20 root=20 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+10.237 server STATS auth=psk paired=true relayed=6 lan_to_link=10 link_to_lan=6 unauth=8 replay=0 policy=0 rate=0 size=0 future=0 bad=0 stp=off id=20 root=20 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+15.257 server STATS auth=psk paired=true relayed=7 lan_to_link=10 link_to_lan=7 unauth=11 replay=13 policy=0 rate=0 size=1 future=0 bad=0 stp=off id=20 root=20 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+20.260 server STATS auth=psk paired=true relayed=7 lan_to_link=10 link_to_lan=7 unauth=11 replay=13 policy=0 rate=0 size=1 future=5 bad=0 stp=off id=20 root=20 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+25.265 server STATS auth=psk paired=true relayed=7 lan_to_link=10 link_to_lan=7 unauth=11 replay=13 policy=0 rate=0 size=1 future=5 bad=0 stp=off id=20 root=20 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+28.767 server BRIDGE_RESULT auth=psk paired=true relayed=7 lan_to_link=10 link_to_lan=7 dropped=30 unauth=11 replay=13 policy=0 rate=0 size=1 future=5 bad=0 stp=off id=20 root=20 fwd=nil claims_tx=0 claims_rx=0 dup_drop=0 blocked=0
+28.767 server TEST_DONE

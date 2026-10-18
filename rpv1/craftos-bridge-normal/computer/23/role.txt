@@ -1,0 +1,9 @@
+role=host
+iface=back|LAN|10.0.9.2/24|4300|256|wireless
+app=rpv-selftest:10.0.9.3
+start_delay=6
+large_bytes=900
+expect_pings=4
+expect_ttl2=1
+expect_ttl_exceeded=0
+

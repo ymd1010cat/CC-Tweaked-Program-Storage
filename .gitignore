@@ -1,0 +1,17 @@
+# --- DSH 会话记忆（不属于项目本体，不入库）---
+/dsh_memory/
+
+# --- 真实部署时由服务器/终端生成的运行时文件，不入库 ---
+# 卡密服务器：卡密明文导出与密钥（泄露即可伪造卡密）
+cardkeys/
+cardkey_pepper.txt
+# 服务与审计的日志/故障标志
+*.log
+cardkey_fault.flag
+audit_fault.flag
+lock.flag
+logs/
+# 本地用户库与终端密钥（部署时按现场生成）
+users.db
+psk.txt
+/dist/

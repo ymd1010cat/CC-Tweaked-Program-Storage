@@ -1,0 +1,4 @@
+# RPV1 文件必须逐字节入库：dist/MANIFEST.txt 里的 size 与 CRC32 是对文件字节的计算，
+# CraftOS 电脑数据（role.txt / global.json / 日志）也是原样证据；任何行尾转换都会让
+# 校验失效，而且改完仍“看起来像程序”。
+* -text

@@ -1,0 +1,12 @@
+bridge_role=client
+bridge_id=rpv1
+bridge_local=back
+bridge_ender=top
+bridge_lan_channel=4301
+bridge_link_channel=4999
+bridge_secs=24
+bridge_psk=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+bridge_psk_iter=64
+bridge_allow_ethertypes=0800,0806
+bridge_broadcast_per_sec=200
+bridge_max_frame=4096
