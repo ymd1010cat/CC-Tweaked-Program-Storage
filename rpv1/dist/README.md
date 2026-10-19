@@ -70,9 +70,10 @@ fragmentation/reassembly and the stats surface, ending with
     examples/rpv-libtest.lua     library self-check (7 assertions)
     API.md                       public API reference (stable surface)
     MANIFEST.txt                 sha256 / crc32 / size for every file
+    LICENSE                      MIT license text
 
-This package is an internal deployment artifact: no license is granted and it is
-not published outside the project.
+This package is distributed under the MIT License: see ``LICENSE`` in this
+release and the repository's LICENSE file.
     
 
 Public API and design notes live in `API.md`; the project's roadmap, wire format

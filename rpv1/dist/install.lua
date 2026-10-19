@@ -1,3 +1,7 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 ymd1010cat - RPV1 (Rednet Protocol Version 1)
+-- MIT License; full text in the repository LICENSE file:
+-- https://github.com/ymd1010cat/CC-Tweaked-Program-Storage/blob/main/LICENSE
 --[[- install.lua — RPV1 library installer (runs ON a CC:Tweaked computer).
 
 Three sources:

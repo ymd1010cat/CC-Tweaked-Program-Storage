@@ -1,3 +1,7 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (c) 2026 ymd1010cat - RPV1 (Rednet Protocol Version 1)
+-- MIT License; full text in the repository LICENSE file:
+-- https://github.com/ymd1010cat/CC-Tweaked-Program-Storage/blob/main/LICENSE
 --[[- rpv.lua ? RPV1 (Rednet Protocol Version 1) library entry point.
 
 This is the ONLY file an external program needs to load. It finds the module
