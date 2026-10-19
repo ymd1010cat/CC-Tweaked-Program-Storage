@@ -11,6 +11,7 @@
 #   dist\rpv-bundle.lua         SINGLE-FILE build (drop one file on a computer)
 #   dist\install.lua            on-computer installer (dir/floppy or http source)
 #   dist\API.md dist\README.md
+#   dist\LICENSE                MIT license (copied from the repository root)
 #   dist\MANIFEST.txt           sha256 + crc32 + size for every shipped file
 #   dist\rpv-<version>.zip      the whole thing zipped
 param(
@@ -111,8 +112,9 @@ foreach ($m in $MODULES + @("node")) {
 Write-Ascii (Join-Path $dist "rpv-bundle.lua") $sb.ToString()
 
 # ---- deployment readme -----------------------------------------------------
-# No LICENSE file on purpose: this package is an internal deployment artifact and
-# is not distributed outside the project.
+# The here-string below still says "no license" on purpose: postprocess-dist.py
+# (run at the end of this script) replaces that paragraph with the MIT one and
+# adds LICENSE to the file list, so this template stays the anchor it matches.
 
 $readme = @"
 # RPV1 library $Version - internal install notes
@@ -246,6 +248,28 @@ foreach ($sub in @("rpv", "compat", "examples")) {
 }
 Compress-Archive -Path $pkgDir -DestinationPath $zip -Force
 Remove-Item -Recurse -Force $staging
+
+# ---- license / manifest / zip post-processing ------------------------------
+# The tree and zip above are built without the license. postprocess-dist.py
+# adds LICENSE, prepends the MIT header, fixes the README, regenerates the
+# manifest and rebuilds the zip, so one build produces the final artifacts.
+$python = Get-Command python -ErrorAction SilentlyContinue
+if ($python -and $python.CommandType -eq "Application") {
+    $pyExe = $python.Source
+    $pyArgs = @()
+} else {
+    $launcher = Get-Command py -ErrorAction SilentlyContinue
+    if (-not ($launcher -and $launcher.CommandType -eq "Application")) {
+        throw "python not found: install Python 3 and make 'python' or 'py' available on PATH. poc/postprocess-dist.py is required to add the MIT license to the build."
+    }
+    $pyExe = $launcher.Source
+    $pyArgs = @("-3")
+}
+$postprocess = Join-Path $poc "postprocess-dist.py"
+# $root is the rpv1/ project folder; postprocess-dist.py wants the repo root
+$repoRoot = Split-Path -Parent $root
+& $pyExe @pyArgs $postprocess $repoRoot $Version
+if ($LASTEXITCODE -ne 0) { throw "postprocess-dist.py failed with exit code $LASTEXITCODE" }
 
 # ---- summary ---------------------------------------------------------------
 $files = Get-ChildItem $dist -Recurse -File | Sort-Object FullName

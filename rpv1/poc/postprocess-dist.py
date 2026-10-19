@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Make the rpv1 dist tree carry the repository MIT license.
+
+Usage:
+    python postprocess-dist.py [repo_root] [version]
+
+repo_root defaults to two levels above this script (the repository root).
+version defaults to 1.0.0 and should match build-dist.ps1's -Version value.
+
+The script is idempotent and only uses the Python standard library:
+
+  1. copy <repo>/LICENSE -> rpv1/dist/LICENSE
+  2. prepend the 4-line pure "--" MIT header to rpv.lua, rpv-bundle.lua and
+     install.lua inside rpv1/dist/ unless the file already starts with it
+  3. rewrite the deployment README.md license paragraph and file list when the
+     old "no license" text is still there (already-updated text is kept)
+  4. regenerate rpv1/dist/MANIFEST.txt: sha256 / crc32 / size / path for every
+     shipped file (includes LICENSE, excludes MANIFEST.txt and the zip)
+  5. rebuild rpv1/dist/rpv-<version>.zip with the rpv-<version>/ folder at the
+     zip root (LICENSE and MANIFEST.txt included)
+
+Everything written here is ASCII.
+"""
+import hashlib
+import sys
+import zipfile
+import zlib
+from pathlib import Path
+
+HEADER = (
+    b"-- SPDX-License-Identifier: MIT\n"
+    b"-- Copyright (c) 2026 ymd1010cat - RPV1 (Rednet Protocol Version 1)\n"
+    b"-- MIT License; full text in the repository LICENSE file:\n"
+    b"-- https://github.com/ymd1010cat/CC-Tweaked-Program-Storage/blob/main/LICENSE\n"
+)
+
+HEADERED = ("rpv.lua", "rpv-bundle.lua", "install.lua")
+
+OLD_PARA = (
+    "This package is an internal deployment artifact: no license is granted and it is\n"
+    "not published outside the project.\n"
+)
+NEW_PARA = (
+    "This package is distributed under the MIT License: see ``LICENSE`` in this\n"
+    "release and the repository's LICENSE file.\n"
+)
+
+OLD_LIST = "    MANIFEST.txt                 sha256 / crc32 / size for every file\n"
+LICENSE_LIST = "    LICENSE                      MIT license text\n"
+
+# fixed zip timestamp so repeated builds produce byte-identical archives
+ZIP_DATE = (1980, 1, 1, 0, 0, 0)
+
+
+def crc32(data: bytes) -> int:
+    return zlib.crc32(data) & 0xFFFFFFFF
+
+
+def dist_files(dist: Path, *, skip_manifest: bool, skip_zip: bool) -> list:
+    files = []
+    for p in dist.rglob("*"):
+        if not p.is_file():
+            continue
+        if skip_manifest and p.name == "MANIFEST.txt":
+            continue
+        if skip_zip and p.suffix.lower() == ".zip":
+            continue
+        files.append(p)
+    files.sort(key=lambda p: p.relative_to(dist).as_posix().lower())
+    return files
+
+
+def main(argv: list) -> int:
+    here = Path(__file__).resolve()
+    repo = Path(argv[1]).resolve() if len(argv) > 1 else here.parent.parent.parent
+    version = argv[2] if len(argv) > 2 else "1.0.0"
+    if not version or "/" in version or "\\" in version:
+        raise SystemExit(f"invalid version: {version!r}")
+
+    dist = repo / "rpv1" / "dist"
+    license_src = repo / "LICENSE"
+    if not dist.is_dir():
+        raise SystemExit(f"missing dist directory: {dist}")
+    if not license_src.is_file():
+        raise SystemExit(f"missing license file: {license_src}")
+
+    # 1. LICENSE ---------------------------------------------------------------
+    (dist / "LICENSE").write_bytes(license_src.read_bytes())
+
+    # 2. MIT header ------------------------------------------------------------
+    header_added = []
+    for name in HEADERED:
+        p = dist / name
+        if not p.is_file():
+            raise SystemExit(f"missing build output: {p}")
+        data = p.read_bytes()
+        if data.startswith(HEADER):
+            continue
+        p.write_bytes(HEADER + data)
+        header_added.append(name)
+
+    # 3. deployment README -----------------------------------------------------
+    readme = dist / "README.md"
+    if not readme.is_file():
+        raise SystemExit(f"missing build output: {readme}")
+    text = readme.read_bytes().decode("utf-8")
+    readme_changed = False
+    if OLD_PARA in text:
+        text = text.replace(OLD_PARA, NEW_PARA, 1)
+        readme_changed = True
+    elif NEW_PARA not in text:
+        raise SystemExit(
+            "README.md: neither the old no-license paragraph nor the MIT "
+            "paragraph was found; update OLD_PARA/NEW_PARA in postprocess-dist.py"
+        )
+    if LICENSE_LIST not in text:
+        if OLD_LIST not in text:
+            raise SystemExit(
+                "README.md: file-list anchor 'MANIFEST.txt ...' not found; "
+                "update OLD_LIST in postprocess-dist.py"
+            )
+        text = text.replace(OLD_LIST, OLD_LIST + LICENSE_LIST, 1)
+        readme_changed = True
+    if readme_changed:
+        readme.write_bytes(text.encode("utf-8"))
+
+    # 4. MANIFEST.txt ----------------------------------------------------------
+    manifest_files = dist_files(dist, skip_manifest=True, skip_zip=True)
+    lines = [
+        f"# RPV1 library {version} - sha256 / crc32 / size / path",
+        "# generated by poc/build-dist.ps1 (do not edit)",
+    ]
+    for p in manifest_files:
+        data = p.read_bytes()
+        rel = p.relative_to(dist).as_posix()
+        lines.append(f"{hashlib.sha256(data).hexdigest()} {crc32(data):08x} {len(data)} {rel}")
+    (dist / "MANIFEST.txt").write_bytes(("\n".join(lines) + "\n").encode("ascii"))
+
+    # 5. zip -------------------------------------------------------------------
+    zip_path = dist / f"rpv-{version}.zip"
+    zip_files = dist_files(dist, skip_manifest=False, skip_zip=True)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        for p in zip_files:
+            arc = f"rpv-{version}/{p.relative_to(dist).as_posix()}"
+            info = zipfile.ZipInfo(arc, date_time=ZIP_DATE)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            zf.writestr(info, p.read_bytes(), compresslevel=9)
+
+    print(
+        "postprocessed "
+        f"repo={repo} version={version} "
+        f"header_added={','.join(header_added) if header_added else '-'} "
+        f"readme_updated={'yes' if readme_changed else 'no'} "
+        f"manifest_files={len(manifest_files)} zip_files={len(zip_files)}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

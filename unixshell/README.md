@@ -40,7 +40,7 @@ Tweaked）的 Minecraft 计算机上，也可以跑在 CraftOS-PC 里。它只�
 | `lib/` | 库：fs、mount、disk、services、cron、users、man 等 |
 | `etc/` | 配置样例：network、packages、sudoers、rc.d |
 | `tests/` | PC 侧断言套件与运行器 |
-| `tools/` | `deploy.py`（差分部署）、`gen_rsa.py` |
+| `tools/` | `deploy.py`（差分部署）、`twopart.py` / `fontdisk.py`（两部分安装与字形介质）、`release.py`（发布构建） |
 
 `usr/ush.lua` 在第一次 `require` 之前自己把 `/lib/?.lua` 与 `/usr/?.lua` 装进
 `package.path`（幂等，已有则不重复添加），因此它既能被 `startup.lua` 拉起，也能在
@@ -106,6 +106,33 @@ python tools/deploy.py --target <介质目录> --part modules
 到实机，命令行里也没有让它们上机的开关。拿不准时先跑 `--dry-run --json`：报告里会
 列出 `added`、`updated`、`unchanged`、`pruned`、`markers_removed` 和
 `markers_absent`。
+
+## 发布构建
+
+发布资产（五个 zip + 安装说明 + 校验和）由一个受版本管理的脚本从零构建：
+
+```
+python unixshell/tools/release.py --out dist/release
+```
+
+`--out` 缺省就是仓库根下的 `dist/release`（`dist/` 被 gitignore，产物不入库）。脚本
+只用 Python 标准库，先在 `--out` 下的临时目录里跑 `tools/twopart.py` 与
+`tools/fontdisk.py`，再打包桌面包和包服务器；整个产物集齐之后才替换上一次的文件，
+中途失败不会留下半套产物。
+
+| 文件 | 内容 |
+| --- | --- |
+| `unixshell-part1-computer.zip` | 电脑本机那一半，解压后是 zip 根 |
+| `unixshell-part2-system-modules.zip` | 带 `.pkgsys` 的系统模块介质 |
+| `unixshell-fonts-size12-two-disks.zip` | `part1/` + `part2/` 两块 CJK 字形介质 |
+| `unixshell-gnome-<version>.zip` | 桌面包 `gnome/`（含 `bin/`、`lib/`、`manifest`） |
+| `unixshell-pkgserver.zip` | `pkgserver.lua`、`netd.lua` + 静态 `require()` 闭包 + `rpv/` + `repo/gnome/` |
+| `unixshell-INSTALL.txt` | 部署说明：每个包是什么、复制到哪、许可证 |
+| `SHA256SUMS.txt` | 五个 zip 的 sha256（`sha256sum -c` 可校验） |
+
+每个 zip 根上都有仓库的 `LICENSE`；font 的每个 `partN/`、`gnome/` 以及
+`repo/gnome/` 里都有 `THIRD_PARTY_LICENSES`。包服务器写完之后会重新读成品 zip，断言
+其中每个静态 `require()` 都能解析到包内文件，否则构建失败。
 
 ## 常用命令
 
