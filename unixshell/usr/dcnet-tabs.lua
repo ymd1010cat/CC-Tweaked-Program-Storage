@@ -8,6 +8,13 @@
 local bin = rawget(_G, "DCNET_BIN") or "/usr/pkgs/dcnet/bin/dcnet.lua"
 local role = rawget(_G, "DCNET_BOOT_ROLE") or "master"
 
+if type(fs) == "table" and not fs.exists(bin) then
+    local okp, pkg = pcall(require, "pkg")
+    if okp and type(pkg) == "table" and type(pkg.resolve_command) == "function" then
+        bin = pkg.resolve_command("dcnet") or bin
+    end
+end
+
 if type(shell) ~= "table" or type(shell.openTab) ~= "function" then
     print("[dcnet] multishell is not available; keeping the shell")
     return
