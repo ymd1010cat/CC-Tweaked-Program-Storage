@@ -1655,13 +1655,13 @@ do
 end
 
 -- ============================================================
-section("reboot replaces craftos: restart instead of abandoning the machine")
+section("reboot restarts, craftos opens a multishell tab")
 -- ============================================================
 -- The old "craftos" command dropped to the CraftOS shell by asking startup.lua to
 -- stop relaunching ush. It was the only way out and a poor one: the machine was
 -- left running something this installation does not manage, so the rules set here
 -- (the boot guard, noexit) went with the shell. "reboot" restarts the computer
--- instead, and "reboot bios" reaches the setup screen without racing the DEL
+-- instead, and the new "craftos" opens the ROM shell in a separate multishell tab.
 -- ===========================================================================
 -- sudo asks for ROOT's password, not the caller's
 -- ===========================================================================
@@ -1698,12 +1698,18 @@ do
     -- from _G.SH_SRC, not from fs: the stub's filesystem is EMULATED, so it cannot
     -- open a host path (fs.exists(PROJ .. "/usr/ush.lua") is false), and the
     -- prelude is how a suite sees the project's own text.
+    -- The escape machinery is gone; craftos now opens a tab instead.
     local src = _G.SH_SRC and (_G.SH_SRC.ush or _G.SH_SRC["usr/ush.lua"]) or ""
     local watchdog = _G.SH_SRC and _G.SH_SRC.startup or ""
     check("the shell source is available", #src > 0)
     check("the watchdog source is available", #watchdog > 0)
-    check("the craftos built-in is gone",
-          src:find('BUILTINS["craftos"]', 1, true) == nil)
+    local craftos_at = src:find('BUILTINS["craftos"]', 1, true)
+    check("the craftos built-in opens a tab", craftos_at ~= nil)
+    if craftos_at then
+        local tail = src:sub(craftos_at, craftos_at + 1200)
+        check("craftos runs the ROM shell in that tab",
+              tail:find("/rom/programs/shell.lua", 1, true) ~= nil)
+    end
     check("the reboot built-in is there",
           src:find('BUILTINS["reboot"]', 1, true) ~= nil)
     check("nothing writes the escape flag any more",

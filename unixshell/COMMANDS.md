@@ -19,12 +19,12 @@ utilities.
 | **coverage** | **60%** |
 | absent | 61 |
 
-Built-in names in `usr/ush.lua`: 121. External commands in `usr/cmd/`: 10.
+Built-in names in `usr/ush.lua`: 123. External commands in `usr/cmd/`: 10.
 
 ## Present
 
 ```
-at awk base64 basename bg cat chgrp chmod chown cksum clear cp crontab cut
+at awk base64 basename bg cat chgrp chmod chown cksum clear cp craftos crontab cut
 date df dirname disown du ed egrep env expr false fg fgrep file find free gpasswd
 grep groupadd groupdel groups head hostname id jobs kill last lastlog ln ls
 man md5sum mkdir mktemp mount mv nproc passwd printenv ps realpath reboot rev

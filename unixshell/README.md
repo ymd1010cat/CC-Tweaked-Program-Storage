@@ -223,17 +223,24 @@ pkg install --store 2 NAME   # 只这一次把 2 号盘当存储器，装完取�
 
 这几项决定**不由 shell 做主**时电脑怎么表现。
 
-### `reboot`（取代了原来的 `craftos` 命令）
+### `craftos`（新的 multishell 标签）
+
+```
+craftos         # 在 Advanced Computer 上打开一个 CraftOS shell 标签
+```
+
+在 multishell 里运行的 ush（dcnet 启动布局就是如此）执行 `craftos` 会
+`shell.openTab("/rom/programs/shell.lua")`：**新标签**是 ROM 的 CraftOS shell，
+ush 和它的后台作业继续运行，boot guard / noexit 仍然有效。没有 multishell 的机器
+会报错，而不是像旧版 `craftos` 那样把整个会话交给 CraftOS。
+
+### `reboot`
 
 ```
 reboot          # 确认后重启电脑
 reboot -f       # 不确认
 reboot bios     # 直接重启进 BIOS 设置界面
 ```
-
-**为什么删掉 `craftos`**：它通过让 `startup.lua` 不再重启 ush，把机器**丢给 CraftOS shell**。
-这是唯一的出路，但很糟：机器上跑的是**本项目不管理的东西**，于是你设的规则（boot guard、noexit）
-随着 shell 一起失效了。
 
 **重启是诚实的操作**：机器重新经过 `startup.lua` 起来，前面照样有 BIOS 窗口 —— 和断电重启一样，
 而且**回到本项目的控制之下**。
