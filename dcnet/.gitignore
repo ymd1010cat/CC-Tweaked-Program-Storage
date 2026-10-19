@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+
+# CraftOS-PC 测试产物（tests/run_craftos.py 生成）
+tests/.ccdata/
+tests/.cloud_url
+
+# 临时/日志
+*.log

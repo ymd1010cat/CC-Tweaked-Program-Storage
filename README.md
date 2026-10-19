@@ -12,6 +12,7 @@
 | [`cardkey/`](cardkey/) | 卡密验证机：由 HighSafe 改造，登录改为输入卡密。卡密服务器统一校验，并**由服务器经独立驱动器网络写盘**（服务器 `/payload/` → 玩家软盘），终端不参与写盘。卡密由秘密 pepper 经 SHA-256 派生（不用 `math.random` 直接抽取），库内只存指纹；**写盘成功才扣次数**，盘满/无盘/取消均不扣。部署与配置见目录内 `README.md`。 |
 | [`rpv1/`](rpv1/) | RPV1（Rednet Protocol Version 1）：跑在 CC:Tweaked 上的用户态 IPv4 网络栈库——MAC/IPv4/ARP/ICMP/UDP、路由与转发、分片重装、连接层拥塞控制，rednet 只作 WAN。含发布包（`dist/`：单文件 / 目录 / 安装器三种形态）与 CraftOS-PC 回归套件（`poc/`）。该目录自带 `README.md` 与设计文档；真机测试用的 Minecraft 服务器运行时（`server.jar`、`libraries`、`world`）不入库，用 `poc/mc/` 下的脚本重建。 |
 | [`pylib/`](pylib/) | 手写的 CC:Tweaked Python 子集解释器：`pkg/pylib/pythonlib.lua`（解释器本体）、`pkg/pyrepl.lua`（REPL 前端）、解释器 import 的 15 个 `.py` 模块，以及包管理器清单 `pkg/manifest`、还原说明 `MANIFEST.md` 与 `SHA256SUMS` 校验和。`pkg/legacy-py.lua` 是被取代的早期解释器，仅留档。 |
+| [`dcnet/`](dcnet/) | dcnet：CC:Tweaked 分布式计算网络——用有线局域网把多台电脑连成“主控 + 节点”集群，主控负责拆任务、派任务、收结果与超时重派，支持两级 reduce、云端卸载、文件通道和 HMAC 签名。纯 Lua、无第三方依赖，含 CraftOS-PC 真机回归套件与可部署的 Python 参考服务端；部署只需 `dist/master.lua` 与 `dist/worker.lua`。 |
 
 ## 约定
 

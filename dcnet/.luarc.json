@@ -1,0 +1,15 @@
+{
+  "runtime.version": "Lua 5.2",
+  "diagnostics.globals": [
+    "fs", "term", "rednet", "peripheral", "colors", "colours", "keys",
+    "textutils", "window", "parallel", "print", "printError", "write", "read",
+    "sleep", "shell", "settings", "http", "gps", "vector", "paintutils",
+    "disk", "turtle", "pocket", "commands", "multishell", "arg",
+    "loadstring", "setfenv", "unpack", "bit32", "bit"
+  ],
+  "diagnostics.disable": [
+    "lowercase-global"
+  ],
+  "workspace.checkThirdParty": false,
+  "workspace.ignoreDir": [".git", "logs"]
+}
