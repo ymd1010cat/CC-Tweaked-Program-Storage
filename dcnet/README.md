@@ -780,4 +780,7 @@ python tools/build_dcnet_pkg.py
 `package.path`；所以包放在哪个存储器的 `usr/pkgs/dcnet` 都能启动。专职主控/节点可以
 把命令写进 `/etc/session.conf` 的 `command=`，ush 会在第一次提示符前执行它。
 
+unixshell 仓库里的 `python tools/dcnet_pkg_verify.py` 会在真 CraftOS-PC 上部署 ush +
+dcnet 包，并跑 `dcnet version` / `dcnet config` 做端到端验收。
+
 版本：1.1.0 · 协议版本：1 · 适用 CC:Tweaked 1.16+（含 1.20/1.21 系列）

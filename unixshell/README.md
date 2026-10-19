@@ -410,7 +410,9 @@ IPv4 风格寻址、路由、DHCP-lite、名字服务、组播域与 AEAD 控制
 
     python tools/build_dcnet_pkg.py
 
-）。包安装到 `<存储>/usr/pkgs/dcnet` 后，`dcnet` 命令通过包清单进入 `PATH`：
+）。包安装到 `<存储>/usr/pkgs/dcnet` 后，`dcnet` 命令通过包清单进入 `PATH`。把
+`tools/pkgs/dcnet/` 放进 `pkgserver` 的 `/repo/dcnet/` 后用 `pkg install dcnet` 安装；也可以
+直接把整个目录复制到存储器的 `/usr/pkgs/dcnet/`。
 
 | 命令 | 作用 |
 | --- | --- |
@@ -433,6 +435,9 @@ IPv4 风格寻址、路由、DHCP-lite、名字服务、组播域与 AEAD 控制
     command=dcnet worker --headless
 
 专职主控同理写 `command=dcnet master`。两种角色都不需要改动 `/startup.lua`。
+
+验收：`python tools/dcnet_pkg_verify.py` 会在真 CraftOS-PC 上部署 ush、把包放到
+`/usr/pkgs/dcnet`，再跑 `dcnet version` 与 `dcnet config`（结果应为 `RESULT dcnet-pkg PASS`）。
 
 ## 项目约定
 
