@@ -404,6 +404,36 @@ IPv4 风格寻址、路由、DHCP-lite、名字服务、组播域与 AEAD 控制
 `auto` 下老机器会自然回退到 rednet（PC 侧套件也因此仍跑在 rednet 路径上）。
 细节、报文封装与验收命令见 [rpv/MERGE-rpv.md](rpv/MERGE-rpv.md)。
 
+## 内置 dcnet 分布式计算网络（可选包）
+
+`tools/pkgs/dcnet/` 是 dcnet 的 ush 包（由仓库顶层的 `dcnet/` 项目生成：
+
+    python tools/build_dcnet_pkg.py
+
+）。包安装到 `<存储>/usr/pkgs/dcnet` 后，`dcnet` 命令通过包清单进入 `PATH`：
+
+| 命令 | 作用 |
+| --- | --- |
+| `dcnet master` | 主控控制台（交互界面） |
+| `dcnet master --headless` | 无终端主控，日志写 `<root>/logs/master.log` |
+| `dcnet worker [ID] [NAME]` | 运算节点控制台 |
+| `dcnet worker --headless` | 无终端节点，日志写 `<root>/logs/node-<id>.log` |
+| `dcnet status` | 数据根目录、作业数与最近历史 |
+| `dcnet jobs` / `dcnet net` / `dcnet config` | 作业、传输、配置 |
+
+配置文件是 `/etc/dcnet.conf`（样例在包的 `etc/dcnet.conf.example`）：`root=` 指定可写数据目录
+（root 缺省 `/var/lib/dcnet`，普通用户缺省 `$HOME/.dcnet`），`transport=rednet|rpv|auto`
+选择 rednet 或 unixshell 的 RPV1 传输，`key=` 是集群共享的 HMAC 密钥。dcnet 模块从包的
+`lib/dcnet/` 直接加载，不依赖 `package.path` 的安装位置；`lib/` 里的模块由构建脚本从
+`dcnet/src/lib/` 复制。
+
+**开机进入角色**：unixshell 在第一次提示符之前会执行 `/etc/session.conf` 的 `command=`，
+所以一台专职节点可以写：
+
+    command=dcnet worker --headless
+
+专职主控同理写 `command=dcnet master`。两种角色都不需要改动 `/startup.lua`。
+
 ## 项目约定
 
 * 只用 Lua 5.1，不用 `goto`、不用 5.2+ 的库、不用 lua 5.5 的特性。

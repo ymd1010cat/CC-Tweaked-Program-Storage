@@ -1,0 +1,46 @@
+dcnet for unixshell
+===================
+
+This directory is the unixshell package form of the dcnet project. It is built
+from the top-level dcnet/ tree by:
+
+    python tools/build_dcnet_pkg.py
+
+Layout
+------
+
+    manifest              package metadata (name, version, bin=dcnet)
+    bin/dcnet.lua         the command: master / worker / status / jobs / net
+    lib/dcnet/*.lua       dcnet modules, loaded by bin/dcnet.lua
+    jobs/*.lua            the built-in example jobs
+    share/worker.lua      packaged worker program (seed for the master's push)
+    etc/dcnet.conf.example  copy to /etc/dcnet.conf and edit
+
+Install
+-------
+
+Copy this directory into a package store as /usr/pkgs/dcnet (or publish it from
+a pkgserver repository and use "pkg install dcnet"). The shell finds the
+command through the package manifest and lib/ from the store's module path.
+
+Usage
+-----
+
+    dcnet master                 start the master console
+    dcnet master --headless      run the master as a log-only daemon
+    dcnet worker [ID] [NAME]     start a worker console
+    dcnet worker --headless      run the worker as a log-only daemon
+    dcnet status                 state root, jobs and recent history
+    dcnet jobs                   list the jobs directory
+    dcnet net                    show transport and modems
+    dcnet config                 show the resolved configuration
+
+Configuration is /etc/dcnet.conf (see etc/dcnet.conf.example). The writable
+state root defaults to /var/lib/dcnet for root and $HOME/.dcnet otherwise.
+
+For a machine that should boot straight into a role, point /etc/session.conf at
+the command (unixshell runs it through ush before the first prompt):
+
+    command=dcnet worker --headless
+
+License: MIT, the same as the repository root.
