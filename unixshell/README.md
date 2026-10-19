@@ -436,6 +436,14 @@ IPv4 风格寻址、路由、DHCP-lite、名字服务、组播域与 AEAD 控制
 
 专职主控同理写 `command=dcnet master`。两种角色都不需要改动 `/startup.lua`。
 
+在已经进入会话的机器上，带 `--headless` 的命令可以用 ush 的后台作业跑：
+
+    dcnet worker --headless &
+    jobs
+
+（CraftOS 是协作式调度，后台作业只在 shell 空闲时得到时间片；dcnet 的等待循环会让出，
+所以它能和提示符共存。要保证开机就在跑，仍应使用上面的 `/etc/session.conf`。）
+
 验收：`python tools/dcnet_pkg_verify.py` 会在真 CraftOS-PC 上部署 ush、把包放到
 `/usr/pkgs/dcnet`，再跑 `dcnet version` 与 `dcnet config`（结果应为 `RESULT dcnet-pkg PASS`）。
 
