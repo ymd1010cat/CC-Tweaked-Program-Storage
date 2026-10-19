@@ -24,6 +24,8 @@ Options
                      its own /etc, that is why this is off by default)
   --clean-firstboot  remove the first boot markers on the target, the same
                      thing resetfirstboot does in the shell
+  --without-craftos  do not deploy usr/cmd/craftos.lua (a machine without the
+                     craftos command)
   --quiet            only print the final summary line
 
 A CraftOS computer's filesystem is capped by computer_space_limit (1,000,000 by
@@ -323,6 +325,8 @@ def parse_args(argv):
     ap.add_argument("--prune", action="store_true")
     ap.add_argument("--with-etc", action="store_true")
     ap.add_argument("--clean-firstboot", action="store_true")
+    ap.add_argument("--without-craftos", action="store_true",
+                    help="do not deploy usr/cmd/craftos.lua")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
     args.__class__ = Options          # keep one definition of the option set
@@ -349,6 +353,7 @@ class Options:
         self.prune = False
         self.with_etc = False
         self.clean_firstboot = False
+        self.without_craftos = False
         self.quiet = False
 
     def base_modules(self):
@@ -365,6 +370,9 @@ def wanted(rel, opts):
         return False
     if parts[0] == "etc":
         return opts.with_etc
+    if getattr(opts, "without_craftos", False) and \
+            rel.replace("\\", "/") == "usr/cmd/craftos.lua":
+        return False
     if os.path.splitext(name)[1] in SKIP_EXT:
         return False
     part = getattr(opts, "part", "all")

@@ -62,7 +62,7 @@ if not fs.exists("/tmp") then fs.makeDir("/tmp") end
 local NOT_A_BUILTIN = {}
 for _, name in ipairs({ "if", "for", "while", "until", "case", "function",
                         "chmod", "chown", "chgrp", "w", "who", "last", "lastlog",
-                        "rput", "rget", "rexec", "netd", "pkgserver",
+                        "rput", "rget", "rexec", "craftos", "netd", "pkgserver",
                         "startup", "firstboot", "apt", "keys", "expansion",
                         "heredoc" }) do
     NOT_A_BUILTIN[name] = true
@@ -285,7 +285,7 @@ check("help NAME delegates to lib/man", src:find('require("man").main', 1, true)
 check("the overview names the man builtin", src:find("which man stat", 1, true) ~= nil)
 
 for _, program in ipairs({ "chmod", "chown", "chgrp", "w", "who", "last", "lastlog",
-                          "rput", "rget", "rexec", "netd", "pkgserver",
+                          "rput", "rget", "rexec", "craftos", "netd", "pkgserver",
                           "startup", "firstboot" }) do
     check("page for the outside program " .. program, man.exists(program), program)
 end

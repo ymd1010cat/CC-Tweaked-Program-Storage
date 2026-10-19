@@ -1375,7 +1375,9 @@ craftos = {
              "",
              "Only available when ush itself runs inside multishell (the dcnet",
              "boot layout starts ush that way). Without multishell the command",
-             "reports an error instead of replacing the session." },
+             "reports an error instead of replacing the session.",
+             "",
+             "Only root may run it; denied attempts are audited." },
     see = "reboot, bios, help",
 },
 help = {

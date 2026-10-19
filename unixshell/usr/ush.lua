@@ -7825,29 +7825,6 @@ BUILTINS["bios"] = function(args, stage)
     return 0
 end
 
--- craftos - open the ROM shell in a new multishell tab.
---
--- The tab runs /rom/programs/shell.lua, so ush and its jobs keep running and
--- the machine stays under this installation's boot/exit rules. Without
--- multishell there is no tab to open, and replacing the session would be the
--- old, lossy behaviour, so this reports the reason instead.
-BUILTINS["craftos"] = function(args, stage)
-    if type(shell) ~= "table" or type(shell.openTab) ~= "function" then
-        emit(stage, "craftos: multishell is not available on this machine")
-        return 1
-    end
-    local ok, id = pcall(shell.openTab, "/rom/programs/shell.lua")
-    if not ok or not id then
-        emit(stage, "craftos: cannot open a tab: " .. tostring(id))
-        return 1
-    end
-    if type(multishell) == "table" then
-        if multishell.setTitle then pcall(multishell.setTitle, id, "CraftOS") end
-        if multishell.setFocus then pcall(multishell.setFocus, id) end
-    end
-    return 0
-end
-
 BUILTINS["resetfirstboot"] = function(args, stage)
     local marker = require("marker")
     local actor = perm.get_current_user()

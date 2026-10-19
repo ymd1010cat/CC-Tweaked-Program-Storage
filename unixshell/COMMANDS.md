@@ -19,7 +19,7 @@ utilities.
 | **coverage** | **60%** |
 | absent | 61 |
 
-Built-in names in `usr/ush.lua`: 123. External commands in `usr/cmd/`: 10.
+Built-in names in `usr/ush.lua`: 122. External commands in `usr/cmd/`: 11.
 
 ## Present
 

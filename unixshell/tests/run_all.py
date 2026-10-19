@@ -133,7 +133,8 @@ def read_source(rel):
 
 PRELUDE = "_G.SH_SRC = {}\n"
 for _name, _rel in (("rget", "usr/cmd/rget.lua"), ("rput", "usr/cmd/rput.lua"),
-                    ("rexec", "usr/cmd/rexec.lua"), ("ush", "usr/ush.lua"),
+                    ("rexec", "usr/cmd/rexec.lua"), ("craftos", "usr/cmd/craftos.lua"),
+                    ("ush", "usr/ush.lua"),
                     # startup.lua is carried too: it is not a module the shell
                     # loads, but its text is what a test can check for the things
                     # that must NOT be there (a removed escape path, for one).

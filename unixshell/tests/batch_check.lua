@@ -1655,7 +1655,7 @@ do
 end
 
 -- ============================================================
-section("reboot restarts, craftos opens a multishell tab")
+section("reboot restarts, craftos opens a root-only tab")
 -- ============================================================
 -- The old "craftos" command dropped to the CraftOS shell by asking startup.lua to
 -- stop relaunching ush. It was the only way out and a poor one: the machine was
@@ -1698,18 +1698,18 @@ do
     -- from _G.SH_SRC, not from fs: the stub's filesystem is EMULATED, so it cannot
     -- open a host path (fs.exists(PROJ .. "/usr/ush.lua") is false), and the
     -- prelude is how a suite sees the project's own text.
-    -- The escape machinery is gone; craftos now opens a tab instead.
+    -- The escape machinery is gone; craftos is an external, root-only command.
     local src = _G.SH_SRC and (_G.SH_SRC.ush or _G.SH_SRC["usr/ush.lua"]) or ""
     local watchdog = _G.SH_SRC and _G.SH_SRC.startup or ""
     check("the shell source is available", #src > 0)
     check("the watchdog source is available", #watchdog > 0)
-    local craftos_at = src:find('BUILTINS["craftos"]', 1, true)
-    check("the craftos built-in opens a tab", craftos_at ~= nil)
-    if craftos_at then
-        local tail = src:sub(craftos_at, craftos_at + 1200)
-        check("craftos runs the ROM shell in that tab",
-              tail:find("/rom/programs/shell.lua", 1, true) ~= nil)
-    end
+    check("craftos is not a built-in",
+          src:find('BUILTINS["craftos"]', 1, true) == nil)
+    local craftos = (_G.SH_SRC and _G.SH_SRC.craftos) or ""
+    check("the craftos command source is available", #craftos > 0)
+    check("craftos requires root", craftos:find("must be root", 1, true) ~= nil)
+    check("craftos opens the ROM shell in a tab",
+          craftos:find("/rom/programs/shell.lua", 1, true) ~= nil)
     check("the reboot built-in is there",
           src:find('BUILTINS["reboot"]', 1, true) ~= nil)
     check("nothing writes the escape flag any more",

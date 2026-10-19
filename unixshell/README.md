@@ -231,8 +231,11 @@ craftos         # 在 Advanced Computer 上打开一个 CraftOS shell 标签
 
 在 multishell 里运行的 ush（dcnet 启动布局就是如此）执行 `craftos` 会
 `shell.openTab("/rom/programs/shell.lua")`：**新标签**是 ROM 的 CraftOS shell，
-ush 和它的后台作业继续运行，boot guard / noexit 仍然有效。没有 multishell 的机器
-会报错，而不是像旧版 `craftos` 那样把整个会话交给 CraftOS。
+ush 和它的后台作业继续运行，boot guard / noexit 仍然有效。该命令**仅 root 可用**，
+拒绝会记审计日志。没有 multishell 的机器会报错，而不是像旧版 `craftos` 那样把整个会话交给 CraftOS。
+
+部署时如果不需要这个命令，用 `python tools/deploy.py --without-craftos ...` 部署：
+`usr/cmd/craftos.lua` 不会被复制到机器上，命令直接不存在。
 
 ### `reboot`
 
