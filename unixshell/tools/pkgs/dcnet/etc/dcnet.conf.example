@@ -21,6 +21,10 @@
 #       master | worker | none (default: none)
 #boot=master
 #
+# multishell: 1 (default) = on advanced computers dcnet gets its own tab and
+#             ush gets another, instead of dcnet as a background job.
+#multishell=1
+#
 # forward: 1 = the shell is only a command relay; every line is queued for the
 #          running master (use "dcnet log" to read its output).
 #forward=1

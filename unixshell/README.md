@@ -430,28 +430,32 @@ IPv4 风格寻址、路由、DHCP-lite、名字服务、组播域与 AEAD 控制
 `dcnet/src/lib/` 复制。
 
 **启动入口**：`startup.lua` 在拉起 ush 之前读 `/etc/dcnet.conf`。`boot=master` 或
-`boot=worker` 会让 ush 在第一次提示符之前把对应角色作为后台作业启动
-（`dcnet master --headless` / `dcnet worker --headless`）——dcnet 先加载，shell 随后。
-`forward=1` 时 shell 只把命令行写进 master 的控制队列（`<root>/ctl/*.cmd`），
-由常驻主控执行；`dcnet log` 读它的日志，`dcnet` 前缀的命令（`dcnet log/status/config`）
-仍在本地执行。这样“系统外壳”只是命令通道，逻辑和调度都在 dcnet 里。
+`boot=worker` 时：
+
+- **Advanced Computer（默认 `multishell=1`）**：startup 把 `/usr/dcnet-tabs.lua` 作为键入
+  输入交给 `multishell`，**tab 1 跑 dcnet 角色、tab 2 跑 ush**，焦点在 dcnet。dcnet 先
+  加载；ush 只是命令控制台。`multishell=0` 或非 Advanced 机器退回头台作业
+  `dcnet ROLE --headless`。
+- `forward=1` 时 ush 只把命令行写进 master 的控制队列（`<root>/ctl/*.cmd`），由常驻
+  主控执行；`dcnet log` 读它的日志，`dcnet` 前缀的命令（`dcnet log/status/config`）仍在
+  本地执行。这样“系统外壳”只是命令通道，逻辑和调度都在 dcnet 里。
 
 `dcnet cmd <命令行>` 也把一行命令放进同一个队列；`dcnet log [N]` 显示最近 N 行主控日志。
 
-**开机进入角色**：unixshell 在第一次提示符之前会执行 `/etc/session.conf` 的 `command=`，
-所以一台专职节点可以写：
+**计算端镜像**：`python tools/build_worker.py` 生成 `dist/worker-image/`（15 个文件，
+约 123 KB），只包含：
 
-    command=dcnet worker --headless
+    startup.lua         循环运行 dcnet worker --headless
+    usr/pkgs/dcnet/     worker 需要的 9 个模块 + 命令入口 + manifest
 
-专职主控同理写 `command=dcnet master`。两种角色都不需要改动 `/startup.lua`。
+它**没有** `usr/ush.lua`、firstboot、BIOS 菜单、man/usr/cmd、`fontdata/`、
+`lib/cc_chinese.lua` / `cc_font*` 或桌面包——计算端没有中文字体支持和交互界面。
+主控端仍使用完整的 unixshell 安装（multishell tab 1 = dcnet，tab 2 = ush）。
 
-在已经进入会话的机器上，带 `--headless` 的命令可以用 ush 的后台作业跑：
+在已经进入会话的机器上，带 `--headless` 的命令仍可用 ush 后台作业跑：
 
     dcnet worker --headless &
     jobs
-
-（CraftOS 是协作式调度，后台作业只在 shell 空闲时得到时间片；dcnet 的等待循环会让出，
-所以它能和提示符共存。要保证开机就在跑，仍应使用上面的 `/etc/session.conf`。）
 
 验收：`python tools/dcnet_pkg_verify.py` 会在真 CraftOS-PC 上部署 ush、把包放到
 `/usr/pkgs/dcnet`，再跑 `dcnet version` 与 `dcnet config`（结果应为 `RESULT dcnet-pkg PASS`）。

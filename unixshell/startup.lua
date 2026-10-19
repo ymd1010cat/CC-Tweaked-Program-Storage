@@ -148,6 +148,9 @@ local function dcnet_boot_config()
     _G.USH_BOOT_JOBS = nil
     _G.USH_FORWARD = nil
     _G.DCNET_CTL = nil
+    _G.DCNET_BOOT_ROLE = nil
+    _G.DCNET_MULTISHELL = nil
+    _G.DCNET_BIN = nil
     local f = fs.open(DCNET_CONF, "r")
     if not f then return end
     local ok, text = pcall(f.readAll)
@@ -174,10 +177,23 @@ local function dcnet_boot_config()
     _G.DCNET_ROOT = root
     _G.DCNET_CTL = root .. "/ctl"
     local boot = tostring(conf.boot or ""):lower()
-    if boot == "master" then
-        _G.USH_BOOT_JOBS = { "dcnet master --headless" }
-    elseif boot == "worker" then
-        _G.USH_BOOT_JOBS = { "dcnet worker --headless" }
+    local role = nil
+    if boot == "master" or boot == "worker" then role = boot end
+    _G.DCNET_BOOT_ROLE = role
+    if role then
+        local okb, pkg = pcall(require, "pkg")
+        if okb and type(pkg) == "table" and type(pkg.resolve_command) == "function" then
+            _G.DCNET_BIN = pkg.resolve_command("dcnet")
+        end
+        -- Advanced computers get a real multishell: dcnet owns one tab and ush
+        -- another, instead of the shell running dcnet as a background job.
+        local ms = tostring(conf.multishell or "1"):lower()
+        local has_multishell = fs.exists("/rom/programs/advanced/multishell.lua")
+        if has_multishell and ms ~= "0" and ms ~= "false" and ms ~= "no" then
+            _G.DCNET_MULTISHELL = true
+        else
+            _G.USH_BOOT_JOBS = { "dcnet " .. role .. " --headless" }
+        end
     end
     local fwd = tostring(conf.forward or ""):lower()
     _G.USH_FORWARD = (fwd == "1" or fwd == "true" or fwd == "yes")
@@ -385,7 +401,16 @@ while true do
 
         pcall(dcnet_boot_config)
         local ok, err = xpcall(function()
-            shell.run(LAUNCH_TARGET)
+            if rawget(_G, "DCNET_MULTISHELL") and rawget(_G, "DCNET_BOOT_ROLE") then
+                -- Multishell takes a shell in tab 1. Queue the tab launcher as
+                -- typed input so the machine ends with dcnet in tab 1 and ush
+                -- in tab 2, without copying or patching the ROM.
+                local typed = "/usr/dcnet-tabs.lua"
+                for ch in typed:gmatch(".") do os.queueEvent("char", ch) end
+                os.queueEvent("key", (keys and keys.enter) or 28)
+                return shell.run("/rom/programs/advanced/multishell.lua")
+            end
+            return shell.run(LAUNCH_TARGET)
         end, crash_report)
 
         if not ok then

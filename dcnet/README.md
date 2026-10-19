@@ -777,8 +777,24 @@ python tools/build_dcnet_pkg.py
 - 其余键按 `sched.lua` / `worker.lua` 的默认配置项覆盖
 
 包入口用 `dc_require` 风格的直连加载器从包自己的 `lib/dcnet/` 读模块，不依赖
-`package.path`；所以包放在哪个存储器的 `usr/pkgs/dcnet` 都能启动。专职主控/节点可以
-把命令写进 `/etc/session.conf` 的 `command=`，ush 会在第一次提示符前执行它。
+`package.path`；所以包放在哪个存储器的 `usr/pkgs/dcnet` 都能启动。
+
+**启动与多线程**：`/etc/dcnet.conf` 的 `boot=master|worker` 让 `unixshell/startup.lua`
+在第一次提示符前启动角色。Advanced Computer 默认走 **multishell**：`/usr/dcnet-tabs.lua`
+把 dcnet 放进 tab 1、ush 放进 tab 2，dcnet 先加载，ush 只作为命令控制台；`forward=1`
+时 ush 的每一行写入 `<root>/ctl`，由常驻主控执行，`dcnet log` 看输出。非 Advanced
+机器或 `multishell=0` 退回 `dcnet ROLE --headless` 后台作业。
+
+**计算端精简镜像**：在 unixshell 仓库运行
+
+```bash
+python tools/build_worker.py
+```
+
+得到 `unixshell/dist/worker-image/`（15 文件，约 123 KB）：只有 `startup.lua` 和 dcnet
+包的 worker 所需模块，循环执行 `dcnet worker --headless`。镜像里**没有** ush、firstboot、
+BIOS、man/usr/cmd、`fontdata/`、`lib/cc_chinese.lua`/`cc_font*` 或桌面包——计算端没有
+中文字体支持和交互界面。主控端保留完整 unixshell + multishell。
 
 unixshell 仓库里的 `python tools/dcnet_pkg_verify.py` 会在真 CraftOS-PC 上部署 ush +
 dcnet 包，并跑 `dcnet version` / `dcnet config` 做端到端验收。

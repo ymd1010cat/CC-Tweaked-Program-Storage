@@ -61,7 +61,10 @@ SKIP_DIRS = {"tests", "tools", ".git", "__pycache__", ".tmp", "output", "temp",
              # mounting the medium, never by having it copied. Without this entry
              # a plain --part base deploy would put the glyphs on the computer,
              # which is the one thing the design exists to prevent.
-             "fontdata"}
+             "fontdata",
+             # build output (the worker image and any release staging); like
+             # tests/ and tools/ this is host side material, never a machine.
+             "dist"}
 SKIP_EXT = {".py", ".pyc", ".md", ".json", ".log"}
 # The manifest belongs to the target machine and README.md is PC side
 # documentation: neither one is ever copied, and no option changes that.

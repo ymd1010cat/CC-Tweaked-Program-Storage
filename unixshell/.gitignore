@@ -7,3 +7,6 @@ __pycache__/
 # editor/OS noise
 Thumbs.db
 desktop.ini
+
+# host-side build output (worker image, release staging)
+/dist/

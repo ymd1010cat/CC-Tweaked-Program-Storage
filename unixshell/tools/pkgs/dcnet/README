@@ -40,9 +40,15 @@ Usage
 Configuration is /etc/dcnet.conf (see etc/dcnet.conf.example). The writable
 state root defaults to /var/lib/dcnet for root and $HOME/.dcnet otherwise.
 
-boot=master|worker  starts that role as a background job before the first ush
-prompt. forward=1 makes the shell a relay: every line is written to the
-master's control queue and executed there; "dcnet log" reads the result.
+boot=master|worker  starts that role before the first ush prompt. On advanced
+computers multishell=1 (the default) puts dcnet in tab 1 and ush in tab 2;
+multishell=0 falls back to a headless background job. forward=1 makes the shell
+a relay: every line is written to the master's control queue and executed there;
+"dcnet log" reads the result.
+
+Compute nodes can use the smaller image built by "python tools/build_worker.py":
+it contains only this package's worker modules and a startup that loops
+"dcnet worker --headless" (no ush, no fonts, no interactive UI).
 
 For a machine that should boot straight into a role, point /etc/session.conf at
 the command (unixshell runs it through ush before the first prompt):
