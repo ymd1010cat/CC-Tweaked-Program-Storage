@@ -1,0 +1,106 @@
+name: release-builds
+
+# Builds the release artifacts and, on tag pushes, refreshes the matching
+# GitHub release. Tags are the project codenames (no version numbers).
+on:
+  push:
+    tags:
+      - highsafe
+      - cardkey
+      - pylib
+      - rpv1
+      - unixshell
+  workflow_dispatch:
+    inputs:
+      project:
+        description: project to build
+        required: true
+        type: choice
+        options:
+          - highsafe
+          - cardkey
+          - pylib
+          - rpv1
+          - unixshell
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  projects:
+    name: ${{ github.event.inputs.project || github.ref_name }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name != 'rpv1' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="${{ github.event.inputs.project || github.ref_name }}"
+          case "$project" in
+            highsafe|cardkey|pylib)
+              python3 tools/build_release.py --project "$project" --out dist/release
+              ;;
+            unixshell)
+              python3 unixshell/tools/release.py --out dist/release
+              ;;
+            *)
+              echo "unknown project: $project" >&2
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.project || github.ref_name }}-artifacts
+          path: dist/release/*
+          if-no-files-found: error
+
+      - name: publish to the tag's release
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes ""
+          gh release upload "$tag" dist/release/* --clobber
+
+  rpv1:
+    name: rpv1
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.project == 'rpv1') || (github.event_name == 'push' && github.ref_name == 'rpv1') }}
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build
+        shell: pwsh
+        run: ./rpv1/poc/build-dist.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpv1-artifacts
+          path: |
+            rpv1/dist/rpv-1.0.0.zip
+            rpv1/dist/rpv.lua
+            rpv1/dist/rpv-bundle.lua
+            rpv1/dist/install.lua
+          if-no-files-found: error
+
+      - name: publish to the tag's release
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) { gh release create $tag --title $tag --notes "" }
+          gh release upload $tag rpv1/dist/rpv-1.0.0.zip rpv1/dist/rpv.lua rpv1/dist/rpv-bundle.lua rpv1/dist/install.lua --clobber

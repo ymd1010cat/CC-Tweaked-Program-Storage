@@ -21,6 +21,18 @@
 - 每个项目的构建、测试与验收命令都**从它自己的目录里运行**（本项目内的相对路径都是
   相对项目根目录的）。
 
+## 发布构建
+
+每个项目一条命令即可重建它的发布产物（产物都带仓库的 `LICENSE`）：
+
+| 项目 | 命令 | 产物 |
+|---|---|---|
+| highsafe / cardkey / pylib | `python tools/build_release.py --project highsafe` | `dist/release/highsafe-v2.0.0.zip` 等 |
+| rpv1 | `pwsh -NoProfile -File rpv1/poc/build-dist.ps1` | `rpv1/dist/`（含 `LICENSE`、单文件 MIT 头部、`rpv-1.0.0.zip`） |
+| unixshell | `python unixshell/tools/release.py --out dist/release` | 两个安装半、字体介质、`gnome` 包、`pkgserver`、`INSTALL.txt`、`SHA256SUMS.txt` |
+
+CI 在 [`.github/workflows/release-builds.yml`](.github/workflows/release-builds.yml)：推送项目 tag（`highsafe` / `cardkey` / `pylib` / `rpv1` / `unixshell`）时自动构建并刷新对应 release 的资产；也可在 Actions 页面手动 `workflow_dispatch` 选择项目。构建是确定性的（zip 使用固定时间戳），同一 tag 重复构建得到相同字节。
+
 ## 许可证
 
 本仓库以 **MIT** 许可证发布，详见 [`LICENSE`](LICENSE)。
