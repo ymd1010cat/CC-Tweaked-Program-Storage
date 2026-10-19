@@ -1,15 +1,10 @@
 name: release-builds
 
-# Builds the release artifacts and, on tag pushes, refreshes the matching
-# GitHub release. Tags are the project codenames (no version numbers).
+# Builds the release artifacts on every push and on manual dispatch. Tag pushes
+# additionally refresh the matching GitHub release; branch pushes only build
+# (a CI smoke test). Tags are the project codenames (no version numbers).
 on:
   push:
-    tags:
-      - highsafe
-      - cardkey
-      - pylib
-      - rpv1
-      - unixshell
   workflow_dispatch:
     inputs:
       project:
@@ -27,13 +22,15 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   projects:
-    name: ${{ github.event.inputs.project || github.ref_name }}
-    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.project != 'rpv1') || (github.event_name == 'push' && github.ref_name != 'rpv1') }}
+    name: linux-${{ github.event.inputs.project || github.ref_name }}
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.project != 'rpv1')
+      || (github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/') || github.ref_name != 'rpv1'))
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,28 +41,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          project="${{ github.event.inputs.project || github.ref_name }}"
-          case "$project" in
-            highsafe|cardkey|pylib)
+          if [ "${{ github.event_name }}" = "push" ] && [[ "$GITHUB_REF" == refs/heads/* ]]; then
+            for project in highsafe cardkey pylib; do
               python3 tools/build_release.py --project "$project" --out dist/release
-              ;;
-            unixshell)
-              python3 unixshell/tools/release.py --out dist/release
-              ;;
-            *)
-              echo "unknown project: $project" >&2
-              exit 1
-              ;;
-          esac
+            done
+            python3 unixshell/tools/release.py --out dist/release
+          else
+            project="${{ github.event.inputs.project || github.ref_name }}"
+            case "$project" in
+              highsafe|cardkey|pylib)
+                python3 tools/build_release.py --project "$project" --out dist/release
+                ;;
+              unixshell)
+                python3 unixshell/tools/release.py --out dist/release
+                ;;
+              *)
+                echo "unknown project: $project" >&2
+                exit 1
+                ;;
+            esac
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.project || github.ref_name }}-artifacts
+          name: linux-${{ github.ref_name }}-artifacts
           path: dist/release/*
           if-no-files-found: error
 
       - name: publish to the tag's release
-        if: github.event_name == 'push'
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           set -euo pipefail
@@ -74,8 +78,10 @@ jobs:
           gh release upload "$tag" dist/release/* --clobber
 
   rpv1:
-    name: rpv1
-    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.project == 'rpv1') || (github.event_name == 'push' && github.ref_name == 'rpv1') }}
+    name: rpv1-${{ github.ref_name }}
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.project == 'rpv1')
+      || (github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/') || github.ref_name == 'rpv1'))
     runs-on: windows-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -88,7 +94,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rpv1-artifacts
+          name: rpv1-${{ github.ref_name }}-artifacts
           path: |
             rpv1/dist/rpv-1.0.0.zip
             rpv1/dist/rpv.lua
@@ -97,7 +103,7 @@ jobs:
           if-no-files-found: error
 
       - name: publish to the tag's release
-        if: github.event_name == 'push'
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           $tag = $env:GITHUB_REF_NAME
