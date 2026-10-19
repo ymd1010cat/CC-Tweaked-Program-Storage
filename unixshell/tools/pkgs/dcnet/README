@@ -31,12 +31,18 @@ Usage
     dcnet worker [ID] [NAME]     start a worker console
     dcnet worker --headless      run the worker as a log-only daemon
     dcnet status                 state root, jobs and recent history
+    dcnet cmd <line>             queue a command for the running master
+    dcnet log [N]                last N lines of the master log
     dcnet jobs                   list the jobs directory
     dcnet net                    show transport and modems
     dcnet config                 show the resolved configuration
 
 Configuration is /etc/dcnet.conf (see etc/dcnet.conf.example). The writable
 state root defaults to /var/lib/dcnet for root and $HOME/.dcnet otherwise.
+
+boot=master|worker  starts that role as a background job before the first ush
+prompt. forward=1 makes the shell a relay: every line is written to the
+master's control queue and executed there; "dcnet log" reads the result.
 
 For a machine that should boot straight into a role, point /etc/session.conf at
 the command (unixshell runs it through ush before the first prompt):

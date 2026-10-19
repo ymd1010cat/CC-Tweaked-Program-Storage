@@ -17,6 +17,14 @@
 # Default: <root>/worker.lua, seeded from the package's share/worker.lua.
 #worker_file=/var/lib/dcnet/worker.lua
 #
+# boot: start this role as a background job before the first shell prompt.
+#       master | worker | none (default: none)
+#boot=master
+#
+# forward: 1 = the shell is only a command relay; every line is queued for the
+#          running master (use "dcnet log" to read its output).
+#forward=1
+#
 # Any scheduler default from dcnet's sched.lua can also be set here, e.g.:
 #maxParallel=1
 #redundancy=0

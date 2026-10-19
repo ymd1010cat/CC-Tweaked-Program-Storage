@@ -429,6 +429,15 @@ IPv4 风格寻址、路由、DHCP-lite、名字服务、组播域与 AEAD 控制
 `lib/dcnet/` 直接加载，不依赖 `package.path` 的安装位置；`lib/` 里的模块由构建脚本从
 `dcnet/src/lib/` 复制。
 
+**启动入口**：`startup.lua` 在拉起 ush 之前读 `/etc/dcnet.conf`。`boot=master` 或
+`boot=worker` 会让 ush 在第一次提示符之前把对应角色作为后台作业启动
+（`dcnet master --headless` / `dcnet worker --headless`）——dcnet 先加载，shell 随后。
+`forward=1` 时 shell 只把命令行写进 master 的控制队列（`<root>/ctl/*.cmd`），
+由常驻主控执行；`dcnet log` 读它的日志，`dcnet` 前缀的命令（`dcnet log/status/config`）
+仍在本地执行。这样“系统外壳”只是命令通道，逻辑和调度都在 dcnet 里。
+
+`dcnet cmd <命令行>` 也把一行命令放进同一个队列；`dcnet log [N]` 显示最近 N 行主控日志。
+
 **开机进入角色**：unixshell 在第一次提示符之前会执行 `/etc/session.conf` 的 `command=`，
 所以一台专职节点可以写：
 

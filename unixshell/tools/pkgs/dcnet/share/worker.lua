@@ -30,6 +30,7 @@ M.PROTO_PUSH = "dcpush"
 M.ROOT       = rawget(_G, "DCNET_ROOT") or "/dccomp"
 M.JOB_DIR    = M.ROOT .. "/jobs"
 M.OUT_DIR    = M.ROOT .. "/out"
+M.CONTROL_DIR = M.ROOT .. "/ctl"
 M.WORKER_FILE = rawget(_G, "DCNET_WORKER_FILE") or (M.ROOT .. "/worker.lua")
 
 M.unpack  = table.unpack or unpack

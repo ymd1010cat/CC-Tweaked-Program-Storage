@@ -89,7 +89,7 @@ def main():
         'print("CHECK_START")\n'
         'local ok, rc = pcall(shell.run, "/usr/ush.lua", "/pkgcheck.ush")\n'
         'print("CHECK_RC " .. tostring(ok) .. " " .. tostring(rc))\n'
-        'os.exit(0)\n', encoding="utf-8", newline="\n")
+        'os.shutdown()\n', encoding="utf-8", newline="\n")
 
     try:
         proc = subprocess.run(

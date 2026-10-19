@@ -15,6 +15,7 @@ M.PROTO_PUSH = "dcpush"          -- 代码分发协议（push / bootstrap）
 M.ROOT       = rawget(_G, "DCNET_ROOT") or "/dccomp" -- 安装根目录（ush 包会覆盖）
 M.JOB_DIR    = M.ROOT .. "/jobs" -- 作业定义目录（只存在于主控）
 M.OUT_DIR    = M.ROOT .. "/out"  -- 结果导出目录
+M.CONTROL_DIR = M.ROOT .. "/ctl" -- 外壳转交命令的队列目录
 M.WORKER_FILE = rawget(_G, "DCNET_WORKER_FILE") or (M.ROOT .. "/worker.lua")
 
 M.unpack  = table.unpack or unpack

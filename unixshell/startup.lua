@@ -139,6 +139,50 @@ local function session_command()
     return nil
 end
 
+local DCNET_CONF = "/etc/dcnet.conf"
+
+-- dcnet boot entry: /etc/dcnet.conf may ask for a resident master or worker.
+-- The root/control paths are computed here (before the shell starts) so the
+-- shell can write commands into the same queue the daemon reads.
+local function dcnet_boot_config()
+    _G.USH_BOOT_JOBS = nil
+    _G.USH_FORWARD = nil
+    _G.DCNET_CTL = nil
+    local f = fs.open(DCNET_CONF, "r")
+    if not f then return end
+    local ok, text = pcall(f.readAll)
+    f.close()
+    if not ok then return end
+    local conf = {}
+    for line in (tostring(text or "") .. "\n"):gmatch("([^\r\n]*)\r?\n") do
+        local key, value = line:match("^%s*([%w_%.%-]+)%s*=%s*(.-)%s*$")
+        if key and value ~= "" then conf[key] = value end
+    end
+    local user = "root"
+    local okp, perm = pcall(require, "perm")
+    if okp and type(perm) == "table" and type(perm.get_current_user) == "function" then
+        user = perm.get_current_user() or user
+    end
+    local root = conf.root
+    if not root or root == "" then
+        if user == "root" then
+            root = "/var/lib/dcnet"
+        else
+            root = "/home/" .. tostring(user) .. "/.dcnet"
+        end
+    end
+    _G.DCNET_ROOT = root
+    _G.DCNET_CTL = root .. "/ctl"
+    local boot = tostring(conf.boot or ""):lower()
+    if boot == "master" then
+        _G.USH_BOOT_JOBS = { "dcnet master --headless" }
+    elseif boot == "worker" then
+        _G.USH_BOOT_JOBS = { "dcnet worker --headless" }
+    end
+    local fwd = tostring(conf.forward or ""):lower()
+    _G.USH_FORWARD = (fwd == "1" or fwd == "true" or fwd == "yes")
+end
+
 local function tick_disk(name, side)
     if not disk_ok or type(disk) ~= "table" then return end
     pcall(function()
@@ -339,6 +383,7 @@ while true do
             end
         end
 
+        pcall(dcnet_boot_config)
         local ok, err = xpcall(function()
             shell.run(LAUNCH_TARGET)
         end, crash_report)

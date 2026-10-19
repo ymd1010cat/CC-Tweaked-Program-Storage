@@ -8794,6 +8794,47 @@ end
 -- raises the same control table, and a script MUST still be able to end -- that is
 -- how it returns its status. What is refused is leaving the SESSION. Refusing it
 -- in the built-in would break every script that uses exit.
+-- dcnet forward mode (see /etc/dcnet.conf forward=1): the shell writes the
+-- command into the resident master's queue instead of running it itself.
+function SHELL.forward_dcnet(line)
+    local dir = rawget(_G, "DCNET_CTL")
+    if type(dir) ~= "string" or dir == "" then
+        return nil, "dcnet control queue is not configured"
+    end
+    local acc = ""
+    for seg in dir:gmatch("[^/]+") do
+        acc = acc .. "/" .. seg
+        if not fs.exists(acc) then
+            local ok = pcall(fs.makeDir, acc)
+            if not ok then return nil, "cannot create " .. acc end
+        end
+    end
+    local stamp = (os.epoch and os.epoch("utc")) or (os.time() * 1000)
+    local name = tostring(math.floor(stamp)) .. "-" ..
+        string.format("%06d-%06d.cmd", os.getComputerID() or 0, math.random(1, 999999))
+    local f = fs.open(dir .. "/" .. name, "w")
+    if not f then return nil, "cannot write " .. dir end
+    f.write(line .. "\n")
+    f.close()
+    return true
+end
+
+-- Start /etc/dcnet.conf's resident role before the first prompt. Kept on SHELL
+-- so the main chunk does not gain another local (it is at Lua's 200 ceiling).
+function SHELL.start_boot_jobs()
+    local list = rawget(_G, "USH_BOOT_JOBS")
+    _G.USH_BOOT_JOBS = nil
+    if type(list) ~= "table" then return end
+    for _, cmd in ipairs(list) do
+        local job, err = jobs.spawn(cmd)
+        if job then
+            print("[dcnet] background job " .. tostring(job.id) .. ": " .. tostring(cmd))
+        else
+            print("[dcnet] cannot start " .. tostring(cmd) .. ": " .. tostring(err))
+        end
+    end
+end
+
 local function execute_line(line)
     line = (line or ""):gsub("\r", "")
     local leaving = (line == "exit" or line == "logout")
@@ -8806,6 +8847,21 @@ local function execute_line(line)
     end
     if leaving then return false end
     if not line:match("%S") then return true end
+
+    -- The shell is only a relay here: every line that is not a local dcnet
+    -- control command goes to the resident master and comes back via its log.
+    if rawget(_G, "USH_FORWARD") and line:match("^%s*(%S+)") ~= "dcnet" then
+        local ok, err = SHELL.forward_dcnet(line)
+        if ok then
+            write_stdout("dcnet: queued")
+            SHELL.status = 0
+        else
+            write_stdout("dcnet: " .. tostring(err))
+            SHELL.status = 1
+        end
+        vars.set_status(SHELL.status)
+        return true
+    end
 
     -- "!!" and "!n" are expanded first; the expanded form is what runs, while
     -- the typed form is what gets recorded.
@@ -8946,6 +9002,11 @@ else
     -- above returned before reaching this point, so a one-shot run is never
     -- mistaken for a session.
     SHELL.interactive = true
+
+    -- dcnet boot hook: /etc/dcnet.conf may name a resident role. The command
+    -- starts as a cooperative background job before the first prompt, so the
+    -- network/scheduler is already up when the operator can type anything.
+    SHELL.start_boot_jobs()
 
     -- Boot sequence: the /etc/rc.d units marked enabled come up in file name
     -- order first, then the "@reboot" tasks. A unit or task that fails is

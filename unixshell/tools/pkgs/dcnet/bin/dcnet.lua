@@ -90,15 +90,18 @@ end
 
 local user, home = current_user()
 
-local root = conf.root
+local root = conf.root or rawget(_G, "DCNET_ROOT")
 local transport = conf.transport
 local key = conf.key
 local worker_file = conf.worker_file
 local rest = {}
+local keep_cmd_line = (tostring(argv[1]) == "cmd")
 for _, a in ipairs(argv) do
     local s = tostring(a)
     local k, v = s:match("^%-%-([%w_%-]+)=(.*)$")
-    if k == "root" then
+    if keep_cmd_line then
+        rest[#rest + 1] = s
+    elseif k == "root" then
         root = v
     elseif k == "transport" then
         transport = v
@@ -170,6 +173,8 @@ local function usage()
         "  master [--headless] [--standby] [-v] [--KEY=VALUE ...]",
         "  worker [ID] [NAME] [--headless] [--KEY=VALUE ...]",
         "  status            state root, jobs and recent history",
+        "  cmd <line>        queue a command for the running master",
+        "  log [N]           last N lines of the master log",
         "  jobs              list the jobs directory",
         "  net               transport and modems",
         "  config            resolved paths and settings",
@@ -187,7 +192,7 @@ end
 
 local writable = ensure_dir(root)
 if writable then
-    for _, sub in ipairs({ "jobs", "out", "state", "logs", "cache" }) do
+    for _, sub in ipairs({ "jobs", "out", "state", "logs", "cache", "ctl" }) do
         ensure_dir(root .. "/" .. sub)
     end
     -- The packaged worker is the seed for "push"; the master sends this file and
@@ -252,6 +257,7 @@ elseif cmd == "config" then
     say("worker_file: " .. tostring(worker_file))
     say("key: " .. (key and #key >= 8 and "set" or "off"))
     say("jobs: " .. tostring(util.JOB_DIR))
+    say("control: " .. tostring(rawget(_G, "DCNET_CTL") or (root .. "/ctl")))
     return 0
 elseif cmd == "jobs" then
     say("jobs: " .. tostring(util.JOB_DIR))
@@ -285,6 +291,8 @@ elseif cmd == "status" then
     local names = util.listDir(util.JOB_DIR)
     table.sort(names)
     say("jobs: " .. tostring(#names))
+    local ctl = util.listDir(rawget(_G, "DCNET_CTL") or (root .. "/ctl"))
+    say("queued commands: " .. tostring(#ctl))
     local ok, state = pcall(load_module, "dc.state")
     if ok and type(state) == "table" and type(state.history) == "function" then
         local list, total = state.history(5)
@@ -295,6 +303,53 @@ elseif cmd == "status" then
                 tostring(e.state or "?"), tostring(e.summary or "")))
         end
     end
+    return 0
+elseif cmd == "cmd" then
+    local parts = {}
+    for i = 2, #argv do parts[#parts + 1] = tostring(argv[i]) end
+    local line = table.concat(parts, " ")
+    if line == "" then
+        say("usage: dcnet cmd <line>")
+        return 2
+    end
+    local dir = rawget(_G, "DCNET_CTL") or (root .. "/ctl")
+    if not ensure_dir(dir) then
+        say("dcnet: cannot create " .. tostring(dir))
+        return 1
+    end
+    local stamp = (os.epoch and os.epoch("utc")) or (os.time() * 1000)
+    local name = tostring(math.floor(stamp)) .. "-" ..
+        string.format("%06d-%06d.cmd", os.getComputerID() or 0, math.random(1, 999999))
+    local f = fs.open(dir .. "/" .. name, "w")
+    if not f then
+        say("dcnet: cannot write " .. tostring(dir))
+        return 1
+    end
+    f.write(line .. "\n")
+    f.close()
+    say("queued: " .. line)
+    return 0
+elseif cmd == "log" then
+    local n = tonumber(argv[2]) or 20
+    local path = root .. "/logs/master.log"
+    if not fs.exists(path) then
+        say("dcnet: no master log at " .. path)
+        return 1
+    end
+    local f = fs.open(path, "r")
+    if not f then
+        say("dcnet: cannot read " .. path)
+        return 1
+    end
+    local lines = {}
+    while true do
+        local line = f.readLine()
+        if line == nil then break end
+        lines[#lines + 1] = line
+    end
+    f.close()
+    local from = math.max(1, #lines - n + 1)
+    for i = from, #lines do say(lines[i]) end
     return 0
 elseif cmd == "master" then
     if not writable then

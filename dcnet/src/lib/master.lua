@@ -52,6 +52,7 @@ function M.run(opts)
     -- ── 示例作业 ─────────────────────────────────────────────────────
     util.ensureDir(util.JOB_DIR)
     util.ensureDir(util.OUT_DIR)
+    util.ensureDir(util.CONTROL_DIR)
     local created = jobs.installDefaults(opts.defaultJobs)
 
     -- ── 界面 ─────────────────────────────────────────────────────────
@@ -978,10 +979,37 @@ function M.run(opts)
         broadcastBeat()
     end
 
+    -- 外壳转交命令的队列：<root>/ctl/*.cmd。ush 只把命令行写进这个目录，
+    -- master 在后台（通常 --headless）按文件名顺序取走并执行。这样系统外壳
+    -- 不需要自己成为 dcnet 的进程，只负责传话。
+    local function pollControl()
+        local dir = util.CONTROL_DIR
+        if not fs.exists(dir) then return end
+        local names = fs.list(dir) or {}
+        table.sort(names)
+        for _, name in ipairs(names) do
+            if tostring(name):match("%.cmd$") then
+                local path = dir .. "/" .. name
+                local f = fs.open(path, "r")
+                local line = f and f.readAll() or nil
+                if f then f.close() end
+                pcall(fs.delete, path)
+                if line then line = util.trim(line) end
+                if line and line ~= "" then
+                    local ok, err = pcall(dispatch, line)
+                    if not ok then
+                        ui:log("控制命令失败：" .. tostring(err), col("red", 16384))
+                    end
+                end
+            end
+        end
+    end
+
     local finished = {}
     local function tickLoop()
         local lastStatus = 0
         while not M0.quit do
+            pollControl()
             os.sleep(0.5)
             if M0.mode == "standby" then
                 -- 待命：只盯着心跳，超时就接管
