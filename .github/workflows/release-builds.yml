@@ -1,8 +1,12 @@
 name: release-builds
 
-# Builds the release artifacts on every push and on manual dispatch. Tag pushes
-# additionally refresh the matching GitHub release; branch pushes only build
-# (a CI smoke test). Tags are the project codenames (no version numbers).
+# Builds the release artifacts on every push and on manual dispatch.
+#  - branch push : builds every project (CI smoke test, nothing is published)
+#  - tag push    : builds that project and refreshes its release
+#  - dispatch    : builds the selected project (nothing is published)
+# Tags are the project codenames (no version numbers). GitHub does not start a
+# run for a tag that is force-moved to another commit, so re-releases of an
+# existing tag need a manual dispatch (or delete + recreate the tag).
 on:
   push:
   workflow_dispatch:
@@ -30,7 +34,8 @@ jobs:
     name: linux-${{ github.event.inputs.project || github.ref_name }}
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.project != 'rpv1')
-      || (github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/') || github.ref_name != 'rpv1'))
+      || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/'))
+      || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && contains(fromJSON('["highsafe","cardkey","pylib","unixshell"]'), github.ref_name))
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,7 +86,8 @@ jobs:
     name: rpv1-${{ github.ref_name }}
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.project == 'rpv1')
-      || (github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/') || github.ref_name == 'rpv1'))
+      || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/'))
+      || (github.event_name == 'push' && github.ref_name == 'rpv1')
     runs-on: windows-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
