@@ -130,4 +130,35 @@ function Console:close()
     term.clearLine()
 end
 
+-- ── headless 控制台 ────────────────────────────────────────────────────
+-- 与 Console 同一套方法，但不碰 term：日志追加到文件，prompt 只让出时间片。
+-- unixshell 包里 `dcnet master --headless` / `dcnet worker --headless` 用它。
+local Null = {}
+Null.__index = Null
+
+function M.null(opts)
+    opts = opts or {}
+    local self = setmetatable({}, Null)
+    self.logFile = opts.logFile
+    self.title = opts.title
+    self.statusText = ""
+    if self.logFile then
+        local dir = self.logFile:match("^(.*)/[^/]*$")
+        if dir and dir ~= "" then util.ensureDir(dir) end
+    end
+    return self
+end
+
+function Null:setStatus(text) self.statusText = text end
+function Null:log(text)
+    if self.logFile then util.appendLog(self.logFile, util.logLine(text)) end
+end
+function Null:logLines(lines)
+    for _, line in ipairs(lines or {}) do self:log(line) end
+end
+function Null:clearLog() end
+function Null:prompt() sleep(1) return nil end
+function Null:rebuild() end
+function Null:close() end
+
 return M

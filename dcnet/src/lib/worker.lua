@@ -65,7 +65,13 @@ local function runOnce(opts)
         return false, "没有检测到调制解调器"
     end
 
-    local ui = console.new({ title = "dcnet worker", hasPrompt = false })
+    -- headless（ush 包）：不占终端，日志只写文件；交互终端下仍是原来的三区界面。
+    local ui
+    if opts.headless then
+        ui = console.null({ title = "dcnet worker", hasPrompt = false, logFile = LOG })
+    else
+        ui = console.new({ title = "dcnet worker", hasPrompt = false })
+    end
     ui:log(string.format("dcnet 运算节点 v%s", util.VERSION), col("lime", 32))
     ui:log(string.format("网络：已打开 %s（%s）  本机 ID #%d",
         net.describe(modems),
@@ -558,7 +564,7 @@ local function runOnce(opts)
     ui:log(string.format("节点名：%s（用 label set <名字> 可以改名）", S.name))
 
     -- 共享密钥（可选）：设了就启用消息签名与防重放
-    local savedKey = settings.get("dcnet.key")
+    local savedKey = rawget(_G, "DCNET_KEY") or settings.get("dcnet.key")
     if savedKey and savedKey ~= "" then
         local kok, kerr = net.setKey(savedKey)
         if kok then
@@ -571,7 +577,7 @@ local function runOnce(opts)
     ui:log("按 Ctrl+T 可以终止节点。")
 
     local ok, err = pcall(parallel.waitForAny, netLoop, workLoop, beatLoop, pushLoop)
-    term.redirect(term.native())
+    if not opts.headless then term.redirect(term.native()) end
     if not ok then
         printError("[dcnet] 节点异常终止: " .. tostring(err))
         fileLog("节点异常终止：" .. tostring(err))

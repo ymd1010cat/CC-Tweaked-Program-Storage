@@ -49,11 +49,17 @@ local sched  = dc_require("dc.sched")
 --   master.lua -v --maxParallel=2 --redundancy=2 --workerTimeout=8
 --   master.lua standby            以待命主控启动（在岗主控掉线就接管）
 local argv = { ... }
-local cfg  = {}
+-- unixshell 的命令块拿到的是 (args_table, stage)；独立运行时才是逐个字符串。
+if type(argv[1]) == "table" then argv = argv[1] end
+local cfg = {}
+for k, v in pairs(rawget(_G, "DCNET_CFG") or {}) do cfg[k] = v end
+local headless = false
 for _, a in ipairs(argv) do
     local s = tostring(a)
     if s == "-v" or s == "--verbose" then
         cfg.verbose = true
+    elseif s == "--headless" or s == "headless" then
+        headless = true
     elseif s == "standby" or s == "--standby" then
         cfg.standby = true
     elseif s == "active" or s == "--active" then
@@ -78,7 +84,10 @@ end
 local ok = master.run({
     defaultJobs = _G.DC_DEFAULT_JOBS or {},
     cfg = cfg,
+    headless = headless,
 })
 if not ok then
     printError("[dcnet] 主控启动失败。")
+    return 1
 end
+return 0

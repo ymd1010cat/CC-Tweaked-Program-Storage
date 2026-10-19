@@ -734,14 +734,50 @@ python tests/run_craftos.py   # 真机回归（改完代码跑一遍，绿了再
 CC 电脑默认磁盘上限只有 **1MB**，所以打包时会**剥掉注释与多余空行**（源码保留完整注释，
 产物不带）。实测：
 
-| 产物 | 剥注释前 | 剥注释后 | 说明 |
-| --- | --- | --- | --- |
-| `dist/master.lua` | 186 KB | **148 KB** | 主控常驻的就是这个 |
-| `dist/worker.lua` | 68 KB | **49 KB** | 每台运算节点一份 |
-| `dist/install.lua` | 284 KB | **222 KB** | 只在安装时用，装完可删 |
+| 产物 | 剥注释后 | 说明 |
+| --- | --- | --- |
+| `dist/master.lua` | **194 KB** | 主控常驻的就是这个 |
+| `dist/worker.lua` | **80 KB** | 每台运算节点一份 |
+| `dist/install.lua` | **314 KB** | 只在安装时用，装完可删 |
 
 界面文案（中文）本身只占约 **9.5KB（2.2%）**。另外注意：**字库不在电脑磁盘上**——
 CC 的终端字体是客户端资源包、CraftOS-PC 是宿主配置，所以中文显示不占电脑空间；
 但原版 CC 客户端字体没有 CJK 字形，需要装中文字体资源包才能正常显示。
+
+---
+
+## 12. 在 unixshell 下运行（可选）
+
+dcnet 也可以作为 [unixshell](../unixshell/) 的一个包运行。包源在
+`unixshell/tools/pkgs/dcnet/`，由本项目的源码生成：
+
+```bash
+cd unixshell
+python tools/build_dcnet_pkg.py
+```
+
+构建脚本会复制 `dcnet/src/lib/*.lua`、`dcnet/src/jobs/*.lua` 和
+`dcnet/dist/worker.lua`，并重建 `dist/`，所以包内容与源码始终一致。
+
+安装到一台 ush 机器（包存储器的 `usr/pkgs/dcnet`，或通过 `pkg install dcnet`）后：
+
+| 命令 | 作用 |
+| --- | --- |
+| `dcnet master` | 主控控制台 |
+| `dcnet master --headless` | 无终端主控，日志 `$DCNET_ROOT/logs/master.log` |
+| `dcnet worker [主控ID] [节点名]` | 节点控制台 |
+| `dcnet worker --headless` | 无终端节点（可 `&` 到后台） |
+| `dcnet status` / `jobs` / `net` / `config` | 状态、作业、传输与配置 |
+
+配置在 `/etc/dcnet.conf`（样例见包内 `etc/dcnet.conf.example`）：
+
+- `root=`：可写数据目录；root 缺省 `/var/lib/dcnet`，普通用户缺省 `$HOME/.dcnet`
+- `transport=rednet|rpv|auto`：`rpv` 走 unixshell 的 RPV1，所有节点必须一致
+- `key=`：集群共享的 HMAC 密钥
+- 其余键按 `sched.lua` / `worker.lua` 的默认配置项覆盖
+
+包入口用 `dc_require` 风格的直连加载器从包自己的 `lib/dcnet/` 读模块，不依赖
+`package.path`；所以包放在哪个存储器的 `usr/pkgs/dcnet` 都能启动。专职主控/节点可以
+把命令写进 `/etc/session.conf` 的 `command=`，ush 会在第一次提示符前执行它。
 
 版本：1.1.0 · 协议版本：1 · 适用 CC:Tweaked 1.16+（含 1.20/1.21 系列）

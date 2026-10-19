@@ -45,10 +45,10 @@ local M = {}
 M.VERSION    = "1.1.0"
 M.PROTO_CTRL = "dccomp"
 M.PROTO_PUSH = "dcpush"
-M.ROOT       = "/dccomp"
+M.ROOT       = rawget(_G, "DCNET_ROOT") or "/dccomp"
 M.JOB_DIR    = M.ROOT .. "/jobs"
 M.OUT_DIR    = M.ROOT .. "/out"
-M.WORKER_FILE = M.ROOT .. "/worker.lua"
+M.WORKER_FILE = rawget(_G, "DCNET_WORKER_FILE") or (M.ROOT .. "/worker.lua")
 
 M.unpack  = table.unpack or unpack
 M.colours = rawget(_G, "colors") or rawget(_G, "colours")
@@ -461,7 +461,30 @@ __dc_define("dc.net", function()
 local util = dc_require("dc.util")
 local crypto = dc_require("dc.crypto")
 
+local function select_netlib()
+    local want = tostring(rawget(_G, "DCNET_TRANSPORT") or "rednet"):lower()
+    if want == "rednet" then return rednet, "rednet" end
+    local ok, rpv = pcall(require, "rpvnet")
+    if not ok or type(rpv) ~= "table" then
+        if want == "rpv" then
+            error("dcnet: transport=rpv 但 lib/rpvnet.lua 不可用: " .. tostring(rpv), 0)
+        end
+        return rednet, "rednet"
+    end
+    if want == "rpv" then return rpv, "rpv" end
+    local can = false
+    if type(rpv.available) == "function" then
+        local ok2, avail = pcall(rpv.available)
+        can = ok2 and avail and true or false
+    end
+    if can then return rpv, "rpv" end
+    return rednet, "rednet"
+end
+
+local netlib, TRANSPORT = select_netlib()
+
 local M = {}
+M.transport = TRANSPORT
 
 M.SEQ_SKEW = 120
 M.BULK_FIELDS = { ["d"] = "dck", ["src"] = "sck" }
@@ -649,10 +672,10 @@ function M.open()
     end
 
     for _, md in ipairs(modems) do
-        if rednet.isOpen(md.name) then return md.name, md.wireless end
+        if netlib.isOpen(md.name) then return md.name, md.wireless end
     end
     for _, md in ipairs(modems) do
-        local ok, err = pcall(rednet.open, md.name)
+        local ok, err = pcall(netlib.open, md.name)
         if ok then return md.name, md.wireless end
 
         if err then M.lastError = tostring(err) end
@@ -663,10 +686,10 @@ end
 function M.openAll()
     local openedList, failed = {}, {}
     for _, md in ipairs(M.findModems()) do
-        if rednet.isOpen(md.name) then
+        if netlib.isOpen(md.name) then
             openedList[#openedList + 1] = md
         else
-            local ok, err = pcall(rednet.open, md.name)
+            local ok, err = pcall(netlib.open, md.name)
             if ok then
                 openedList[#openedList + 1] = md
             else
@@ -691,22 +714,22 @@ function M.send(target, msg, proto)
 
     if target <= 0 then return false, "目标不是网络节点" end
     if type(msg) == "table" then M.sign(msg) end
-    local ok, res = pcall(rednet.send, target, msg, proto or util.PROTO_CTRL)
+    local ok, res = pcall(netlib.send, target, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "rednet 未打开" end
+    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
     return true
 end
 
 function M.broadcast(msg, proto)
     if type(msg) == "table" then M.sign(msg) end
-    local ok, res = pcall(rednet.broadcast, msg, proto or util.PROTO_CTRL)
+    local ok, res = pcall(netlib.broadcast, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "rednet 未打开" end
+    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
     return true
 end
 
 function M.receive(proto, timeout)
-    local sender, msg = rednet.receive(proto, timeout)
+    local sender, msg = netlib.receive(proto, timeout)
     if not sender then return nil end
     return sender, msg
 end
@@ -827,6 +850,34 @@ function Console:close()
     term.setCursorPos(1, self.h)
     term.clearLine()
 end
+
+local Null = {}
+Null.__index = Null
+
+function M.null(opts)
+    opts = opts or {}
+    local self = setmetatable({}, Null)
+    self.logFile = opts.logFile
+    self.title = opts.title
+    self.statusText = ""
+    if self.logFile then
+        local dir = self.logFile:match("^(.*)/[^/]*$")
+        if dir and dir ~= "" then util.ensureDir(dir) end
+    end
+    return self
+end
+
+function Null:setStatus(text) self.statusText = text end
+function Null:log(text)
+    if self.logFile then util.appendLog(self.logFile, util.logLine(text)) end
+end
+function Null:logLines(lines)
+    for _, line in ipairs(lines or {}) do self:log(line) end
+end
+function Null:clearLog() end
+function Null:prompt() sleep(1) return nil end
+function Null:rebuild() end
+function Null:close() end
 
 return M
 
@@ -2338,7 +2389,12 @@ function M.run(opts)
     util.ensureDir(util.OUT_DIR)
     local created = jobs.installDefaults(opts.defaultJobs)
 
-    local ui = console.new({ title = "dcnet master" })
+    local ui
+    if opts.headless then
+        ui = console.null({ title = "dcnet master", logFile = util.ROOT .. "/logs/master.log" })
+    else
+        ui = console.new({ title = "dcnet master" })
+    end
     ui:setStatus("主控启动中…")
     ui:log(string.format("dcnet 主控 v%s   本机 ID #%d", util.VERSION, os.getComputerID()),
         col("lime", 32))
@@ -2349,7 +2405,7 @@ function M.run(opts)
             return table.concat(t, ",")
         end)()))
 
-    local savedKey = settings.get("dcnet.key")
+    local savedKey = rawget(_G, "DCNET_KEY") or settings.get("dcnet.key")
     if savedKey and savedKey ~= "" then
         local kok, kerr = net.setKey(savedKey)
         if kok then
@@ -3317,8 +3373,10 @@ function M.run(opts)
     ui:setStatus(S:statusLine())
     local ok, err = pcall(parallel.waitForAny, netLoop, pushLoop, tickLoop, uiLoop, httpLoop)
     ui:close()
-    term.clear()
-    term.setCursorPos(1, 1)
+    if not opts.headless then
+        term.clear()
+        term.setCursorPos(1, 1)
+    end
     if not ok then
         printError("[dcnet] 主控异常终止：" .. tostring(err))
         return false
@@ -5458,11 +5516,17 @@ local master = dc_require("dc.master")
 local sched  = dc_require("dc.sched")
 
 local argv = { ... }
-local cfg  = {}
+
+if type(argv[1]) == "table" then argv = argv[1] end
+local cfg = {}
+for k, v in pairs(rawget(_G, "DCNET_CFG") or {}) do cfg[k] = v end
+local headless = false
 for _, a in ipairs(argv) do
     local s = tostring(a)
     if s == "-v" or s == "--verbose" then
         cfg.verbose = true
+    elseif s == "--headless" or s == "headless" then
+        headless = true
     elseif s == "standby" or s == "--standby" then
         cfg.standby = true
     elseif s == "active" or s == "--active" then
@@ -5487,10 +5551,13 @@ end
 local ok = master.run({
     defaultJobs = _G.DC_DEFAULT_JOBS or {},
     cfg = cfg,
+    headless = headless,
 })
 if not ok then
     printError("[dcnet] 主控启动失败。")
+    return 1
 end
+return 0
 
 ]==],
     ["/dccomp/worker.lua"] = [=[
@@ -5523,10 +5590,10 @@ local M = {}
 M.VERSION    = "1.1.0"
 M.PROTO_CTRL = "dccomp"
 M.PROTO_PUSH = "dcpush"
-M.ROOT       = "/dccomp"
+M.ROOT       = rawget(_G, "DCNET_ROOT") or "/dccomp"
 M.JOB_DIR    = M.ROOT .. "/jobs"
 M.OUT_DIR    = M.ROOT .. "/out"
-M.WORKER_FILE = M.ROOT .. "/worker.lua"
+M.WORKER_FILE = rawget(_G, "DCNET_WORKER_FILE") or (M.ROOT .. "/worker.lua")
 
 M.unpack  = table.unpack or unpack
 M.colours = rawget(_G, "colors") or rawget(_G, "colours")
@@ -5939,7 +6006,30 @@ __dc_define("dc.net", function()
 local util = dc_require("dc.util")
 local crypto = dc_require("dc.crypto")
 
+local function select_netlib()
+    local want = tostring(rawget(_G, "DCNET_TRANSPORT") or "rednet"):lower()
+    if want == "rednet" then return rednet, "rednet" end
+    local ok, rpv = pcall(require, "rpvnet")
+    if not ok or type(rpv) ~= "table" then
+        if want == "rpv" then
+            error("dcnet: transport=rpv 但 lib/rpvnet.lua 不可用: " .. tostring(rpv), 0)
+        end
+        return rednet, "rednet"
+    end
+    if want == "rpv" then return rpv, "rpv" end
+    local can = false
+    if type(rpv.available) == "function" then
+        local ok2, avail = pcall(rpv.available)
+        can = ok2 and avail and true or false
+    end
+    if can then return rpv, "rpv" end
+    return rednet, "rednet"
+end
+
+local netlib, TRANSPORT = select_netlib()
+
 local M = {}
+M.transport = TRANSPORT
 
 M.SEQ_SKEW = 120
 M.BULK_FIELDS = { ["d"] = "dck", ["src"] = "sck" }
@@ -6127,10 +6217,10 @@ function M.open()
     end
 
     for _, md in ipairs(modems) do
-        if rednet.isOpen(md.name) then return md.name, md.wireless end
+        if netlib.isOpen(md.name) then return md.name, md.wireless end
     end
     for _, md in ipairs(modems) do
-        local ok, err = pcall(rednet.open, md.name)
+        local ok, err = pcall(netlib.open, md.name)
         if ok then return md.name, md.wireless end
 
         if err then M.lastError = tostring(err) end
@@ -6141,10 +6231,10 @@ end
 function M.openAll()
     local openedList, failed = {}, {}
     for _, md in ipairs(M.findModems()) do
-        if rednet.isOpen(md.name) then
+        if netlib.isOpen(md.name) then
             openedList[#openedList + 1] = md
         else
-            local ok, err = pcall(rednet.open, md.name)
+            local ok, err = pcall(netlib.open, md.name)
             if ok then
                 openedList[#openedList + 1] = md
             else
@@ -6169,22 +6259,22 @@ function M.send(target, msg, proto)
 
     if target <= 0 then return false, "目标不是网络节点" end
     if type(msg) == "table" then M.sign(msg) end
-    local ok, res = pcall(rednet.send, target, msg, proto or util.PROTO_CTRL)
+    local ok, res = pcall(netlib.send, target, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "rednet 未打开" end
+    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
     return true
 end
 
 function M.broadcast(msg, proto)
     if type(msg) == "table" then M.sign(msg) end
-    local ok, res = pcall(rednet.broadcast, msg, proto or util.PROTO_CTRL)
+    local ok, res = pcall(netlib.broadcast, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "rednet 未打开" end
+    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
     return true
 end
 
 function M.receive(proto, timeout)
-    local sender, msg = rednet.receive(proto, timeout)
+    local sender, msg = netlib.receive(proto, timeout)
     if not sender then return nil end
     return sender, msg
 end
@@ -6305,6 +6395,34 @@ function Console:close()
     term.setCursorPos(1, self.h)
     term.clearLine()
 end
+
+local Null = {}
+Null.__index = Null
+
+function M.null(opts)
+    opts = opts or {}
+    local self = setmetatable({}, Null)
+    self.logFile = opts.logFile
+    self.title = opts.title
+    self.statusText = ""
+    if self.logFile then
+        local dir = self.logFile:match("^(.*)/[^/]*$")
+        if dir and dir ~= "" then util.ensureDir(dir) end
+    end
+    return self
+end
+
+function Null:setStatus(text) self.statusText = text end
+function Null:log(text)
+    if self.logFile then util.appendLog(self.logFile, util.logLine(text)) end
+end
+function Null:logLines(lines)
+    for _, line in ipairs(lines or {}) do self:log(line) end
+end
+function Null:clearLog() end
+function Null:prompt() sleep(1) return nil end
+function Null:rebuild() end
+function Null:close() end
 
 return M
 
@@ -6793,7 +6911,12 @@ local function runOnce(opts)
         return false, "没有检测到调制解调器"
     end
 
-    local ui = console.new({ title = "dcnet worker", hasPrompt = false })
+    local ui
+    if opts.headless then
+        ui = console.null({ title = "dcnet worker", hasPrompt = false, logFile = LOG })
+    else
+        ui = console.new({ title = "dcnet worker", hasPrompt = false })
+    end
     ui:log(string.format("dcnet 运算节点 v%s", util.VERSION), col("lime", 32))
     ui:log(string.format("网络：已打开 %s（%s）  本机 ID #%d",
         net.describe(modems),
@@ -7267,7 +7390,7 @@ local function runOnce(opts)
     refresh()
     ui:log(string.format("节点名：%s（用 label set <名字> 可以改名）", S.name))
 
-    local savedKey = settings.get("dcnet.key")
+    local savedKey = rawget(_G, "DCNET_KEY") or settings.get("dcnet.key")
     if savedKey and savedKey ~= "" then
         local kok, kerr = net.setKey(savedKey)
         if kok then
@@ -7280,7 +7403,7 @@ local function runOnce(opts)
     ui:log("按 Ctrl+T 可以终止节点。")
 
     local ok, err = pcall(parallel.waitForAny, netLoop, workLoop, beatLoop, pushLoop)
-    term.redirect(term.native())
+    if not opts.headless then term.redirect(term.native()) end
     if not ok then
         printError("[dcnet] 节点异常终止: " .. tostring(err))
         fileLog("节点异常终止：" .. tostring(err))
@@ -7885,13 +8008,34 @@ end
 local worker = dc_require("dc.worker")
 
 local argv = { ... }
-local masterId = tonumber(argv[1])
-local name = argv[2]
 
-local ok = worker.run({ master = masterId, name = name })
+if type(argv[1]) == "table" then argv = argv[1] end
+
+local opts = {}
+for k, v in pairs(rawget(_G, "DCNET_CFG") or {}) do opts[k] = v end
+for _, a in ipairs(argv) do
+    local s = tostring(a)
+    if s == "--headless" or s == "--daemon" or s == "headless" then
+        opts.headless = true
+    elseif tonumber(s) and not opts.master then
+        opts.master = tonumber(s)
+    elseif s:sub(1, 1) ~= "-" and not opts.name then
+        opts.name = s
+    else
+        local k, v = s:match("^%-%-([%w_]+)=(.*)$")
+        if k then
+            local n = tonumber(v)
+            opts[k] = n or v
+        end
+    end
+end
+
+local ok = worker.run(opts)
 if not ok then
     printError("[dcnet] 节点启动失败。")
+    return 1
 end
+return 0
 
 ]=],
     ["/dccomp/bootstrap.lua"] = [[

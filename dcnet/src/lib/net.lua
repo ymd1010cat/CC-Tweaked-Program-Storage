@@ -11,7 +11,33 @@
 local util = dc_require("dc.util")
 local crypto = dc_require("dc.crypto")
 
+-- 传输后端：默认 rednet；unixshell 里若装了 lib/rpvnet.lua，可以把
+-- DCNET_TRANSPORT 设成 "rpv" 或 "auto" 走 RPV1（rednet 形状的 API）。
+-- 独立运行（没有 ush）时仍是 rednet，行为不变。
+local function select_netlib()
+    local want = tostring(rawget(_G, "DCNET_TRANSPORT") or "rednet"):lower()
+    if want == "rednet" then return rednet, "rednet" end
+    local ok, rpv = pcall(require, "rpvnet")
+    if not ok or type(rpv) ~= "table" then
+        if want == "rpv" then
+            error("dcnet: transport=rpv 但 lib/rpvnet.lua 不可用: " .. tostring(rpv), 0)
+        end
+        return rednet, "rednet"
+    end
+    if want == "rpv" then return rpv, "rpv" end
+    local can = false
+    if type(rpv.available) == "function" then
+        local ok2, avail = pcall(rpv.available)
+        can = ok2 and avail and true or false
+    end
+    if can then return rpv, "rpv" end
+    return rednet, "rednet"
+end
+
+local netlib, TRANSPORT = select_netlib()
+
 local M = {}
+M.transport = TRANSPORT
 
 -- ── 消息签名与防重放 ────────────────────────────────────────────────────
 --
@@ -221,10 +247,10 @@ function M.open()
     end
     -- 已经有打开的就直接复用，避免重复 open 报错
     for _, md in ipairs(modems) do
-        if rednet.isOpen(md.name) then return md.name, md.wireless end
+        if netlib.isOpen(md.name) then return md.name, md.wireless end
     end
     for _, md in ipairs(modems) do
-        local ok, err = pcall(rednet.open, md.name)
+        local ok, err = pcall(netlib.open, md.name)
         if ok then return md.name, md.wireless end
         -- 换下一个 modem 再试
         if err then M.lastError = tostring(err) end
@@ -239,10 +265,10 @@ end
 function M.openAll()
     local openedList, failed = {}, {}
     for _, md in ipairs(M.findModems()) do
-        if rednet.isOpen(md.name) then
+        if netlib.isOpen(md.name) then
             openedList[#openedList + 1] = md
         else
-            local ok, err = pcall(rednet.open, md.name)
+            local ok, err = pcall(netlib.open, md.name)
             if ok then
                 openedList[#openedList + 1] = md
             else
@@ -269,18 +295,18 @@ function M.send(target, msg, proto)
     -- 负数 ID 是云端虚拟端点，不走 rednet
     if target <= 0 then return false, "目标不是网络节点" end
     if type(msg) == "table" then M.sign(msg) end
-    local ok, res = pcall(rednet.send, target, msg, proto or util.PROTO_CTRL)
+    local ok, res = pcall(netlib.send, target, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "rednet 未打开" end
+    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
     return true
 end
 
 --- 广播
 function M.broadcast(msg, proto)
     if type(msg) == "table" then M.sign(msg) end
-    local ok, res = pcall(rednet.broadcast, msg, proto or util.PROTO_CTRL)
+    local ok, res = pcall(netlib.broadcast, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "rednet 未打开" end
+    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
     return true
 end
 
@@ -288,7 +314,7 @@ end
 -- 注意：rednet.receive 带 timeout 时内部用 os.pullEvent(nil)，会醒在任何事件上，
 -- 但 CC 的 parallel 会把同一个事件分发给所有匹配的协程，所以不会抢走别人的事件。
 function M.receive(proto, timeout)
-    local sender, msg = rednet.receive(proto, timeout)
+    local sender, msg = netlib.receive(proto, timeout)
     if not sender then return nil end
     return sender, msg
 end

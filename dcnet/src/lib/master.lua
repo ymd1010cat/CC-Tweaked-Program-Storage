@@ -55,7 +55,14 @@ function M.run(opts)
     local created = jobs.installDefaults(opts.defaultJobs)
 
     -- ── 界面 ─────────────────────────────────────────────────────────
-    local ui = console.new({ title = "dcnet master" })
+    -- headless：ush 包可以用 `dcnet master --headless` 当后台服务跑，
+    -- 日志落到 <root>/logs/master.log，不碰终端。
+    local ui
+    if opts.headless then
+        ui = console.null({ title = "dcnet master", logFile = util.ROOT .. "/logs/master.log" })
+    else
+        ui = console.new({ title = "dcnet master" })
+    end
     ui:setStatus("主控启动中…")
     ui:log(string.format("dcnet 主控 v%s   本机 ID #%d", util.VERSION, os.getComputerID()),
         col("lime", 32))
@@ -67,7 +74,7 @@ function M.run(opts)
         end)()))
 
     -- 共享密钥（可选）：设了就启用消息签名与防重放
-    local savedKey = settings.get("dcnet.key")
+    local savedKey = rawget(_G, "DCNET_KEY") or settings.get("dcnet.key")
     if savedKey and savedKey ~= "" then
         local kok, kerr = net.setKey(savedKey)
         if kok then
@@ -1053,8 +1060,10 @@ function M.run(opts)
     ui:setStatus(S:statusLine())
     local ok, err = pcall(parallel.waitForAny, netLoop, pushLoop, tickLoop, uiLoop, httpLoop)
     ui:close()
-    term.clear()
-    term.setCursorPos(1, 1)
+    if not opts.headless then
+        term.clear()
+        term.setCursorPos(1, 1)
+    end
     if not ok then
         printError("[dcnet] 主控异常终止：" .. tostring(err))
         return false

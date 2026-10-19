@@ -40,10 +40,31 @@ end
 local worker = dc_require("dc.worker")
 
 local argv = { ... }
-local masterId = tonumber(argv[1])
-local name = argv[2]
+-- unixshell 的命令块拿到的是 (args_table, stage)；独立运行时才是逐个字符串。
+if type(argv[1]) == "table" then argv = argv[1] end
 
-local ok = worker.run({ master = masterId, name = name })
+local opts = {}
+for k, v in pairs(rawget(_G, "DCNET_CFG") or {}) do opts[k] = v end
+for _, a in ipairs(argv) do
+    local s = tostring(a)
+    if s == "--headless" or s == "--daemon" or s == "headless" then
+        opts.headless = true
+    elseif tonumber(s) and not opts.master then
+        opts.master = tonumber(s)
+    elseif s:sub(1, 1) ~= "-" and not opts.name then
+        opts.name = s
+    else
+        local k, v = s:match("^%-%-([%w_]+)=(.*)$")
+        if k then
+            local n = tonumber(v)
+            opts[k] = n or v
+        end
+    end
+end
+
+local ok = worker.run(opts)
 if not ok then
     printError("[dcnet] 节点启动失败。")
+    return 1
 end
+return 0
