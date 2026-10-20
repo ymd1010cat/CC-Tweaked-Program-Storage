@@ -31,11 +31,13 @@
 | sentinel / cardkey / pylib | `python tools/build_release.py --project sentinel` | `dist/release/sentinel-v2.0.0.zip` 等 |
 | rpv1 | `pwsh -NoProfile -File rpv1/poc/build-dist.ps1` | `rpv1/dist/`（含 `LICENSE`、单文件 MIT 头部、`rpv-1.0.0.zip`） |
 | unixshell | `python unixshell/tools/release.py --out dist/release` | 两个安装半、字体介质、`gnome` 包、`pkgserver`、`INSTALL.txt`、`SHA256SUMS.txt` |
+| dcnet | `python unixshell/tools/release_dcnet.py` | `unixshell/dist/release-dcnet/`（项目包、ush 包、worker 包、安装说明、`SHA256SUMS.txt`、`RELEASE.md`） |
+| unixshell（无 craftos） | `python unixshell/tools/release_no_craftos.py` | `unixshell/dist/release-no-craftos/`（两个半、安装说明、`SHA256SUMS.txt`、`RELEASE.md`） |
 
 CI 在 [`.github/workflows/release-builds.yml`](.github/workflows/release-builds.yml)：
 
 - **分支推送**：构建全部项目（只做 CI 校验，不发布）。
-- **新建 tag**（`sentinel` / `cardkey` / `pylib` / `rpv1` / `unixshell`）：构建该项目并**刷新对应 release 的资产**。
+- **新建 tag**（`sentinel` / `cardkey` / `pylib` / `rpv1` / `unixshell` / `dcnet` / `unixshell-no-craftos`）：构建该项目并**刷新对应 release 的资产**（带 `RELEASE.md` 的项目会同时用模板刷新 release 正文）。
 - **手动 `workflow_dispatch`**：在 Actions 页面选择项目构建（不发布）。
 
 注意：GitHub 不会为「把已有 tag 强推到另一个提交」启动工作流，所以给已有 tag 重新发布时，用 `workflow_dispatch`，或先删掉再重建 tag。构建是确定性的（zip 使用固定时间戳），同一提交重复构建得到相同字节。

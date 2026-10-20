@@ -21,6 +21,8 @@ on:
           - pylib
           - rpv1
           - unixshell
+          - dcnet
+          - unixshell-no-craftos
 
 permissions:
   contents: write
@@ -35,7 +37,7 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.project != 'rpv1')
       || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/'))
-      || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && contains(fromJSON('["sentinel","cardkey","pylib","unixshell"]'), github.ref_name))
+      || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && contains(fromJSON('["sentinel","cardkey","pylib","unixshell","dcnet","unixshell-no-craftos"]'), github.ref_name))
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -43,16 +45,23 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: build
+        id: build
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p dist/release
           if [ "${{ github.event_name }}" = "push" ] && [[ "$GITHUB_REF" == refs/heads/* ]]; then
             for project in sentinel cardkey pylib; do
               python3 tools/build_release.py --project "$project" --out dist/release
             done
             python3 unixshell/tools/release.py --out dist/release
+            python3 unixshell/tools/release_dcnet.py
+            python3 unixshell/tools/release_no_craftos.py
+            cp unixshell/dist/release-dcnet/* unixshell/dist/release-no-craftos/* dist/release/
+            out=dist/release
           else
             project="${{ github.event.inputs.project || github.ref_name }}"
+            out=dist/release
             case "$project" in
               sentinel|cardkey|pylib)
                 python3 tools/build_release.py --project "$project" --out dist/release
@@ -60,17 +69,26 @@ jobs:
               unixshell)
                 python3 unixshell/tools/release.py --out dist/release
                 ;;
+              dcnet)
+                python3 unixshell/tools/release_dcnet.py
+                out=unixshell/dist/release-dcnet
+                ;;
+              unixshell-no-craftos)
+                python3 unixshell/tools/release_no_craftos.py
+                out=unixshell/dist/release-no-craftos
+                ;;
               *)
                 echo "unknown project: $project" >&2
                 exit 1
                 ;;
             esac
           fi
+          echo "out=$out" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ github.ref_name }}-artifacts
-          path: dist/release/*
+          path: ${{ steps.build.outputs.out }}/*
           if-no-files-found: error
 
       - name: publish to the tag's release
@@ -79,8 +97,18 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes ""
-          gh release upload "$tag" dist/release/* --clobber
+          out="${{ steps.build.outputs.out }}"
+          if [ -f "$out/RELEASE.md" ]; then
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release edit "$tag" --notes-file "$out/RELEASE.md"
+            else
+              gh release create "$tag" --title "$tag" --notes-file "$out/RELEASE.md"
+            fi
+          else
+            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes ""
+          fi
+          mapfile -t files < <(find "$out" -maxdepth 1 -type f ! -name RELEASE.md)
+          gh release upload "$tag" "${files[@]}" --clobber
 
   rpv1:
     name: rpv1-${{ github.ref_name }}
