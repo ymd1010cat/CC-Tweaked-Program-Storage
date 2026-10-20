@@ -57,7 +57,9 @@ jobs:
             python3 unixshell/tools/release.py --out dist/release
             python3 unixshell/tools/release_dcnet.py
             python3 unixshell/tools/release_no_craftos.py
-            cp unixshell/dist/release-dcnet/* unixshell/dist/release-no-craftos/* dist/release/
+            mkdir -p dist/release/dcnet dist/release/no-craftos
+            cp unixshell/dist/release-dcnet/* dist/release/dcnet/
+            cp unixshell/dist/release-no-craftos/* dist/release/no-craftos/
             out=dist/release
           else
             project="${{ github.event.inputs.project || github.ref_name }}"
@@ -88,7 +90,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ github.ref_name }}-artifacts
-          path: ${{ steps.build.outputs.out }}/*
+          path: ${{ steps.build.outputs.out }}/**
           if-no-files-found: error
 
       - name: publish to the tag's release
