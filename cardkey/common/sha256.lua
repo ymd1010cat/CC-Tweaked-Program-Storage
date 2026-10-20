@@ -1,6 +1,6 @@
 -- sha256.lua -- SHA-256 (FIPS 180-4), pure Lua for CraftOS.
 --
--- Install as /sha256.lua on every machine that hashes: the HighSafe auth
+-- Install as /sha256.lua on every machine that hashes: the Sentinel auth
 -- server, the audit server, both terminal modes, and the CardKey server.
 -- The CardKey terminal never loads this file.
 --

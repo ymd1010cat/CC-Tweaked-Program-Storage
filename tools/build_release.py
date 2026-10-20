@@ -16,7 +16,7 @@ import hashlib
 import zipfile
 from pathlib import Path
 
-VERSIONS = {"highsafe": "2.0.0", "cardkey": "2.0.0", "pylib": "1.0.0"}
+VERSIONS = {"sentinel": "2.0.0", "cardkey": "2.0.0", "pylib": "1.0.0"}
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 
 

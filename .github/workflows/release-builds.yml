@@ -16,7 +16,7 @@ on:
         required: true
         type: choice
         options:
-          - highsafe
+          - sentinel
           - cardkey
           - pylib
           - rpv1
@@ -35,7 +35,7 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.project != 'rpv1')
       || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/'))
-      || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && contains(fromJSON('["highsafe","cardkey","pylib","unixshell"]'), github.ref_name))
+      || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && contains(fromJSON('["sentinel","cardkey","pylib","unixshell"]'), github.ref_name))
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -47,14 +47,14 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ] && [[ "$GITHUB_REF" == refs/heads/* ]]; then
-            for project in highsafe cardkey pylib; do
+            for project in sentinel cardkey pylib; do
               python3 tools/build_release.py --project "$project" --out dist/release
             done
             python3 unixshell/tools/release.py --out dist/release
           else
             project="${{ github.event.inputs.project || github.ref_name }}"
             case "$project" in
-              highsafe|cardkey|pylib)
+              sentinel|cardkey|pylib)
                 python3 tools/build_release.py --project "$project" --out dist/release
                 ;;
               unixshell)
