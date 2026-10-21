@@ -103,9 +103,17 @@ def main():
         err = (exc.stderr or b"").decode("utf-8", "replace")
 
     text = re.sub(r"\r", "", out)
-    ok = ("dcnet 1.1.0" in text and "transport: rednet" in text
+    # 版本号以包 manifest 为准，避免每次发版都要改测试脚本
+    version = ""
+    manifest = DIST / "manifest"
+    if manifest.exists():
+        m = re.search(r"^version=(\S+)\s*$", manifest.read_text(encoding="utf-8"), re.M)
+        if m:
+            version = m.group(1)
+    want = "dcnet %s" % version if version else "dcnet "
+    ok = (version != "" and want in text and "transport: rednet" in text
           and "root:" in text and "jobs:" in text)
-    print("dcnet version: %s" % ("yes" if "dcnet 1.1.0" in text else "no"))
+    print("dcnet version: %s (%s)" % ("yes" if want in text else "no", version or "?"))
     print("config block:  %s" % ("yes" if "transport: rednet" in text else "no"))
     if not ok:
         tail = "\n".join(text.splitlines()[-30:])

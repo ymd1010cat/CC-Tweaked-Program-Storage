@@ -8,6 +8,8 @@
 
 ## 这一版的重点
 
+- **版本 1.2.0**：新增网络屏幕（见下）；协议版本仍为 1，只加了新消息类型，
+  旧节点/旧主控可以继续混跑（未知类型按协议约定忽略）。
 - **独立运行**：`dist/master.lua` + `dist/worker.lua` 两个文件即可组网，保持原来的
   rednet 有线网络用法；节点源码随任务下发，无需预装作业。
 - **unixshell 包**：`tools/pkgs/dcnet/` 提供 `dcnet` 命令（master / worker / screen /
@@ -30,9 +32,9 @@
 
 | 文件 | 是什么 | 放哪 |
 |---|---|---|
-| `dcnet-1.1.0.zip` | 独立项目：`dcnet/` 源码、`dist/` 单文件、文档、作业、CraftOS-PC 回归套件与 Python 云端参考服务端 | 解压得到 `dcnet/`；部署用其中的 `dist/master.lua`、`dist/worker.lua`、可选的 `dist/screen.lua` |
-| `dcnet-ush-package-1.1.0.zip` | unixshell 包：`manifest`、`bin/dcnet.lua`、`lib/dcnet/` 模块、作业、worker 种子与配置样例 | 解压内容到包存储器的 `usr/pkgs/dcnet/`（或放进 `pkgserver` 的仓库） |
-| `dcnet-worker-1.1.0.zip` | 计算端镜像：`startup.lua` + worker 所需的 dcnet 模块；无 ush/字体/UI | 解压内容到计算节点电脑文件系统根，开机直接跑 worker |
+| `dcnet-1.2.0.zip` | 独立项目：`dcnet/` 源码、`dist/` 单文件、文档、作业、CraftOS-PC 回归套件与 Python 云端参考服务端 | 解压得到 `dcnet/`；部署用其中的 `dist/master.lua`、`dist/worker.lua`、可选的 `dist/screen.lua` |
+| `dcnet-ush-package-1.2.0.zip` | unixshell 包：`manifest`、`bin/dcnet.lua`、`lib/dcnet/` 模块、作业、worker 种子与配置样例 | 解压内容到包存储器的 `usr/pkgs/dcnet/`（或放进 `pkgserver` 的仓库） |
+| `dcnet-worker-1.2.0.zip` | 计算端镜像：`startup.lua` + worker 所需的 dcnet 模块；无 ush/字体/UI | 解压内容到计算节点电脑文件系统根，开机直接跑 worker |
 | `dcnet-INSTALL.txt` | 三种安装形态的说明 | - |
 | `SHA256SUMS.txt` | 三个 zip 的 SHA-256 | - |
 
@@ -48,7 +50,7 @@
 
 **B. unixshell 包（主控/带壳机器）**
 
-把 `dcnet-ush-package-1.1.0.zip` 解压到 `<存储>/usr/pkgs/dcnet/`，或在包服务器仓库里
+把 `dcnet-ush-package-1.2.0.zip` 解压到 `<存储>/usr/pkgs/dcnet/`，或在包服务器仓库里
 `pkg install dcnet`。然后 `/etc/dcnet.conf`：
 
 ```ini
@@ -64,7 +66,7 @@ forward=1
 
 **C. 计算端镜像**
 
-把 `dcnet-worker-1.1.0.zip` 解压到节点电脑根目录（`startup.lua` 落在 `/`），开机直接
+把 `dcnet-worker-1.2.0.zip` 解压到节点电脑根目录（`startup.lua` 落在 `/`），开机直接
 运行 `dcnet worker --headless`。它不会启动 ush，也没有中文字体/交互界面。
 
 ## 许可

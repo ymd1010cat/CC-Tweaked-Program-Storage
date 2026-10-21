@@ -690,7 +690,7 @@ python tests/run_craftos.py --data D   # 换数据目录（缺省 tests/.ccdata�
 写东西**，所以在受限的沙箱环境（只允许写工作区）下也能直接跑；唯一需要工作区外
 权限的动作是"执行"CraftOS-PC 本体，那不需要写权限。
 
-覆盖范围（当前 270 项检查）：
+覆盖范围（当前 271 项检查）：
 
 | 分组 | 验证内容 |
 | --- | --- |
@@ -849,4 +849,4 @@ BIOS、man/usr/cmd、`fontdata/`、`lib/cc_chinese.lua`/`cc_font*` 或桌面包�
 unixshell 仓库里的 `python tools/dcnet_pkg_verify.py` 会在真 CraftOS-PC 上部署 ush +
 dcnet 包，并跑 `dcnet version` / `dcnet config` 做端到端验收。
 
-版本：1.1.0 · 协议版本：1 · 适用 CC:Tweaked 1.16+（含 1.20/1.21 系列）
+版本：1.2.0 · 协议版本：1 · 适用 CC:Tweaked 1.16+（含 1.20/1.21 系列）

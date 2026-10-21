@@ -110,6 +110,20 @@ jobs:
             gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes ""
           fi
           mapfile -t files < <(find "$out" -maxdepth 1 -type f ! -name RELEASE.md)
+          # 版本号变了以后旧资产不会自己消失：删掉这次构建里没有的文件
+          if gh release view "$tag" >/dev/null 2>&1; then
+            while IFS= read -r name; do
+              [ -z "$name" ] && continue
+              keep=0
+              for f in "${files[@]}"; do
+                if [ "$(basename "$f")" = "$name" ]; then keep=1; break; fi
+              done
+              if [ "$keep" -eq 0 ]; then
+                echo "delete stale asset: $name"
+                gh release delete-asset "$tag" "$name" --yes
+              fi
+            done < <(gh release view "$tag" --json assets --jq '.assets[].name')
+          fi
           gh release upload "$tag" "${files[@]}" --clobber
 
   rpv1:

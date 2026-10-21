@@ -1521,7 +1521,7 @@ end
 -- 场景 7：打包产物冒烟（真正跑一遍剥过注释的 dist 产物）
 out("")
 out("-- 场景 7：打包产物（dist）语法 + 真启动")
-for _, f in ipairs({ "master.lua", "worker.lua", "bootstrap.lua", "install.lua" }) do
+for _, f in ipairs({ "master.lua", "worker.lua", "screen.lua", "bootstrap.lua", "install.lua" }) do
     local src = readHost(PROJECT .. "/dist/" .. f)
     local fn, err = U["dc.util"].loadChunk(src or "", "@" .. f)
     check(fn ~= nil, "dist/" .. f .. " 语法正确" ..
@@ -1780,10 +1780,11 @@ do
 end
 
 -- 场景 11：混沌测试（确定性丢包 + 杀节点 + 重放）
--- 丢包如果丢掉"结果"，任务要等 taskTimeout 才会重派。生产默认 90s，在慢机器上
--- 一个丢包就可能让本场景超过等待窗口（不是逻辑错误）；这里压到 20s 让它快速自愈。
+-- 丢包如果丢掉"任务"或"结果"，主控要等 taskTimeout 才会重派。生产默认 90s，在慢
+-- 机器上一个丢包就可能让本场景超出等待窗口（不是逻辑错误）；这里压到 15s（下限），
+-- 并把第一段的等待放宽到 240s（最坏 6 个任务各丢一次也能自愈）。
 runScenario("场景 11：混沌（丢包/杀节点/重放，结果仍须正确）",
-    { taskTimeout = 20, adaptiveTimeout = false }, function()
+    { taskTimeout = 15, adaptiveTimeout = false }, function()
     if not waitFor("节点 #4 已连接", 25) then
         check(false, "两个节点完成注册")
         return
@@ -1793,7 +1794,7 @@ runScenario("场景 11：混沌（丢包/杀节点/重放，结果仍须正确�
     -- 开混沌：每 7 条丢 1 条（确定性，可复现——不用真随机）
     chaos.dropEvery, chaos.count, chaos.dropped = 7, 0, 0
     typeLine("run selftest tasks=6 size=200")
-    check(waitFor("成功 6 / 失败 0", 150), "丢包 1/7 的情况下作业仍然 6/6 成功")
+    check(waitFor("成功 6 / 失败 0", 240), "丢包 1/7 的情况下作业仍然 6/6 成功")
     check(chaos.dropped > 0, "确实丢了 " .. tostring(chaos.dropped) .. " 条消息")
     -- 注意：丢包多半落在"轮询/心跳"这类本来就会周期重发的消息上，不一定触发重试日志，
     -- 所以这里只做信息输出（真正的判据是上面的 6/6 成功与下面的结果正确性）。
