@@ -410,6 +410,11 @@ M.TAKEOVER = "takeover"
 M.REPO     = "repo"
 M.REPOINFO = "repoinfo"
 
+M.SCREEN    = "screen"
+M.SCREENBYE = "screenbye"
+M.DISP      = "disp"
+M.SCREENOFF = "screenoff"
+
 M.FETCH    = "fetch"
 M.PUT      = "put"
 M.PUTACK   = "putack"
@@ -470,7 +475,8 @@ local M = {}
 M.transport = TRANSPORT
 
 M.SEQ_SKEW = 120
-M.BULK_FIELDS = { ["d"] = "dck", ["src"] = "sck" }
+
+M.BULK_FIELDS = { ["d"] = "dck", ["src"] = "sck", ["lines"] = "lck" }
 
 M.key = nil
 M.seq = 0
@@ -1360,6 +1366,7 @@ M.DEFAULTS = {
     rediscoverAfter = 25,
     monitor         = "",
     monitorScale    = 0.5,
+    netScreen       = true,
     fileChannel     = true,
     inlineLimit     = 8192,
 }
@@ -1392,6 +1399,7 @@ M.CFG_META = {
     rediscoverAfter = "节点重新搜索主控的静默阈值（秒）",
     monitor         = "大屏显示器名（空=自动找）",
     monitorScale    = "大屏字号缩放",
+    netScreen       = "向网络屏幕推送面板（屏幕节点）",
     fileChannel     = "大负载走文件通道",
     inlineLimit     = "超过多少字节改走文件通道",
 }
@@ -2449,6 +2457,7 @@ function M.run(opts)
         lastBeatSent = 0,
         activeMaster = nil,
         tookOver = 0,
+        screens = {},
     }
 
     local CL = cloud.new({
@@ -2484,6 +2493,111 @@ function M.run(opts)
         end
     end
     if PN:attached() then PN:redraw(S, CL, true) end
+
+    local SCREEN_MAX      = 16
+    local SCREEN_TIMEOUT  = 15
+    local SCREEN_INTERVAL = 1.0
+
+    local function screenFrame(scr)
+        return {
+            master = M0.masterId,
+            w = scr.w, h = scr.h,
+
+            lines = textutils.serialize(panel.linesFor(S, CL, scr.w, scr.h)),
+            at = util.now(),
+        }
+    end
+
+    local function sendFrame(scr, force)
+        if not S.cfg.netScreen then return end
+        local now = util.mono()
+        if not force and (now - (scr.lastFrame or 0)) < SCREEN_INTERVAL then return end
+        scr.lastFrame = now
+        scr.frames = (scr.frames or 0) + 1
+        local ok, err = net.send(scr.id, proto.msg(proto.DISP, screenFrame(scr)), util.PROTO_CTRL)
+        if not ok and now - (scr.lastWarn or 0) > 10 then
+            scr.lastWarn = now
+            ui:log(string.format("给网络屏幕 #%d 推送失败：%s", scr.id, tostring(err)),
+                col("orange", 2))
+        end
+    end
+
+    local function screenHello(sender, msg)
+        if not S.cfg.netScreen then
+            net.send(sender, proto.msg(proto.SCREENOFF, { why = "off" }), util.PROTO_CTRL)
+            return
+        end
+        local vok, verr = proto.compatible(msg)
+        if not vok then
+            net.send(sender, proto.msg(proto.SCREENOFF, { why = "ver" }), util.PROTO_CTRL)
+            ui:log(string.format("网络屏幕 #%s 协议版本不兼容：%s", tostring(sender),
+                tostring(verr)), col("orange", 2))
+            return
+        end
+        local w = math.max(1, math.floor(tonumber(msg.w) or 51))
+        local h = math.max(1, math.floor(tonumber(msg.h) or 19))
+        local name = util.trunc(tostring(msg.name or ("screen-" .. tostring(sender))), 24)
+        local scr = M0.screens[sender]
+        if not scr then
+            local n = 0
+            for _ in pairs(M0.screens) do n = n + 1 end
+            if n >= SCREEN_MAX then
+                net.send(sender, proto.msg(proto.SCREENOFF, { why = "full" }), util.PROTO_CTRL)
+                return
+            end
+            scr = { id = sender, firstSeen = util.now() }
+            M0.screens[sender] = scr
+            ui:log(string.format("网络屏幕 #%d 已连接：%s（%dx%d）", sender, name, w, h),
+                col("lime", 32))
+        elseif scr.w ~= w or scr.h ~= h then
+            ui:log(string.format("网络屏幕 #%d 尺寸变化：%dx%d → %dx%d", sender,
+                scr.w or 0, scr.h or 0, w, h), col("lightBlue", 512))
+        end
+        scr.name, scr.w, scr.h = name, w, h
+        scr.lastSeen, scr.seenAt = util.mono(), util.now()
+        sendFrame(scr, true)
+    end
+
+    local function screenBye(sender, msg)
+        if M0.screens[sender] then
+            M0.screens[sender] = nil
+            ui:log(string.format("网络屏幕 #%d 已退出：%s", sender, tostring(msg.reason or "无")),
+                col("lightGray", 1024))
+        end
+    end
+
+    local function pumpScreens()
+        if not S.cfg.netScreen then return end
+        local now = util.mono()
+        for id, scr in pairs(M0.screens) do
+            if now - (scr.lastSeen or 0) > SCREEN_TIMEOUT then
+                M0.screens[id] = nil
+                ui:log(string.format("网络屏幕 #%d 已离线（%.0f 秒没有消息）", id,
+                    now - (scr.lastSeen or now)), col("orange", 2))
+            else
+                sendFrame(scr)
+            end
+        end
+    end
+
+    local function screenLines()
+        local out = {}
+        local ids = {}
+        for id in pairs(M0.screens) do ids[#ids + 1] = id end
+        table.sort(ids)
+        out[#out + 1] = string.format("网络屏幕：%s（%d/%d 台）",
+            S.cfg.netScreen and "推送中" or "已关闭", #ids, SCREEN_MAX)
+        for _, id in ipairs(ids) do
+            local s = M0.screens[id]
+            out[#out + 1] = string.format("  #%-3d %-16s %3dx%-3d  %7s前  已发 %d 帧",
+                id, s.name or "?", s.w or 0, s.h or 0,
+                util.duration(util.now() - (s.seenAt or util.now())), s.frames or 0)
+        end
+        if #ids == 0 then
+            out[#out + 1] = "  （屏幕电脑上运行 screen.lua 就会自动连上）"
+        end
+        return out
+    end
 
     local function startPush(target, path, what)
         local data, err = util.readFile(path)
@@ -2544,7 +2658,8 @@ function M.run(opts)
             "  cloud add <名字> <url> [并发]   注册一个 HTTP 计算服务（持久化）",
             "  cloud del <名字>        删除端点",
             "  cloud test <名字>       探活（GET 一次）",
-            "  mon [名字|off]          挂载/关闭 monitor 大屏面板（持久化）",
+            "  mon [名字|off]          挂载/关闭本地 monitor 大屏面板（持久化）",
+            "  mon net [on|off|kick ID] 网络屏幕：另一台电脑 + 显示器当大屏",
             "  setkey <密钥>           启用消息签名（防冒充/防重放，各机器设成一样）",
             "  key                     查看签名状态、密钥指纹与丢弃统计",
             "  standby [on|off]        待命主控：在岗主控掉线时自动接管并接续作业",
@@ -2739,6 +2854,9 @@ function M.run(opts)
                 ui:log(string.format("  %-8s %s", md.name, md.wireless and "无线" or "有线"))
             end
             ui:log(string.format("在线节点 %d / 登记 %d", S:onlineCount(), S:workerCount()))
+            local screenCount = 0
+            for _ in pairs(M0.screens) do screenCount = screenCount + 1 end
+            ui:log(string.format("网络屏幕 %d 台（mon net 查看 / 开关）", screenCount))
             if net.hasKey() then
                 ui:log("消息签名：已启用，密钥指纹 " .. tostring(net.fingerprint()),
                     col("lime", 32))
@@ -2888,8 +3006,42 @@ function M.run(opts)
                 local old = PN:detach()
                 util.saveCfg("monitor", "off")
                 S.cfg.monitor = "off"
-                ui:log("已关闭大屏面板" .. (old and ("（" .. tostring(old) .. "）") or ""),
+                ui:log("已关闭本地大屏面板" .. (old and ("（" .. tostring(old) .. "）") or ""),
                     col("lime", 32))
+            elseif sub == "net" then
+                local action = toks[2]
+                if action == "on" or action == "off" then
+                    S.cfg.netScreen = (action == "on")
+                    util.saveCfg("netScreen", S.cfg.netScreen)
+                    if not S.cfg.netScreen then
+                        for id in pairs(M0.screens) do
+                            net.send(id, proto.msg(proto.SCREENOFF, { why = "off" }),
+                                util.PROTO_CTRL)
+                        end
+                        M0.screens = {}
+                        ui:log("已关闭网络屏幕推送（屏幕端会显示「主控已关闭」）",
+                            col("orange", 2))
+                    else
+                        ui:log("已开启网络屏幕推送（屏幕电脑上运行 screen.lua 即可）",
+                            col("lime", 32))
+                    end
+                elseif action == "kick" then
+                    local id = tonumber((tostring(toks[3] or ""):gsub("^#", "")))
+                    if not id then
+                        ui:log("用法：mon net kick <屏幕ID>（mon net 看列表）", col("orange", 2))
+                    elseif not M0.screens[id] then
+                        ui:log("没有这块网络屏幕：#" .. id, col("orange", 2))
+                    else
+                        M0.screens[id] = nil
+                        net.send(id, proto.msg(proto.SCREENOFF, { why = "kick" }), util.PROTO_CTRL)
+                        ui:log("已断开网络屏幕 #" .. id .. "（它下次心跳会再连上来）",
+                            col("lime", 32))
+                    end
+                else
+                    ui:logLines(screenLines())
+                    ui:log("  mon net on|off 开关 / mon net kick <ID> 断开一台",
+                        col("lightGray", 1024))
+                end
             elseif sub then
                 local ok, err = PN:attach(sub)
                 if not ok then
@@ -2906,17 +3058,19 @@ function M.run(opts)
                     ui:log(string.format("大屏：%s（%dx%d，缩放 %.2f）",
                         tostring(PN.name), PN.w, PN.h, PN.scale), col("lightBlue", 512))
                 else
-                    ui:log("当前没有挂载显示器。")
+                    ui:log("当前没有挂载本地显示器。")
                 end
                 local list = panel.findMonitors()
                 if #list == 0 then
-                    ui:log("  没有检测到 monitor 外设（把显示器贴到主控侧面即可）")
+                    ui:log("  没有检测到 monitor 外设（贴到主控侧面，或用 screen.lua 当网络屏幕）")
                 else
                     for _, m in ipairs(list) do
-                        ui:log("  可用显示器：" .. m.name .. "（mon " .. m.name .. " 挂载）")
+                        ui:log("  可用显示器：" .. m.name .. (m.net and "（有线网络）" or "") ..
+                            "（mon " .. m.name .. " 挂载）")
                     end
                 end
-                ui:log("  mon <名字> 挂载 / mon off 关闭（会持久化）；cfg 里的 monitor 也能改")
+                ui:logLines(screenLines())
+                ui:log("  mon <名字> 挂本地显示器 / mon off 关本地 / mon net 网络屏幕")
             end
         elseif c == "cloud" then
             local sub = toks[1]
@@ -3076,6 +3230,12 @@ function M.run(opts)
                         S.paused = true
                         ui:log(string.format("#%d 宣布接管（ID 更小），本机退回待命", who),
                             col("orange", 2))
+                    end
+                elseif msg.t == proto.SCREEN or msg.t == proto.SCREENBYE then
+
+                    if M0.mode == "active" then
+                        if msg.t == proto.SCREEN then screenHello(sender, msg)
+                        else screenBye(sender, msg) end
                     end
                 elseif M0.mode == "standby" and msg.t ~= proto.REPO then
 
@@ -3322,6 +3482,7 @@ function M.run(opts)
             end
             CL:pump()
             PN:redraw(S, CL)
+            pumpScreens()
             state.poolClean()
 
             local done = xfer.pollRegistry(M0.reg, net.send)
@@ -4056,22 +4217,81 @@ local function col(name, fb) return (C and C[name]) or fb end
 
 M.DEFAULT_SCALE = 0.5
 
-function M.findMonitors()
-    local found = {}
-    for _, name in ipairs(peripheral.getNames()) do
-        local ty = peripheral.getType(name)
-        local isMonitor = (ty == "monitor")
-        if not isMonitor and type(ty) == "table" then
-            for _, t in ipairs(ty) do
-                if t == "monitor" then isMonitor = true end
-            end
-        end
-        if isMonitor then
-            local ok, dev = pcall(peripheral.wrap, name)
-            found[#found + 1] = { name = name, periph = ok and dev or nil }
+local function typesOf(ty)
+    local out = {}
+    if type(ty) == "string" then
+        out[1] = ty
+    elseif type(ty) == "table" then
+        for _, t in ipairs(ty) do out[#out + 1] = t end
+    end
+    return out
+end
+
+local function isMonitorType(ty)
+    for _, t in ipairs(typesOf(ty)) do
+        if t == "monitor" then return true end
+    end
+    return false
+end
+
+function M.typeOf(name, modems)
+    local ok, ty = pcall(peripheral.getType, name)
+    if ok and ty ~= nil then return ty end
+    for _, md in ipairs(modems or {}) do
+        if type(md.getTypeRemote) == "function" then
+            local ok2, t = pcall(md.getTypeRemote, name)
+            if ok2 and t ~= nil then return t end
         end
     end
-    table.sort(found, function(a, b) return a.name < b.name end)
+end
+
+function M.findMonitors()
+    local order, remote, modems, seen = {}, {}, {}, {}
+
+    local function add(name, isRemote)
+        name = tostring(name)
+        if seen[name] then
+            if isRemote then remote[name] = true end
+            return
+        end
+        seen[name] = true
+        order[#order + 1] = name
+        if isRemote then remote[name] = true end
+    end
+
+    local names = {}
+    for _, name in ipairs(peripheral.getNames()) do
+        names[#names + 1] = name
+        add(name, false)
+    end
+
+    for _, name in ipairs(names) do
+        for _, t in ipairs(typesOf(M.typeOf(name))) do
+            if t == "modem" then
+                local ok, dev = pcall(peripheral.wrap, name)
+                if ok and dev and type(dev.getNamesRemote) == "function" then
+                    modems[#modems + 1] = dev
+                    local ok2, list = pcall(dev.getNamesRemote)
+                    if ok2 and type(list) == "table" then
+                        for _, rn in ipairs(list) do add(rn, true) end
+                    end
+                end
+                break
+            end
+        end
+    end
+
+    local found = {}
+    for _, name in ipairs(order) do
+        if isMonitorType(M.typeOf(name, modems)) then
+            local ok, dev = pcall(peripheral.wrap, name)
+            found[#found + 1] = { name = name, periph = ok and dev or nil, net = remote[name] or false }
+        end
+    end
+    table.sort(found, function(a, b)
+        if a.net ~= b.net then return not a.net end
+        return a.name < b.name
+    end)
     return found
 end
 
@@ -4097,7 +4317,7 @@ function Panel:attach(target)
     if type(target) == "table" then
         self.periph, self.name = target, (target.__name or "fake")
     elseif type(target) == "string" and target ~= "" then
-        if peripheral.getType(target) ~= "monitor" then
+        if not isMonitorType(M.typeOf(target)) then
             return nil, "不是显示器外设: " .. target
         end
         local ok, dev = pcall(peripheral.wrap, target)
@@ -4136,9 +4356,10 @@ function Panel:refreshSize()
     if ok and w then self.w, self.h = w, h end
 end
 
-function Panel:lines(sched, cloud)
+function M.linesFor(sched, cloud, w, h)
     local out = {}
-    local w = self.w or 51
+    w = math.max(1, tonumber(w) or 51)
+    h = math.max(1, tonumber(h) or 19)
 
     local function add(text, colour)
         out[#out + 1] = { text = util.trunc(text, w), colour = colour }
@@ -4147,7 +4368,7 @@ function Panel:lines(sched, cloud)
     add(string.format("dcnet 主控 #%d   %s", os.getComputerID(), os.date("%H:%M:%S")),
         col("lime", 32))
 
-    if w < 20 or (self.h or 19) < 4 then
+    if w < 20 or h < 4 then
         add(string.format("节点 %d/%d 作业 %d", sched:onlineCount(), sched:workerCount(),
             sched:runningCount()), col("white", 1))
         return out
@@ -4206,6 +4427,29 @@ function Panel:lines(sched, cloud)
     return out
 end
 
+function Panel:lines(sched, cloud)
+    return M.linesFor(sched, cloud, self.w, self.h)
+end
+
+function M.draw(dev, lines, h)
+    if not dev or type(lines) ~= "table" then return false end
+    h = math.max(1, tonumber(h) or 19)
+    pcall(function() dev.setBackgroundColour(col("black", 32768)) end)
+    pcall(function() dev.clear() end)
+    local all = true
+    for i = 1, math.min(#lines, h) do
+        local line = lines[i] or {}
+        local ok = pcall(function()
+            dev.setCursorPos(1, i)
+            dev.setTextColour(line.colour or col("white", 1))
+            dev.write(tostring(line.text or ""))
+        end)
+        if not ok then all = false end
+    end
+    pcall(function() dev.setCursorPos(1, 1) end)
+    return all
+end
+
 function Panel:redraw(sched, cloud, force)
     if not self:attached() then return false end
     local now = util.mono()
@@ -4219,19 +4463,11 @@ function Panel:redraw(sched, cloud, force)
         return false
     end
 
-    local mon = self.periph
-    pcall(function() mon.setBackgroundColour(col("black", 32768)) end)
-    pcall(function() mon.clear() end)
-    for i, line in ipairs(lines) do
-        if i > (self.h or 19) then break end
-        pcall(function()
-            mon.setCursorPos(1, i)
-            mon.setTextColour(line.colour or col("white", 1))
-            mon.write(line.text)
-        end)
+    local drawn = M.draw(self.periph, lines, self.h)
+    if not drawn then
+        self.log("面板写入显示器失败（尺寸 " .. tostring(self.w) .. "x" .. tostring(self.h) .. "）", 16384)
     end
-    pcall(function() mon.setCursorPos(1, 1) end)
-    return true
+    return drawn
 end
 
 return M

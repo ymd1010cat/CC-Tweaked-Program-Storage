@@ -4,6 +4,7 @@
 --   dcnet master --headless       master as a log-only daemon
 --   dcnet worker [ID] [NAME]      worker console
 --   dcnet worker --headless       worker as a log-only daemon
+--   dcnet screen [MONITOR]        network screen (draw the panel on a monitor)
 --   dcnet status | jobs | net | config | version | help
 --
 -- The command is run by ush as (args, stage); this file also accepts the plain
@@ -172,6 +173,8 @@ local function usage()
         "usage: dcnet COMMAND [options]",
         "  master [--headless] [--standby] [-v] [--KEY=VALUE ...]",
         "  worker [ID] [NAME] [--headless] [--KEY=VALUE ...]",
+        "  screen [MONITOR] [--scale=0.5] [--name=NAME]",
+        "                    network screen: draw the master panel on this computer's monitor",
         "  status            state root, jobs and recent history",
         "  cmd <line>        queue a command for the running master",
         "  log [N]           last N lines of the master log",
@@ -416,6 +419,29 @@ elseif cmd == "worker" then
         end
     end
     local ok = worker.run(opts)
+    return ok and 0 or 1
+elseif cmd == "screen" then
+    -- Network screen: a computer with a monitor that draws the master's panel.
+    -- It needs no data root; the master pushes frames over rednet.
+    local screen = load_module("dc.screen")
+    local opts = cfg_from_conf(screen.DEFAULTS)
+    for i = 2, #argv do
+        local s = tostring(argv[i])
+        local k, v = s:match("^%-%-([%w_]+)=(.*)$")
+        if k then
+            local dv = screen.DEFAULTS[k]
+            if type(dv) == "number" then
+                opts[k] = tonumber(v) or dv
+            elseif type(dv) == "boolean" then
+                opts[k] = (v == "true" or v == "1")
+            else
+                opts[k] = v
+            end
+        elseif s:sub(1, 1) ~= "-" and not opts.monitor then
+            opts.monitor = s
+        end
+    end
+    local ok = screen.run(opts)
     return ok and 0 or 1
 end
 

@@ -52,7 +52,9 @@ M.transport = TRANSPORT
 --     seq 单调递增，ts 是发送时刻；接收端拒绝 seq 回退、重复 (sid,seq)、时间偏差过大。
 
 M.SEQ_SKEW = 120          -- 秒：时间戳容许的偏差
-M.BULK_FIELDS = { ["d"] = "dck", ["src"] = "sck" }
+-- 大块字段：签名里只放它们的校验和（见文件头说明）。d=分块数据，src=作业源码，
+-- lines=网络屏幕的一帧（序列化后的文字行；每秒一帧，整帧参与 HMAC 太贵）。
+M.BULK_FIELDS = { ["d"] = "dck", ["src"] = "sck", ["lines"] = "lck" }
 
 M.key = nil
 M.seq = 0

@@ -173,7 +173,7 @@ local function makeUniverse(role, roleId)
         net.broadcast = function(msg, proto) return busBroadcast(roleId, msg, proto) end
         req("dc.util"); req("dc.protocol"); req("dc.jobs")
         req("dc.xfer"); req("dc.sched"); req("dc.console")
-        req("dc.master"); req("dc.worker")
+        req("dc.master"); req("dc.worker"); req("dc.screen")
     end)
     _G.dc_require = saved
     if not ok then error("宇宙 " .. tostring(role) .. " 加载失败: " .. tostring(err), 0) end
@@ -1006,6 +1006,24 @@ do
     local ok3, why3 = net.verify(9, replay)
     check(ok3 == false and why3 == "重复消息", "重放被拒绝（原因：" .. tostring(why3) .. "）")
 
+    -- 网络屏幕帧：lines 是序列化后的字符串，签名只覆盖它的校验和（BULK_FIELDS）
+    local P = U["dc.protocol"]
+    local frame = P.msg(P.DISP, {
+        master = 7, w = 51, h = 19, at = 1,
+        lines = textutils.serialize({ { text = "dcnet 主控", colour = 32 } }),
+    })
+    net.sign(frame)
+    check(net.verify(9, frame) == true, "网络屏幕帧（lines 走校验和）签名可验证")
+    local badFrame = P.msg(P.DISP, {
+        master = 7, w = 51, h = 19, at = 1,
+        lines = textutils.serialize({ { text = "FAKE", colour = 32 } }),
+    })
+    for k, v in pairs(frame) do
+        if k ~= "lines" then badFrame[k] = v end
+    end
+    local okd, whyd = net.verify(9, badFrame)
+    check(okd == false and whyd == "签名错误", "篡改屏幕帧内容会被签名拒绝")
+
     -- 未签名
     local ok4, why4 = net.verify(9, { t = "result", job = 1, task = 1, ok = true })
     check(ok4 == false and why4 == "未签名", "启用签名后未签名消息被拒绝")
@@ -1163,15 +1181,40 @@ do
     peripheral.wrap = function() return { getSize = function() return 8, 5 end, setTextScale = function() end } end
     local list = pm.findMonitors()
     check(#list == 2 and list[1].name == "left", "扫描到 2 台显示器且按名字排序")
+
+    -- 有线网络上的远端显示器：getNames 里只有 modem，但 getNamesRemote 能看到
+    peripheral.getNames = function() return { "back" } end
+    peripheral.getType = function(n) return n == "back" and "modem" or nil end
+    peripheral.wrap = function(n)
+        if n == "back" then
+            return {
+                getNamesRemote = function() return { "monitor_2" } end,
+                getTypeRemote = function(nm) return nm == "monitor_2" and "monitor" or nil end,
+            }
+        end
+        return { getSize = function() return 40, 10 end, setTextScale = function() end }
+    end
+    local remote = pm.findMonitors()
+    check(#remote == 1 and remote[1].name == "monitor_2" and remote[1].net == true,
+        "扫描到有线网络上的远端显示器（monitor_2）")
     peripheral.getNames, peripheral.getType, peripheral.wrap = rgn, rgt, rw
+
+    -- 面板行生成可以按任意尺寸（网络屏幕用自己显示器的尺寸）
+    local custom = pm.linesFor(S, nil, 30, 6)
+    check(custom[1].text:find("dcnet 主控", 1, true) ~= nil, "linesFor 按指定尺寸生成标题行")
+    local allFit = true
+    for _, l in ipairs(custom) do
+        if U["dc.util"].textWidth(l.text) > 30 then allFit = false end
+    end
+    check(allFit, "linesFor 的每一行都不超过指定宽度")
 end
 
 -- ── 10. 一键安装器 ──────────────────────────────────────────────────────
 section("一键安装（dist/install.lua）")
 do
     -- 先清掉，确保是安装器写进去的
-    for _, p in ipairs({ "/dccomp/master.lua", "/dccomp/worker.lua", "/dccomp/bootstrap.lua",
-                         "/dccomp/jobs/selftest.lua", "/startup.lua" }) do
+    for _, p in ipairs({ "/dccomp/master.lua", "/dccomp/worker.lua", "/dccomp/screen.lua",
+                         "/dccomp/bootstrap.lua", "/dccomp/jobs/selftest.lua", "/startup.lua" }) do
         if fs.exists(p) then fs.delete(p) end
     end
 
@@ -1180,6 +1223,8 @@ do
         "安装器写入了 master.lua")
     check(fs.exists("/dccomp/worker.lua") and fs.getSize("/dccomp/worker.lua") > 10000,
         "安装器写入了 worker.lua")
+    check(fs.exists("/dccomp/screen.lua") and fs.getSize("/dccomp/screen.lua") > 1000,
+        "安装器写入了 screen.lua")
     check(fs.exists("/dccomp/bootstrap.lua"), "安装器写入了 bootstrap.lua")
     local jobCount = 0
     for _, name in ipairs(fs.list("/dccomp/jobs") or {}) do
@@ -1197,6 +1242,11 @@ do
     check(fs.exists("/startup.lua"), "生成 /startup.lua")
     local boot = readHost("/startup.lua")
     check(boot and boot:find("worker.lua", 1, true) ~= nil, "自启文件指向 worker.lua")
+    fs.delete("/startup.lua")
+
+    shell.run(PROJECT .. "/dist/install.lua", "screen", "--startup=screen", "--force")
+    local boot2 = readHost("/startup.lua")
+    check(boot2 and boot2:find("screen.lua", 1, true) ~= nil, "自启文件可指向 screen.lua")
     fs.delete("/startup.lua")
 end
 
@@ -1730,7 +1780,10 @@ do
 end
 
 -- 场景 11：混沌测试（确定性丢包 + 杀节点 + 重放）
-runScenario("场景 11：混沌（丢包/杀节点/重放，结果仍须正确）", {}, function()
+-- 丢包如果丢掉"结果"，任务要等 taskTimeout 才会重派。生产默认 90s，在慢机器上
+-- 一个丢包就可能让本场景超过等待窗口（不是逻辑错误）；这里压到 20s 让它快速自愈。
+runScenario("场景 11：混沌（丢包/杀节点/重放，结果仍须正确）",
+    { taskTimeout = 20, adaptiveTimeout = false }, function()
     if not waitFor("节点 #4 已连接", 25) then
         check(false, "两个节点完成注册")
         return
@@ -1771,6 +1824,85 @@ runScenario("场景 11：混沌（丢包/杀节点/重放，结果仍须正确�
     chaos.dropEvery = 0
     typeLine("quit")
 end)
+
+-- 场景 12：网络屏幕（另一台电脑 + 显示器，通过 rednet 收主控面板）
+out("")
+out("-- 场景 12：网络屏幕（屏幕节点接收面板帧）")
+do
+    U["dc.state"].clearSnapshot()
+    U["dc.state"].cacheClear()
+    for _, f in ipairs(U["dc.state"].poolList()) do
+        fs.delete(U["dc.state"].poolPath(f.name))
+    end
+    if fs.exists("/dccomp/cloud.dat") then fs.delete("/dccomp/cloud.dat") end
+    captured, bus, blocked = {}, {}, {}
+
+    local SCR_ID = (REAL_ID == 8) and 9 or 8
+    extraRoles[SCR_ID] = "screen" .. SCR_ID
+
+    local fake = { buf = {}, x = 1, y = 1, scale = 1 }
+    function fake.getSize() return 51, 19 end
+    function fake.setTextScale(s) fake.scale = s end
+    function fake.setBackgroundColour() end
+    function fake.setTextColour() end
+    function fake.setCursorPos(x, y) fake.x, fake.y = x, y end
+    function fake.write(s) fake.buf[#fake.buf + 1] = tostring(s) end
+    function fake.clear() fake.buf = {} end
+
+    local rgn, rgt, rw = peripheral.getNames, peripheral.getType, peripheral.wrap
+    peripheral.getNames = function() return { "top" } end
+    peripheral.getType = function(n) return n == "top" and "monitor" or nil end
+    peripheral.wrap = function(n) if n == "top" then return fake end end
+
+    local function waitBuf(needle, seconds)
+        local deadline = os.clock() + seconds
+        while os.clock() < deadline do
+            if table.concat(fake.buf, "\n"):find(needle, 1, true) then return true end
+            sleep(0.2)
+        end
+        return table.concat(fake.buf, "\n"):find(needle, 1, true) ~= nil
+    end
+
+    local M = makeUniverse("master", REAL_ID)
+    local SC = makeUniverse("screen" .. SCR_ID, SCR_ID)
+    local before = fail
+    local ok12, err12 = pcall(parallel.waitForAny,
+        function() M["dc.master"].run({ defaultJobs = defaultJobs, cfg = { monitor = "off" } }) end,
+        function() SC["dc.screen"].run({ name = "screen-test", interval = 1, timeout = 5 }) end,
+        function()
+            if not waitFor("网络屏幕 #" .. SCR_ID .. " 已连接", 25) then
+                check(false, "主控登记了网络屏幕 #" .. SCR_ID)
+                return
+            end
+            check(true, "主控登记了网络屏幕 #" .. SCR_ID)
+            check(waitBuf("dcnet 主控", 25), "网络屏幕画出了主控面板标题")
+            check(waitBuf("节点 0/0", 10), "网络屏幕收到了集群概况")
+
+            typeLine("mon net")
+            check(waitFor("推送中", 10), "mon net 显示网络屏幕列表（推送中）")
+            check(seen("screen-test"), "mon net 显示屏幕名字")
+
+            typeLine("mon net off")
+            check(waitFor("已关闭网络屏幕推送", 10), "mon net off 关闭推送")
+            check(waitBuf("主控已关闭", 15), "屏幕收到 screenoff 并提示主控已关闭")
+
+            typeLine("mon net on")
+            check(waitFor("已开启网络屏幕推送", 10), "mon net on 重新开启推送")
+            check(waitBuf("dcnet 主控", 20), "屏幕重新连上并画出面板")
+
+            local mark = #captured
+            typeLine("mon net kick " .. SCR_ID)
+            check(waitForAfter(mark, "已断开网络屏幕 #" .. SCR_ID, 10), "mon net kick 断开指定屏幕")
+            typeLine("quit")
+        end)
+    check(ok12, "网络屏幕场景正常退出" .. (ok12 and "" or ("：" .. tostring(err12))))
+    if not ok12 or fail > before then
+        out("  —— 捕获到的日志（尾部）——")
+        for i = math.max(1, #captured - 25), #captured do out("  | " .. captured[i]) end
+    end
+    peripheral.getNames, peripheral.getType, peripheral.wrap = rgn, rgt, rw
+    extraRoles[SCR_ID] = nil
+end
 
 _G.print = realPrint
 

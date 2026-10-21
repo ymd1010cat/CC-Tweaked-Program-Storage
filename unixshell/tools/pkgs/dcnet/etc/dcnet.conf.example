@@ -34,3 +34,7 @@
 #redundancy=0
 #taskTimeout=90
 #twoLevelReduce=true
+#
+# netScreen: true (default) = push the master panel to network screens
+#            (run "dcnet screen" on a computer with a monitor).
+#netScreen=true

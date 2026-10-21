@@ -10,15 +10,19 @@
 
 - **独立运行**：`dist/master.lua` + `dist/worker.lua` 两个文件即可组网，保持原来的
   rednet 有线网络用法；节点源码随任务下发，无需预装作业。
-- **unixshell 包**：`tools/pkgs/dcnet/` 提供 `dcnet` 命令（master / worker / status /
-  cmd / log / jobs / net / config），配置在 `/etc/dcnet.conf`；支持 rednet 或 unixshell
-  的 RPV1 传输。
+- **unixshell 包**：`tools/pkgs/dcnet/` 提供 `dcnet` 命令（master / worker / screen /
+  status / cmd / log / jobs / net / config），配置在 `/etc/dcnet.conf`；支持 rednet 或
+  unixshell 的 RPV1 传输。
 - **multishell 启动**：`boot=master|worker` 时，Advanced Computer 用 multishell
   开两个 tab：tab 1 dcnet 角色，tab 2 ush；dcnet 先加载。`forward=1` 让 ush 只做命令
   通道（命令行写入 `<root>/ctl`，由常驻主控执行，`dcnet log` 查看）。
 - **计算端精简镜像**：worker 镜像只含 `startup.lua` + dcnet worker 所需模块，循环运行
   `dcnet worker --headless`；没有 ush、firstboot、BIOS、man、中文字体数据和交互界面，
   约 123 KB。
+- **网络屏幕**：把显示器贴在另一台电脑上也能当主控大屏——那台电脑运行
+  `screen.lua`（或 unixshell 下的 `dcnet screen`）即可：屏幕自动广播登记，主控按屏幕
+  尺寸推送面板帧，`mon net` 查看/开关。有线网络上暴露成外设的远端显示器
+  （`monitor_0`）也可以直接用 `mon` 挂载。
 - **可访问 CraftOS**：完整 ush 中的 `craftos` 命令在 multishell 里打开一个 ROM
   CraftOS shell 标签，不丢掉 ush 和机器规则。
 
@@ -26,7 +30,7 @@
 
 | 文件 | 是什么 | 放哪 |
 |---|---|---|
-| `dcnet-1.1.0.zip` | 独立项目：`dcnet/` 源码、`dist/` 单文件、文档、作业、CraftOS-PC 回归套件与 Python 云端参考服务端 | 解压得到 `dcnet/`；部署用其中的 `dist/master.lua`、`dist/worker.lua` |
+| `dcnet-1.1.0.zip` | 独立项目：`dcnet/` 源码、`dist/` 单文件、文档、作业、CraftOS-PC 回归套件与 Python 云端参考服务端 | 解压得到 `dcnet/`；部署用其中的 `dist/master.lua`、`dist/worker.lua`、可选的 `dist/screen.lua` |
 | `dcnet-ush-package-1.1.0.zip` | unixshell 包：`manifest`、`bin/dcnet.lua`、`lib/dcnet/` 模块、作业、worker 种子与配置样例 | 解压内容到包存储器的 `usr/pkgs/dcnet/`（或放进 `pkgserver` 的仓库） |
 | `dcnet-worker-1.1.0.zip` | 计算端镜像：`startup.lua` + worker 所需的 dcnet 模块；无 ush/字体/UI | 解压内容到计算节点电脑文件系统根，开机直接跑 worker |
 | `dcnet-INSTALL.txt` | 三种安装形态的说明 | - |
@@ -40,6 +44,7 @@
 
 把 `dist/master.lua` 放到主控电脑，`dist/worker.lua` 放到每台节点；两台/多台电脑接同一段
 有线网络（有线调制解调器 + 网络线缆），分别运行两个文件即可。节点不需要预装作业。
+想把显示器放在另一台电脑上，就把 `dist/screen.lua` 放到那台电脑并运行（可选）。
 
 **B. unixshell 包（主控/带壳机器）**
 

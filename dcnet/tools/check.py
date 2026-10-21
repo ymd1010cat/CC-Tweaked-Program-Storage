@@ -36,7 +36,7 @@ def lua_sources():
             if name.endswith(".lua"):
                 p = os.path.join(base, name)
                 out[os.path.relpath(p, ROOT).replace("\\", "/")] = read(p)
-    for name in ("master.lua", "worker.lua", "bootstrap.lua"):
+    for name in ("master.lua", "worker.lua", "screen.lua", "bootstrap.lua"):
         p = os.path.join(DIST, name)
         if os.path.exists(p):
             out["dist/" + name] = read(p)
@@ -80,7 +80,9 @@ def check_proto(srcs):
     # 主控发给节点的所有类型，节点都要能处理。
     # 例外：PUT* / FETCH 走 dcpush；RESULT 是「节点 → 主控」方向，主控里出现它只是
     # 为了复用记账流程（云端结果注入 Sched:externalResult），并不会真的发出去。
-    transport = {"PUT", "PUTACK", "PUTDONE", "PUTOK", "PUTMISS", "FETCH", "REFERR", "RESULT"}
+    # SCREEN/DISP/SCREENOFF/SCREENBYE 走屏幕节点（dc.screen），不是 worker。
+    transport = {"PUT", "PUTACK", "PUTDONE", "PUTOK", "PUTMISS", "FETCH", "REFERR", "RESULT",
+                 "SCREEN", "SCREENBYE", "DISP", "SCREENOFF"}
     for name in sorted(sent_by_sched - handled_by_worker - transport):
         problems.append("sched 发送了 proto.%s，但 worker 没有处理分支" % name)
     for name in sorted(sent_by_worker - handled_by_sched - transport):
@@ -114,7 +116,7 @@ def check_jobs():
 
 
 def check_dist():
-    for name in ("master.lua", "worker.lua", "bootstrap.lua"):
+    for name in ("master.lua", "worker.lua", "screen.lua", "bootstrap.lua"):
         p = os.path.join(DIST, name)
         if not os.path.exists(p):
             problems.append("缺少产物 dist/%s（先运行 tools/build.py）" % name)

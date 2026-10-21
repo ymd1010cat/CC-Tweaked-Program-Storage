@@ -430,6 +430,7 @@ IPv4 风格寻址、路由、DHCP-lite、名字服务、组播域与 AEAD 控制
 | `dcnet master --headless` | 无终端主控，日志写 `<root>/logs/master.log` |
 | `dcnet worker [ID] [NAME]` | 运算节点控制台 |
 | `dcnet worker --headless` | 无终端节点，日志写 `<root>/logs/node-<id>.log` |
+| `dcnet screen [MONITOR]` | 网络屏幕：把主控面板画到本机显示器（`--scale=` 调字号） |
 | `dcnet status` | 数据根目录、作业数与最近历史 |
 | `dcnet jobs` / `dcnet net` / `dcnet config` | 作业、传输、配置 |
 

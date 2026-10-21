@@ -24,23 +24,91 @@ local function col(name, fb) return (C and C[name]) or fb end
 
 M.DEFAULT_SCALE = 0.5      -- 0.5 让分辨率翻倍，字小但能塞下更多信息
 
---- 扫描所有 monitor 外设。返回 { {name=, periph=}, ... }
-function M.findMonitors()
-    local found = {}
-    for _, name in ipairs(peripheral.getNames()) do
-        local ty = peripheral.getType(name)
-        local isMonitor = (ty == "monitor")
-        if not isMonitor and type(ty) == "table" then
-            for _, t in ipairs(ty) do
-                if t == "monitor" then isMonitor = true end
-            end
-        end
-        if isMonitor then
-            local ok, dev = pcall(peripheral.wrap, name)
-            found[#found + 1] = { name = name, periph = ok and dev or nil }
+-- ── 外设名解析（本地 + 有线网络） ───────────────────────────────────────
+-- CC 会把"贴着有线调制解调器的显示器"按网络名暴露出来（monitor_0 之类），
+-- 但不同版本/接法下 getNames() 不一定都列出远端外设，所以这里再主动问一遍
+-- modem.getNamesRemote()。这样主控既能用自己侧面贴的显示器，也能直接用
+-- 网络另一头的显示器（不用另开一台屏幕电脑）。
+
+local function typesOf(ty)
+    local out = {}
+    if type(ty) == "string" then
+        out[1] = ty
+    elseif type(ty) == "table" then
+        for _, t in ipairs(ty) do out[#out + 1] = t end
+    end
+    return out
+end
+
+local function isMonitorType(ty)
+    for _, t in ipairs(typesOf(ty)) do
+        if t == "monitor" then return true end
+    end
+    return false
+end
+
+--- 取外设类型；远端外设（有线网络）用 modem.getTypeRemote 兜底。
+function M.typeOf(name, modems)
+    local ok, ty = pcall(peripheral.getType, name)
+    if ok and ty ~= nil then return ty end
+    for _, md in ipairs(modems or {}) do
+        if type(md.getTypeRemote) == "function" then
+            local ok2, t = pcall(md.getTypeRemote, name)
+            if ok2 and t ~= nil then return t end
         end
     end
-    table.sort(found, function(a, b) return a.name < b.name end)
+end
+
+--- 扫描所有 monitor 外设（含有线网络上的远端显示器）。
+-- 返回 { {name=, periph=, net=bool}, ... }；本地显示器排在网络显示器前面。
+function M.findMonitors()
+    local order, remote, modems, seen = {}, {}, {}, {}
+
+    local function add(name, isRemote)
+        name = tostring(name)
+        if seen[name] then
+            if isRemote then remote[name] = true end
+            return
+        end
+        seen[name] = true
+        order[#order + 1] = name
+        if isRemote then remote[name] = true end
+    end
+
+    local names = {}
+    for _, name in ipairs(peripheral.getNames()) do
+        names[#names + 1] = name
+        add(name, false)
+    end
+
+    -- 有线网络上的远端外设（有些版本会出现在 getNames 里，有些不会）
+    for _, name in ipairs(names) do
+        for _, t in ipairs(typesOf(M.typeOf(name))) do
+            if t == "modem" then
+                local ok, dev = pcall(peripheral.wrap, name)
+                if ok and dev and type(dev.getNamesRemote) == "function" then
+                    modems[#modems + 1] = dev
+                    local ok2, list = pcall(dev.getNamesRemote)
+                    if ok2 and type(list) == "table" then
+                        for _, rn in ipairs(list) do add(rn, true) end
+                    end
+                end
+                break
+            end
+        end
+    end
+
+    local found = {}
+    for _, name in ipairs(order) do
+        if isMonitorType(M.typeOf(name, modems)) then
+            local ok, dev = pcall(peripheral.wrap, name)
+            found[#found + 1] = { name = name, periph = ok and dev or nil, net = remote[name] or false }
+        end
+    end
+    table.sort(found, function(a, b)
+        if a.net ~= b.net then return not a.net end     -- 本地优先
+        return a.name < b.name
+    end)
     return found
 end
 
@@ -68,7 +136,7 @@ function Panel:attach(target)
     if type(target) == "table" then
         self.periph, self.name = target, (target.__name or "fake")
     elseif type(target) == "string" and target ~= "" then
-        if peripheral.getType(target) ~= "monitor" then
+        if not isMonitorType(M.typeOf(target)) then
             return nil, "不是显示器外设: " .. target
         end
         local ok, dev = pcall(peripheral.wrap, target)
@@ -110,10 +178,12 @@ end
 
 -- ── 文本生成（纯函数，便于测试） ────────────────────────────────────────
 
---- 生成面板内容。返回 { { text =, colour = }, ... }
-function Panel:lines(sched, cloud)
+--- 生成面板内容。w/h 缺省用本地面板的当前尺寸；网络屏幕按自己的尺寸调用。
+-- 返回 { { text =, colour = }, ... }
+function M.linesFor(sched, cloud, w, h)
     local out = {}
-    local w = self.w or 51
+    w = math.max(1, tonumber(w) or 51)
+    h = math.max(1, tonumber(h) or 19)
 
     local function add(text, colour)
         out[#out + 1] = { text = util.trunc(text, w), colour = colour }
@@ -123,7 +193,7 @@ function Panel:lines(sched, cloud)
         col("lime", 32))
 
     -- 极简模式：显示器太小就只报集群概况
-    if w < 20 or (self.h or 19) < 4 then
+    if w < 20 or h < 4 then
         add(string.format("节点 %d/%d 作业 %d", sched:onlineCount(), sched:workerCount(),
             sched:runningCount()), col("white", 1))
         return out
@@ -185,6 +255,32 @@ function Panel:lines(sched, cloud)
     return out
 end
 
+--- 本地面板：按自己挂载的显示器尺寸生成
+function Panel:lines(sched, cloud)
+    return M.linesFor(sched, cloud, self.w, self.h)
+end
+
+--- 把 {text=,colour=} 行画到任意屏幕（本地 monitor / 网络屏幕）上。
+-- 只依赖 CC monitor 的 setBackgroundColour/clear/setCursorPos/setTextColour/write。
+function M.draw(dev, lines, h)
+    if not dev or type(lines) ~= "table" then return false end
+    h = math.max(1, tonumber(h) or 19)
+    pcall(function() dev.setBackgroundColour(col("black", 32768)) end)
+    pcall(function() dev.clear() end)
+    local all = true
+    for i = 1, math.min(#lines, h) do
+        local line = lines[i] or {}
+        local ok = pcall(function()
+            dev.setCursorPos(1, i)
+            dev.setTextColour(line.colour or col("white", 1))
+            dev.write(tostring(line.text or ""))
+        end)
+        if not ok then all = false end
+    end
+    pcall(function() dev.setCursorPos(1, 1) end)
+    return all
+end
+
 --- 画一帧（受最小间隔限制；force 可强制）
 function Panel:redraw(sched, cloud, force)
     if not self:attached() then return false end
@@ -199,19 +295,11 @@ function Panel:redraw(sched, cloud, force)
         return false
     end
 
-    local mon = self.periph
-    pcall(function() mon.setBackgroundColour(col("black", 32768)) end)
-    pcall(function() mon.clear() end)
-    for i, line in ipairs(lines) do
-        if i > (self.h or 19) then break end
-        pcall(function()
-            mon.setCursorPos(1, i)
-            mon.setTextColour(line.colour or col("white", 1))
-            mon.write(line.text)
-        end)
+    local drawn = M.draw(self.periph, lines, self.h)
+    if not drawn then
+        self.log("面板写入显示器失败（尺寸 " .. tostring(self.w) .. "x" .. tostring(self.h) .. "）", 16384)
     end
-    pcall(function() mon.setCursorPos(1, 1) end)
-    return true
+    return drawn
 end
 
 return M

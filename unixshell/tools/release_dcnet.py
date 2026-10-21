@@ -85,8 +85,10 @@ def install_text(project, package, worker):
 A. Standalone (no unixshell)
    - master: copy dist/master.lua from the project zip to the master computer.
    - worker: copy dist/worker.lua to every worker computer.
+   - screen (optional): copy dist/screen.lua to a computer with a monitor to show
+     the master panel there; it registers itself, no master-side config needed.
    - wire all computers to the same wired network (wired modem + cable), then
-     run the two programs. Workers need no job files; the master sends job code
+     run the programs. Workers need no job files; the master sends job code
      with each task.
 
 B. unixshell package (master / machine with the full shell)
@@ -101,6 +103,7 @@ B. unixshell package (master / machine with the full shell)
          #key=...
    - reboot: tab 1 is dcnet master, tab 2 is ush. Lines typed in ush are queued
      to the master; use "dcnet log" to read its output.
+   - "dcnet screen" on a computer with a monitor shows the master panel there.
 
 C. Compute-node image
    - unzip dcnet-worker-%s.zip into the computer's filesystem root, so that

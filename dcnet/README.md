@@ -18,7 +18,8 @@
 - 作业定义（做什么计算）是**独立的小文件**，主控在派任务时把**源码**通过网线
   发给节点，节点不需要预装任何作业 —— 改一行作业代码，整网立刻生效。
 - 节点掉线/卡死不会拖垮作业：任务会自动重派给别的节点（可配置重试次数）。
-- 部署只要两个文件：`dist/master.lua`（主控）与 `dist/worker.lua`（节点）。
+- 部署只要两个文件：`dist/master.lua`（主控）与 `dist/worker.lua`（节点）；
+  要在大屏上显示，再按需加 `dist/screen.lua`（网络屏幕，见 §4.3）。
 
 ---
 
@@ -104,12 +105,14 @@ local m=peripheral.find("modem",function(_,d)return not d.isWireless()end) redne
 里面，约 260KB）：拷到任意一台电脑上运行即可。
 
 ```
-install.lua                       装全部（主控 + 节点 + 拉取器 + 作业）
+install.lua                       装全部（主控 + 节点 + 网络屏幕 + 拉取器 + 作业）
 install.lua master                只装主控
 install.lua worker                只装节点
+install.lua screen                只装网络屏幕（屏幕节点）
 install.lua jobs                  只装作业
 install.lua all --startup=master  顺便生成开机自启（跑主控）
 install.lua all --startup=worker  顺便生成开机自启（跑节点）
+install.lua all --startup=screen  顺便生成开机自启（跑网络屏幕）
 install.lua all --force           覆盖已存在的文件
 install.lua all --cleanup         装完把安装器自己删掉（省 ~220KB 磁盘）
 ```
@@ -215,7 +218,8 @@ dcnet> status
 | `setkey <密钥>` | 启用消息签名（防冒充/防重放，各机器设成一样） |
 | `key` | 查看签名状态、密钥指纹与丢弃统计 |
 | `standby [on\|off]` | 待命主控：在岗主控掉线时自动接管并接续作业 |
-| `mon [名字\|off]` | 挂载 / 关闭 monitor 大屏面板（持久化） |
+| `mon [名字\|off]` | 挂载 / 关闭**本地** monitor 大屏面板（持久化；网络上的显示器也能挂） |
+| `mon net [on\|off\|kick ID]` | 网络屏幕：查看 / 开关 / 断开「另一台电脑 + 显示器」的屏幕节点 |
 | `repo <主控ID>` | 查询另一台主控有哪些作业 |
 | `pull <主控ID> <作业名…>` | 从它那里拉作业（自动补 `.lua`） |
 | `pullall <主控ID>` | 只拉本地没有的（先 `repo` 看清单） |
@@ -261,6 +265,45 @@ dcnet 主控 #2   12:03:41
 #3:42% #4:闲 #5:63%  云:1飞
 累计任务 128 失败 1 重试 2 冗余 4
 ```
+
+**网络上的显示器**：有线网络会把「贴着有线调制解调器的显示器」暴露成外设
+（名字是 `monitor_0` 这种）。这种屏幕主控本来就能用：
+
+```
+mon                    # 列表里会标出「（有线网络）」
+mon monitor_0          # 直接挂上
+```
+
+**网络屏幕（屏幕节点）**：如果显示器是**贴在另一台电脑侧面**的，主控看不到那个
+外设——这时让那台电脑当「屏幕节点」：它不参与计算，只接收主控推过来的面板并绘制。
+
+```lua
+-- 1) 屏幕电脑：把显示器接上，然后运行 screen.lua
+screen.lua                     -- 自动找显示器（缩放 0.5）
+screen.lua right --scale=0.4   -- 指定外设名 / 字号
+screen.lua --name=机房大屏      -- 主控 mon net 里看到的名字
+```
+
+```lua
+-- 2) 主控：什么都不用配（netScreen 默认开），screen 会自动登记
+mon net                # 网络屏幕：推送中（1/16 台）  #12 screen-12 ...
+mon net off            # 暂停推送（屏幕显示「主控已关闭」）
+mon net on             # 恢复
+mon net kick 12        # 断开某一台（它下次心跳会自动重连）
+```
+
+屏幕文件的来源：`install.lua screen`（或 `install.lua all`）会写到
+`/dccomp/screen.lua`；也可以把 `dist/screen.lua` 直接拷到屏幕电脑；unixshell 下用
+`dcnet screen`。屏幕端和主控之间同样有消息签名：集群设了 `setkey` 时，屏幕电脑也要
+`set dcnet.key <同一个密钥>`（或 `screen.lua --key=<密钥>`），否则会被丢弃。
+
+限制与取舍：
+
+- 一个主控最多同时接 16 块网络屏幕，面板每秒推一帧（内容是文字行 + 颜色）。
+- 屏幕**不参与调度**，不出现在 `workers` 里；它只是显示器，不消耗算力也不能算任务。
+- 待命主控（`standby`）不会回应屏幕；在岗主控掉线/接管后，屏幕会在下一次心跳
+  （缺省 3 秒）自动连上新主控。
+- 任何设了同一个密钥的机器都能当屏幕（它只会收到面板内容，收不到作业/结果）。
 
 **作业仓库**：主控之间可以直接同步作业文件（走分块传输，和 `push` 同一套机制）：
 
@@ -596,7 +639,8 @@ return {
 | `twoLevelReduce` | true | 结果多时把 reduce 也拆成并行任务（两级汇总） |
 | `reduceThreshold` | 300 | 结果数超过它才启用两级汇总 |
 | `cloud` / `cloudFirst` | true | 云端卸载开关 / 优先用云端 |
-| `monitor` / `monitorScale` | 空 / 0.5 | monitor 大屏（空=自动找，`off`=不用）/ 字号缩放 |
+| `monitor` / `monitorScale` | 空 / 0.5 | 本地 monitor 大屏（空=自动找，`off`=不用）/ 字号缩放 |
+| `netScreen` | true | 把面板推给网络屏幕（屏幕节点运行 `screen.lua`） |
 | `fileChannel` / `inlineLimit` | true / 8192 | 负载与结果超过多少字节就改走文件通道 |
 | `standby` | 本机默认以待命主控启动（在岗主控掉线就接管） |
 | `beatInterval` / `takeoverAfter` | 3 / 15 | 心跳间隔 / 多久没心跳就接管（秒） |
@@ -646,7 +690,7 @@ python tests/run_craftos.py --data D   # 换数据目录（缺省 tests/.ccdata�
 写东西**，所以在受限的沙箱环境（只允许写工作区）下也能直接跑；唯一需要工作区外
 权限的动作是"执行"CraftOS-PC 本体，那不需要写权限。
 
-覆盖范围（当前 42 项检查）：
+覆盖范围（当前 270 项检查）：
 
 | 分组 | 验证内容 |
 | --- | --- |
@@ -665,6 +709,7 @@ python tests/run_craftos.py --data D   # 换数据目录（缺省 tests/.ccdata�
 | 场景 9 | 大负载通道：24KB 负载经文件通道下发、14KB 结果经文件通道上传 |
 | 场景 10 | 主控高可用：待命机按心跳接管 + 从快照接续作业（"节点换主"需两台真机，见 §4.6） |
 | 场景 11 | **混沌**：确定性丢包 1/7 + 杀节点 + 重复上报，作业结果仍须完全正确 |
+| 场景 12 | 网络屏幕：屏幕节点登记 → 收 disp 帧画出面板 → `mon net off/on/kick` 生效 |
 
 > 混沌测试用的是**确定性丢包**（每 7 条丢 1 条，不用真随机），所以失败可复现。
 > 游戏里对应的是：拔网线 / Ctrl+T 干掉节点 / 让别的脚本乱发消息（后者配 `setkey` 直接拒掉）。
@@ -689,6 +734,7 @@ dcnet/
 ├── src/                   源码（模块化，开发时用）
 │   ├── master.lua         主控入口
 │   ├── worker.lua         节点入口
+│   ├── screen.lua         网络屏幕入口
 │   ├── bootstrap.lua      新节点一键拉取
 │   ├── lib/
 │   │   ├── util.lua       工具：时间/字符串/哈希/文件/源码装载
@@ -700,12 +746,15 @@ dcnet/
 │   │   ├── sched.lua      主控调度器（派发/超时/重派/汇总）
 │   │   ├── master.lua     主控主逻辑（协程 + 指令）
 │   │   ├── worker.lua     节点主逻辑（协程 + 任务执行）
+│   │   ├── panel.lua      monitor 大屏面板（本地 + 网络屏幕共用行生成）
+│   │   ├── screen.lua     网络屏幕：接收 disp 帧并绘制
 │   │   ├── state.lua      持久化：作业快照 / 结果缓存 / 历史 / 贡献统计
 │   │   └── cloud.lua      云端卸载：HTTP 端点当虚拟 worker
 │   └── jobs/              内置示例作业（会随主控首次运行释放）
-├── dist/                  打包产物（部署用这两个文件即可）
+├── dist/                  打包产物（部署用 master/worker/screen 三个文件）
 │   ├── master.lua
 │   ├── worker.lua
+│   ├── screen.lua         网络屏幕（可选）
 │   ├── bootstrap.lua
 │   └── install.lua        一键安装器（自带全部内容）
 ├── tests/
@@ -719,7 +768,7 @@ dcnet/
 开发流程：
 
 ```bash
-python tools/build.py         # 生成 dist/master.lua 与 dist/worker.lua（自动剥注释）
+python tools/build.py         # 生成 dist/master.lua、worker.lua、screen.lua（自动剥注释）
 python tools/check.py         # 一致性检查
 python tools/size_report.py   # 体积构成：代码 / 注释 / 字符串 / 中文各占多少
 python tests/run_craftos.py   # 真机回归（改完代码跑一遍，绿了再进游戏）
@@ -767,6 +816,7 @@ python tools/build_dcnet_pkg.py
 | `dcnet master --headless` | 无终端主控，日志 `$DCNET_ROOT/logs/master.log` |
 | `dcnet worker [主控ID] [节点名]` | 节点控制台 |
 | `dcnet worker --headless` | 无终端节点（可 `&` 到后台） |
+| `dcnet screen [显示器名]` | 网络屏幕：把主控面板画到本机显示器上 |
 | `dcnet status` / `jobs` / `net` / `config` | 状态、作业、传输与配置 |
 
 配置在 `/etc/dcnet.conf`（样例见包内 `etc/dcnet.conf.example`）：

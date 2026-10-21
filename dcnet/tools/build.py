@@ -7,6 +7,7 @@
 产物：
     dist/master.lua     主控（自包含，含全部依赖 + 内置示例作业）
     dist/worker.lua     运算节点（自包含）
+    dist/screen.lua     网络屏幕（自包含，只画主控推过来的面板）
     dist/bootstrap.lua  新节点一键拉取脚本（原样拷贝 src/bootstrap.lua）
 
 打包方式：每个模块变成一个 function，注册进 __dc_modules 表，
@@ -84,7 +85,7 @@ def closure(entry_src, mods):
         queue.extend(REQUIRE_RE.findall(mods[name]))
     # 保持稳定顺序：util/protocol/net 优先，便于阅读
     priority = ["dc.util", "dc.protocol", "dc.net", "dc.console", "dc.xfer",
-                "dc.jobs", "dc.sched", "dc.master", "dc.worker"]
+                "dc.jobs", "dc.sched", "dc.master", "dc.worker", "dc.screen"]
     needed.sort(key=lambda n: (priority.index(n) if n in priority else 99, n))
     return needed
 
@@ -134,12 +135,14 @@ INSTALLER_SKELETON = """--[[- ==================================================
 
   把这一个文件拷到任何一台电脑上，就能装好 dcnet：
 
-      install.lua                      装全部（主控 + 节点 + 拉取器 + 作业）
+      install.lua                      装全部（主控 + 节点 + 网络屏幕 + 拉取器 + 作业）
       install.lua master               只装主控
       install.lua worker               只装节点
+      install.lua screen               只装网络屏幕
       install.lua jobs                 只装作业
       install.lua all --startup=master 顺便生成开机自启（跑主控）
       install.lua all --startup=worker 顺便生成开机自启（跑节点）
+      install.lua all --startup=screen 顺便生成开机自启（跑网络屏幕）
       install.lua all --force          覆盖已存在的文件
 
   默认不覆盖已有文件，所以重复运行是安全的（作业改过也不会被冲掉）。
@@ -171,7 +174,8 @@ for _, a in ipairs(args) do
 end
 
 if what == "help" then
-    print("用法：install.lua [all|master|worker|jobs] [--startup=master|worker] [--force] [--cleanup]")
+    print("用法：install.lua [all|master|worker|screen|jobs] " ..
+        "[--startup=master|worker|screen] [--force] [--cleanup]")
     print("  --cleanup  装完把安装器自己删掉（CC 电脑只有 1MB 磁盘，这个文件不小）")
     return
 end
@@ -200,11 +204,13 @@ end
 local want = {
     master    = (what == "all" or what == "master"),
     worker    = (what == "all" or what == "worker"),
+    screen    = (what == "all" or what == "screen"),
     bootstrap = (what == "all" or what == "bootstrap"),
     jobs      = (what == "all" or what == "jobs"),
 }
-if not (want.master or want.worker or want.bootstrap or want.jobs) then
-    print("不认识的选项：" .. tostring(what) .. "（all / master / worker / bootstrap / jobs）")
+if not (want.master or want.worker or want.screen or want.bootstrap or want.jobs) then
+    print("不认识的选项：" .. tostring(what) ..
+        "（all / master / worker / screen / bootstrap / jobs）")
     return
 end
 
@@ -212,6 +218,7 @@ local written = 0
 for path, data in pairs(FILES) do
     local kind = path:find("master%.lua$") and "master"
         or path:find("worker%.lua$") and "worker"
+        or path:find("screen%.lua$") and "screen"
         or path:find("bootstrap%.lua$") and "bootstrap" or "jobs"
     if want[kind] and put(path, data) then written = written + 1 end
 end
@@ -222,13 +229,13 @@ if want.jobs then
     end
 end
 
-if startup == "master" or startup == "worker" then
-    local target = (startup == "master") and "/dccomp/master.lua" or "/dccomp/worker.lua"
+if startup == "master" or startup == "worker" or startup == "screen" then
+    local target = "/dccomp/" .. startup .. ".lua"
     local body = string.format("-- dcnet 开机自启（install.lua 生成）\\nif fs.exists(%q) then shell.run(%q) end\\n",
         target, target)
     if put("/startup.lua", body) then written = written + 1 end
 elseif startup then
-    print("--startup 只接受 master 或 worker")
+    print("--startup 只接受 master、worker 或 screen")
 end
 
 ensureDir("/dccomp/jobs")
@@ -239,6 +246,10 @@ if want.master then
 end
 if want.worker then
     print("节点：shell.run(\\"/dccomp/worker.lua\\")（不给参数会自动找主控）")
+end
+if want.screen then
+    print("网络屏幕：显示器接上后 shell.run(\\"/dccomp/screen.lua\\")" ..
+        "（主控 mon 里能看到它）")
 end
 
 -- 安装器自己也不小，装完就没用了：提示删掉（或下次直接 --cleanup）
@@ -255,12 +266,13 @@ end
 """
 
 
-def build_installer(master_src, worker_src, boot_src, jobs):
-    """生成 dist/install.lua：把两个产物 + 拉取器 + 全部作业塞进一个安装器。"""
+def build_installer(master_src, worker_src, screen_src, boot_src, jobs):
+    """生成 dist/install.lua：把三个产物 + 拉取器 + 全部作业塞进一个安装器。"""
     files = []
     for path, data in (
         ("/dccomp/master.lua", master_src),
         ("/dccomp/worker.lua", worker_src),
+        ("/dccomp/screen.lua", screen_src),
         ("/dccomp/bootstrap.lua", boot_src),
     ):
         files.append('    ["%s"] = %s,\n' % (path, lua_long_string(data)))
@@ -279,21 +291,27 @@ def main():
 
     master_entry = luautil.strip_comments(read(os.path.join(SRC, "master.lua")))
     worker_entry = luautil.strip_comments(read(os.path.join(SRC, "worker.lua")))
-    if not master_entry.endswith("\n"):
-        master_entry += "\n"
-    if not worker_entry.endswith("\n"):
-        worker_entry += "\n"
+    screen_entry = luautil.strip_comments(read(os.path.join(SRC, "screen.lua")))
+    entries = []
+    for entry in (master_entry, worker_entry, screen_entry):
+        if not entry.endswith("\n"):
+            entry += "\n"
+        entries.append(entry)
+    master_entry, worker_entry, screen_entry = entries
 
     master_mods = closure(master_entry, mods)
     worker_mods = closure(worker_entry, mods)
+    screen_mods = closure(screen_entry, mods)
 
     master_src = emit("主控 master", mods, master_mods, master_entry,
                       extra_globals=build_jobs_block())
     worker_src = emit("运算节点 worker", mods, worker_mods, worker_entry)
+    screen_src = emit("网络屏幕 screen", mods, screen_mods, screen_entry)
 
     targets = [
         (os.path.join(DIST, "master.lua"), master_src, master_mods),
         (os.path.join(DIST, "worker.lua"), worker_src, worker_mods),
+        (os.path.join(DIST, "screen.lua"), screen_src, screen_mods),
     ]
     for path, data, used in targets:
         with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -309,12 +327,12 @@ def main():
           % (os.path.relpath(os.path.join(DIST, "bootstrap.lua"), ROOT),
              len(boot_src.encode("utf-8")), boot_src.count("\n") + 1))
 
-    # 一键安装器：把两个产物 + 拉取器 + 全部作业打包成一个文件
+    # 一键安装器：把三个产物 + 拉取器 + 全部作业打包成一个文件
     job_sources = {}
     for name in sorted(os.listdir(JOBS)):
         if name.endswith(".lua"):
             job_sources[name] = luautil.strip_comments(read(os.path.join(JOBS, name)))
-    inst_src = build_installer(master_src, worker_src, boot_src, job_sources)
+    inst_src = build_installer(master_src, worker_src, screen_src, boot_src, job_sources)
     with open(os.path.join(DIST, "install.lua"), "w", encoding="utf-8", newline="\n") as f:
         f.write(inst_src)
     print("%-28s %7d 字节  %2d 行  内含 %d 个作业"

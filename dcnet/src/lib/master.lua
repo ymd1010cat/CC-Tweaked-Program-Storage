@@ -137,6 +137,7 @@ function M.run(opts)
         lastBeatSent = 0,
         activeMaster = nil,
         tookOver = 0,
+        screens = {},               -- 网络屏幕：id -> { id, name, w, h, lastSeen, ... }
     }
 
     -- ── 云端卸载 ─────────────────────────────────────────────────────
@@ -174,6 +175,117 @@ function M.run(opts)
         end
     end
     if PN:attached() then PN:redraw(S, CL, true) end
+
+    -- ── 网络屏幕（另一台电脑 + 显示器） ────────────────────────────────
+    -- CC 的有线网络会把"贴着有线调制解调器的显示器"暴露成外设（monitor_0），
+    -- 那种屏幕 mon 就能直接挂上；但**贴在别的电脑侧面**的显示器主控看不到。
+    -- 这种屏幕由 screen.lua 当转发器：屏幕端广播 screen（带尺寸）当心跳，
+    -- 主控把面板文字行推回去（disp），屏幕端只负责画。
+    local SCREEN_MAX      = 16     -- 同时最多接几块网络屏幕
+    local SCREEN_TIMEOUT  = 15     -- 秒：屏幕多久没有消息就摘掉
+    local SCREEN_INTERVAL = 1.0    -- 秒：每块屏幕最多多久推一帧
+
+    local function screenFrame(scr)
+        return {
+            master = M0.masterId,
+            w = scr.w, h = scr.h,
+            -- 序列化成字符串：设了密钥时整帧参与 HMAC 太贵，net.BULK_FIELDS 只把
+            -- 它的校验和放进签名（和作业源码、分块数据同一套取舍）。
+            lines = textutils.serialize(panel.linesFor(S, CL, scr.w, scr.h)),
+            at = util.now(),
+        }
+    end
+
+    local function sendFrame(scr, force)
+        if not S.cfg.netScreen then return end
+        local now = util.mono()
+        if not force and (now - (scr.lastFrame or 0)) < SCREEN_INTERVAL then return end
+        scr.lastFrame = now
+        scr.frames = (scr.frames or 0) + 1
+        local ok, err = net.send(scr.id, proto.msg(proto.DISP, screenFrame(scr)), util.PROTO_CTRL)
+        if not ok and now - (scr.lastWarn or 0) > 10 then
+            scr.lastWarn = now
+            ui:log(string.format("给网络屏幕 #%d 推送失败：%s", scr.id, tostring(err)),
+                col("orange", 2))
+        end
+    end
+
+    local function screenHello(sender, msg)
+        if not S.cfg.netScreen then
+            net.send(sender, proto.msg(proto.SCREENOFF, { why = "off" }), util.PROTO_CTRL)
+            return
+        end
+        local vok, verr = proto.compatible(msg)
+        if not vok then
+            net.send(sender, proto.msg(proto.SCREENOFF, { why = "ver" }), util.PROTO_CTRL)
+            ui:log(string.format("网络屏幕 #%s 协议版本不兼容：%s", tostring(sender),
+                tostring(verr)), col("orange", 2))
+            return
+        end
+        local w = math.max(1, math.floor(tonumber(msg.w) or 51))
+        local h = math.max(1, math.floor(tonumber(msg.h) or 19))
+        local name = util.trunc(tostring(msg.name or ("screen-" .. tostring(sender))), 24)
+        local scr = M0.screens[sender]
+        if not scr then
+            local n = 0
+            for _ in pairs(M0.screens) do n = n + 1 end
+            if n >= SCREEN_MAX then
+                net.send(sender, proto.msg(proto.SCREENOFF, { why = "full" }), util.PROTO_CTRL)
+                return
+            end
+            scr = { id = sender, firstSeen = util.now() }
+            M0.screens[sender] = scr
+            ui:log(string.format("网络屏幕 #%d 已连接：%s（%dx%d）", sender, name, w, h),
+                col("lime", 32))
+        elseif scr.w ~= w or scr.h ~= h then
+            ui:log(string.format("网络屏幕 #%d 尺寸变化：%dx%d → %dx%d", sender,
+                scr.w or 0, scr.h or 0, w, h), col("lightBlue", 512))
+        end
+        scr.name, scr.w, scr.h = name, w, h
+        scr.lastSeen, scr.seenAt = util.mono(), util.now()
+        sendFrame(scr, true)
+    end
+
+    local function screenBye(sender, msg)
+        if M0.screens[sender] then
+            M0.screens[sender] = nil
+            ui:log(string.format("网络屏幕 #%d 已退出：%s", sender, tostring(msg.reason or "无")),
+                col("lightGray", 1024))
+        end
+    end
+
+    local function pumpScreens()
+        if not S.cfg.netScreen then return end
+        local now = util.mono()
+        for id, scr in pairs(M0.screens) do
+            if now - (scr.lastSeen or 0) > SCREEN_TIMEOUT then
+                M0.screens[id] = nil
+                ui:log(string.format("网络屏幕 #%d 已离线（%.0f 秒没有消息）", id,
+                    now - (scr.lastSeen or now)), col("orange", 2))
+            else
+                sendFrame(scr)
+            end
+        end
+    end
+
+    local function screenLines()
+        local out = {}
+        local ids = {}
+        for id in pairs(M0.screens) do ids[#ids + 1] = id end
+        table.sort(ids)
+        out[#out + 1] = string.format("网络屏幕：%s（%d/%d 台）",
+            S.cfg.netScreen and "推送中" or "已关闭", #ids, SCREEN_MAX)
+        for _, id in ipairs(ids) do
+            local s = M0.screens[id]
+            out[#out + 1] = string.format("  #%-3d %-16s %3dx%-3d  %7s前  已发 %d 帧",
+                id, s.name or "?", s.w or 0, s.h or 0,
+                util.duration(util.now() - (s.seenAt or util.now())), s.frames or 0)
+        end
+        if #ids == 0 then
+            out[#out + 1] = "  （屏幕电脑上运行 screen.lua 就会自动连上）"
+        end
+        return out
+    end
 
     -- ── 推送文件（worker.lua / 作业 / 大负载） ────────────────────────
     -- 发送端统一登记到 M0.reg，由唯一的 dcpush 接收循环推进（见 xfer.lua 的说明）。
@@ -237,7 +349,8 @@ function M.run(opts)
             "  cloud add <名字> <url> [并发]   注册一个 HTTP 计算服务（持久化）",
             "  cloud del <名字>        删除端点",
             "  cloud test <名字>       探活（GET 一次）",
-            "  mon [名字|off]          挂载/关闭 monitor 大屏面板（持久化）",
+            "  mon [名字|off]          挂载/关闭本地 monitor 大屏面板（持久化）",
+            "  mon net [on|off|kick ID] 网络屏幕：另一台电脑 + 显示器当大屏",
             "  setkey <密钥>           启用消息签名（防冒充/防重放，各机器设成一样）",
             "  key                     查看签名状态、密钥指纹与丢弃统计",
             "  standby [on|off]        待命主控：在岗主控掉线时自动接管并接续作业",
@@ -432,6 +545,9 @@ function M.run(opts)
                 ui:log(string.format("  %-8s %s", md.name, md.wireless and "无线" or "有线"))
             end
             ui:log(string.format("在线节点 %d / 登记 %d", S:onlineCount(), S:workerCount()))
+            local screenCount = 0
+            for _ in pairs(M0.screens) do screenCount = screenCount + 1 end
+            ui:log(string.format("网络屏幕 %d 台（mon net 查看 / 开关）", screenCount))
             if net.hasKey() then
                 ui:log("消息签名：已启用，密钥指纹 " .. tostring(net.fingerprint()),
                     col("lime", 32))
@@ -581,8 +697,42 @@ function M.run(opts)
                 local old = PN:detach()
                 util.saveCfg("monitor", "off")
                 S.cfg.monitor = "off"
-                ui:log("已关闭大屏面板" .. (old and ("（" .. tostring(old) .. "）") or ""),
+                ui:log("已关闭本地大屏面板" .. (old and ("（" .. tostring(old) .. "）") or ""),
                     col("lime", 32))
+            elseif sub == "net" then
+                local action = toks[2]
+                if action == "on" or action == "off" then
+                    S.cfg.netScreen = (action == "on")
+                    util.saveCfg("netScreen", S.cfg.netScreen)
+                    if not S.cfg.netScreen then
+                        for id in pairs(M0.screens) do
+                            net.send(id, proto.msg(proto.SCREENOFF, { why = "off" }),
+                                util.PROTO_CTRL)
+                        end
+                        M0.screens = {}
+                        ui:log("已关闭网络屏幕推送（屏幕端会显示「主控已关闭」）",
+                            col("orange", 2))
+                    else
+                        ui:log("已开启网络屏幕推送（屏幕电脑上运行 screen.lua 即可）",
+                            col("lime", 32))
+                    end
+                elseif action == "kick" then
+                    local id = tonumber((tostring(toks[3] or ""):gsub("^#", "")))
+                    if not id then
+                        ui:log("用法：mon net kick <屏幕ID>（mon net 看列表）", col("orange", 2))
+                    elseif not M0.screens[id] then
+                        ui:log("没有这块网络屏幕：#" .. id, col("orange", 2))
+                    else
+                        M0.screens[id] = nil
+                        net.send(id, proto.msg(proto.SCREENOFF, { why = "kick" }), util.PROTO_CTRL)
+                        ui:log("已断开网络屏幕 #" .. id .. "（它下次心跳会再连上来）",
+                            col("lime", 32))
+                    end
+                else
+                    ui:logLines(screenLines())
+                    ui:log("  mon net on|off 开关 / mon net kick <ID> 断开一台",
+                        col("lightGray", 1024))
+                end
             elseif sub then
                 local ok, err = PN:attach(sub)
                 if not ok then
@@ -599,17 +749,19 @@ function M.run(opts)
                     ui:log(string.format("大屏：%s（%dx%d，缩放 %.2f）",
                         tostring(PN.name), PN.w, PN.h, PN.scale), col("lightBlue", 512))
                 else
-                    ui:log("当前没有挂载显示器。")
+                    ui:log("当前没有挂载本地显示器。")
                 end
                 local list = panel.findMonitors()
                 if #list == 0 then
-                    ui:log("  没有检测到 monitor 外设（把显示器贴到主控侧面即可）")
+                    ui:log("  没有检测到 monitor 外设（贴到主控侧面，或用 screen.lua 当网络屏幕）")
                 else
                     for _, m in ipairs(list) do
-                        ui:log("  可用显示器：" .. m.name .. "（mon " .. m.name .. " 挂载）")
+                        ui:log("  可用显示器：" .. m.name .. (m.net and "（有线网络）" or "") ..
+                            "（mon " .. m.name .. " 挂载）")
                     end
                 end
-                ui:log("  mon <名字> 挂载 / mon off 关闭（会持久化）；cfg 里的 monitor 也能改")
+                ui:logLines(screenLines())
+                ui:log("  mon <名字> 挂本地显示器 / mon off 关本地 / mon net 网络屏幕")
             end
         elseif c == "cloud" then
             local sub = toks[1]
@@ -773,6 +925,12 @@ function M.run(opts)
                         S.paused = true
                         ui:log(string.format("#%d 宣布接管（ID 更小），本机退回待命", who),
                             col("orange", 2))
+                    end
+                elseif msg.t == proto.SCREEN or msg.t == proto.SCREENBYE then
+                    -- 网络屏幕：只有在岗主控应答（待命主控静默，屏幕会自动找在岗的）
+                    if M0.mode == "active" then
+                        if msg.t == proto.SCREEN then screenHello(sender, msg)
+                        else screenBye(sender, msg) end
                     end
                 elseif M0.mode == "standby" and msg.t ~= proto.REPO then
                     -- 待命期间不回应节点、不派任务（避免和真正的主控抢活）
@@ -1025,6 +1183,7 @@ function M.run(opts)
             end
             CL:pump()
             PN:redraw(S, CL)
+            pumpScreens()
             state.poolClean()
 
             -- 推动分块传输（发送端登记在 M0.reg 里，由 pushLoop/tickLoop 一起推进）

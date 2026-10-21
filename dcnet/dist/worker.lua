@@ -410,6 +410,11 @@ M.TAKEOVER = "takeover"
 M.REPO     = "repo"
 M.REPOINFO = "repoinfo"
 
+M.SCREEN    = "screen"
+M.SCREENBYE = "screenbye"
+M.DISP      = "disp"
+M.SCREENOFF = "screenoff"
+
 M.FETCH    = "fetch"
 M.PUT      = "put"
 M.PUTACK   = "putack"
@@ -470,7 +475,8 @@ local M = {}
 M.transport = TRANSPORT
 
 M.SEQ_SKEW = 120
-M.BULK_FIELDS = { ["d"] = "dck", ["src"] = "sck" }
+
+M.BULK_FIELDS = { ["d"] = "dck", ["src"] = "sck", ["lines"] = "lck" }
 
 M.key = nil
 M.seq = 0

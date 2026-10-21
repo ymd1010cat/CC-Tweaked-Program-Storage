@@ -10,7 +10,7 @@ Layout
 ------
 
     manifest              package metadata (name, version, bin=dcnet)
-    bin/dcnet.lua         the command: master / worker / status / jobs / net
+    bin/dcnet.lua         the command: master / worker / screen / status / jobs / net
     lib/dcnet/*.lua       dcnet modules, loaded by bin/dcnet.lua
     jobs/*.lua            the built-in example jobs
     share/worker.lua      packaged worker program (seed for the master's push)
@@ -30,6 +30,7 @@ Usage
     dcnet master --headless      run the master as a log-only daemon
     dcnet worker [ID] [NAME]     start a worker console
     dcnet worker --headless      run the worker as a log-only daemon
+    dcnet screen [MONITOR]       network screen: draw the master panel on a monitor
     dcnet status                 state root, jobs and recent history
     dcnet cmd <line>             queue a command for the running master
     dcnet log [N]                last N lines of the master log

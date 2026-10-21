@@ -71,6 +71,7 @@ M.DEFAULTS = {
     rediscoverAfter = 25,    -- 秒：节点多久没听到主控就重新搜索（接管后靠它换主）
     monitor         = "",    -- monitor 外设名（""=自动找；"off"=不用）
     monitorScale    = 0.5,   -- monitor 字号缩放（0.5=分辨率翻倍）
+    netScreen       = true,  -- 把面板推给网络屏幕（屏幕节点运行 screen.lua）
     fileChannel     = true,  -- 大负载（>inlineLimit）走文件通道，不塞进一条消息
     inlineLimit     = 8192,  -- 字节：负载/结果超过它就改走文件通道
 }
@@ -103,6 +104,7 @@ M.CFG_META = {
     rediscoverAfter = "节点重新搜索主控的静默阈值（秒）",
     monitor         = "大屏显示器名（空=自动找）",
     monitorScale    = "大屏字号缩放",
+    netScreen       = "向网络屏幕推送面板（屏幕节点）",
     fileChannel     = "大负载走文件通道",
     inlineLimit     = "超过多少字节改走文件通道",
 }

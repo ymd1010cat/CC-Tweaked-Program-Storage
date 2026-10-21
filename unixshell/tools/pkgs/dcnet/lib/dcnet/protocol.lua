@@ -42,6 +42,12 @@ M.TAKEOVER = "takeover"           -- 宣布接管主控角色（带电脑 ID，I
 M.REPO     = "repo"               -- 查询对方有哪些作业
 M.REPOINFO = "repoinfo"           -- 应答：作业清单
 
+-- 网络屏幕（屏幕节点：另一台电脑 + 显示器，把主控面板画出来）
+M.SCREEN    = "screen"            -- 屏幕 → 主控：上线登记 / 心跳（带尺寸）
+M.SCREENBYE = "screenbye"         -- 屏幕 → 主控：主动退出
+M.DISP      = "disp"              -- 主控 → 屏幕：一帧面板内容（lines）
+M.SCREENOFF = "screenoff"         -- 主控 → 屏幕：推送已关闭 / 屏幕数满 / 被踢
+
 -- 分块传输（dcpush）
 M.FETCH    = "fetch"              -- 节点/新机器请求一份代码
 M.PUT      = "put"                -- 一个分块
