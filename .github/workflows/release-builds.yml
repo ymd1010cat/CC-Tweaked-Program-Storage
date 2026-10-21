@@ -125,6 +125,11 @@ jobs:
             done < <(gh release view "$tag" --json assets --jq '.assets[].name')
           fi
           gh release upload "$tag" "${files[@]}" --clobber
+          # 删除+重建 tag 时，GitHub 会把旧 release 变成"未关联的草稿"；这时把它
+          # 重新挂到 tag 上并发布，重发流程才算真正闭环。
+          if [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit "$tag" --draft=false --tag "$tag" --target "$GITHUB_SHA" --verify-tag
+          fi
 
   rpv1:
     name: rpv1-${{ github.ref_name }}
