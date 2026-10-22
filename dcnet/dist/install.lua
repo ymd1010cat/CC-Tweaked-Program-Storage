@@ -1,5 +1,5 @@
 --[[- ==========================================================================
-  dcnet 一键安装器 v1.3.1（由 tools/build.py 生成，请勿直接编辑）
+  dcnet 一键安装器 v1.3.2（由 tools/build.py 生成，请勿直接编辑）
 
   把这一个文件拷到任何一台电脑上，就能装好 dcnet：
 
@@ -19,7 +19,7 @@
 local FILES = {
     ["/dccomp/master.lua"] = [==[
 --[[- ==========================================================================
-  dcnet v1.3.1 — CC:Tweaked 分布式计算网络（主控 master）
+  dcnet v1.3.2 — CC:Tweaked 分布式计算网络（主控 master）
 
   本文件由 tools/build.py 自动生成，请勿直接编辑。
   要改逻辑请改 src/ 下的源码，然后重新运行：
@@ -44,7 +44,7 @@ _G.dc_require = __dc_load
 __dc_define("dc.util", function()
 local M = {}
 
-M.VERSION    = "1.3.1"
+M.VERSION    = "1.3.2"
 M.PROTO_CTRL = "dccomp"
 M.PROTO_PUSH = "dcpush"
 M.ROOT       = rawget(_G, "DCNET_ROOT") or "/dccomp"
@@ -7810,7 +7810,7 @@ return 0
 ]==],
     ["/dccomp/worker.lua"] = [=[
 --[[- ==========================================================================
-  dcnet v1.3.1 — CC:Tweaked 分布式计算网络（运算节点 worker）
+  dcnet v1.3.2 — CC:Tweaked 分布式计算网络（运算节点 worker）
 
   本文件由 tools/build.py 自动生成，请勿直接编辑。
   要改逻辑请改 src/ 下的源码，然后重新运行：
@@ -7835,7 +7835,7 @@ _G.dc_require = __dc_load
 __dc_define("dc.util", function()
 local M = {}
 
-M.VERSION    = "1.3.1"
+M.VERSION    = "1.3.2"
 M.PROTO_CTRL = "dccomp"
 M.PROTO_PUSH = "dcpush"
 M.ROOT       = rawget(_G, "DCNET_ROOT") or "/dccomp"
@@ -10320,7 +10320,7 @@ return 0
 ]=],
     ["/dccomp/screen.lua"] = [=[
 --[[- ==========================================================================
-  dcnet v1.3.1 — CC:Tweaked 分布式计算网络（网络屏幕 screen）
+  dcnet v1.3.2 — CC:Tweaked 分布式计算网络（网络屏幕 screen）
 
   本文件由 tools/build.py 自动生成，请勿直接编辑。
   要改逻辑请改 src/ 下的源码，然后重新运行：
@@ -10345,7 +10345,7 @@ _G.dc_require = __dc_load
 __dc_define("dc.util", function()
 local M = {}
 
-M.VERSION    = "1.3.1"
+M.VERSION    = "1.3.2"
 M.PROTO_CTRL = "dccomp"
 M.PROTO_PUSH = "dcpush"
 M.ROOT       = rawget(_G, "DCNET_ROOT") or "/dccomp"

@@ -7,9 +7,9 @@
 Output (git-ignored):
 
     dist/release-dcnet/
-        dcnet-1.3.1.zip                 standalone project (dcnet/ + LICENSE)
-        dcnet-ush-package-1.3.1.zip     unixshell package contents + LICENSE
-        dcnet-worker-1.3.1.zip          compute-node image + LICENSE
+        dcnet-1.3.2.zip                 standalone project (dcnet/ + LICENSE)
+        dcnet-ush-package-1.3.2.zip     unixshell package contents + LICENSE
+        dcnet-worker-1.3.2.zip          compute-node image + LICENSE
         dcnet-INSTALL.txt
         SHA256SUMS.txt
         RELEASE.md                      GitHub release body for this commit
@@ -31,7 +31,7 @@ PKG = HERE / "pkgs" / "dcnet"
 WORKER = USH / "dist" / "worker-image"
 OUT = USH / "dist" / "release-dcnet"
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 SKIP_DIRS = {".git", "__pycache__", ".ccdata", ".cloud_url", ".pytest_cache"}
 SKIP_SUFFIX = {".pyc", ".pyo"}
 
