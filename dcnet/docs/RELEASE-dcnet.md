@@ -10,6 +10,8 @@
 
 - **版本 1.2.0**：新增网络屏幕（见下）；协议版本仍为 1，只加了新消息类型，
   旧节点/旧主控可以继续混跑（未知类型按协议约定忽略）。
+- **界面英文**：游戏内控制台、日志、状态面板与内置作业输出全部改为英文（ASCII），
+  原版 CC 客户端字体不再出现乱码，也不再需要中文字体资源包。
 - **独立运行**：`dist/master.lua` + `dist/worker.lua` 两个文件即可组网，保持原来的
   rednet 有线网络用法；节点源码随任务下发，无需预装作业。
 - **unixshell 包**：`tools/pkgs/dcnet/` 提供 `dcnet` 命令（master / worker / screen /
@@ -20,7 +22,7 @@
   通道（命令行写入 `<root>/ctl`，由常驻主控执行，`dcnet log` 查看）。
 - **计算端精简镜像**：worker 镜像只含 `startup.lua` + dcnet worker 所需模块，循环运行
   `dcnet worker --headless`；没有 ush、firstboot、BIOS、man、中文字体数据和交互界面，
-  约 123 KB。
+  约 125 KB。
 - **网络屏幕**：把显示器贴在另一台电脑上也能当主控大屏——那台电脑运行
   `screen.lua`（或 unixshell 下的 `dcnet screen`）即可：屏幕自动广播登记，主控按屏幕
   尺寸推送面板帧，`mon net` 查看/开关。有线网络上暴露成外设的远端显示器

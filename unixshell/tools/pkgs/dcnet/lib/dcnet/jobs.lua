@@ -30,24 +30,24 @@ local M = {}
 -- ── 校验与装载 ──────────────────────────────────────────────────────────
 
 function M.validate(def)
-    if type(def) ~= "table" then return nil, "作业必须 return 一个 table" end
-    if type(def.name) ~= "string" or def.name == "" then return nil, "缺少 name 字段" end
+    if type(def) ~= "table" then return nil, "job must return a table" end
+    if type(def.name) ~= "string" or def.name == "" then return nil, "missing name field" end
     if type(def.map) ~= "function" and type(def.cloud) ~= "table" then
-        return nil, "缺少 map 函数（或用于云端卸载的 cloud 定义）"
+        return nil, "missing map function (or cloud definition for cloud offload)"
     end
-    if def.map ~= nil and type(def.map) ~= "function" then return nil, "map 必须是函数" end
+    if def.map ~= nil and type(def.map) ~= "function" then return nil, "map must be a function" end
     if def.cloud ~= nil then
-        if type(def.cloud) ~= "table" then return nil, "cloud 必须是 table" end
-        if type(def.cloud.build) ~= "function" then return nil, "cloud.build 必须是函数" end
-        if type(def.cloud.parse) ~= "function" then return nil, "cloud.parse 必须是函数" end
+        if type(def.cloud) ~= "table" then return nil, "cloud must be a table" end
+        if type(def.cloud.build) ~= "function" then return nil, "cloud.build must be a function" end
+        if type(def.cloud.parse) ~= "function" then return nil, "cloud.parse must be a function" end
         if def.cloud.endpoint ~= nil and type(def.cloud.endpoint) ~= "string" then
-            return nil, "cloud.endpoint 必须是字符串"
+            return nil, "cloud.endpoint must be a string"
         end
     end
-    if def.split ~= nil and type(def.split) ~= "function" then return nil, "split 必须是函数" end
-    if def.reduce ~= nil and type(def.reduce) ~= "function" then return nil, "reduce 必须是函数" end
-    if def.format ~= nil and type(def.format) ~= "function" then return nil, "format 必须是函数" end
-    if def.params ~= nil and type(def.params) ~= "table" then return nil, "params 必须是数组" end
+    if def.split ~= nil and type(def.split) ~= "function" then return nil, "split must be a function" end
+    if def.reduce ~= nil and type(def.reduce) ~= "function" then return nil, "reduce must be a function" end
+    if def.format ~= nil and type(def.format) ~= "function" then return nil, "format must be a function" end
+    if def.params ~= nil and type(def.params) ~= "table" then return nil, "params must be an array" end
     return true
 end
 
@@ -57,22 +57,22 @@ end
 -- 返回 nil, err 表示打包失败。
 function M.buildCloudRequest(def, task, args)
     if not (def and def.cloud and def.cloud.build) then
-        return nil, "作业没有定义 cloud.build"
+        return nil, "job does not define cloud.build"
     end
     local ok, body = pcall(def.cloud.build, task, args)
     if not ok then return nil, tostring(body) end
-    if body == nil then return nil, "cloud.build 返回了 nil" end
+    if body == nil then return nil, "cloud.build returned nil" end
     return body
 end
 
 --- 调 job.cloud.parse(decoded, task, args) 把响应变成任务结果。
 function M.parseCloudResponse(def, decoded, task, args)
     if not (def and def.cloud and def.cloud.parse) then
-        return nil, "作业没有定义 cloud.parse"
+        return nil, "job does not define cloud.parse"
     end
     local ok, data = pcall(def.cloud.parse, decoded, task, args)
     if not ok then return nil, tostring(data) end
-    if data == nil then return nil, "cloud.parse 返回了 nil" end
+    if data == nil then return nil, "cloud.parse returned nil" end
     return data
 end
 
@@ -80,25 +80,25 @@ end
 -- 返回的是"部分汇总结果"，主控最后再对这些部分结果做一次 reduce。
 function M.runReduce(src, payload, args, ctx)
     if type(payload) ~= "table" or type(payload.__reduce) ~= "table" then
-        return nil, "reduce 任务负载格式不对（缺少 __reduce）"
+        return nil, "bad reduce task payload (missing __reduce)"
     end
     local env = setmetatable({}, { __index = _G })
     env.ctx = ctx
     local fn, err = util.loadChunk(src, "=dcjob", env)
-    if not fn then return nil, "作业源码编译失败: " .. tostring(err) end
+    if not fn then return nil, "job source compile failed: " .. tostring(err) end
     local ok, def = pcall(fn)
-    if not ok then return nil, "作业初始化失败: " .. tostring(def) end
+    if not ok then return nil, "job init failed: " .. tostring(def) end
     local vok, verr = M.validate(def)
     if not vok then return nil, verr end
     if type(def.reduce) ~= "function" then
-        return nil, "该作业没有 reduce，不能做两级汇总"
+        return nil, "job has no reduce, cannot do two-level reduce"
     end
 
     local rok, res = pcall(def.reduce, payload.__reduce, args)
     if not rok then return nil, tostring(res) end
-    if res == nil then return nil, "reduce 返回了 nil" end
+    if res == nil then return nil, "reduce returned nil" end
     local sok = pcall(textutils.serialize, res)
-    if not sok then return nil, "reduce 返回值无法序列化" end
+    if not sok then return nil, "reduce result is not serializable" end
     return res
 end
 
@@ -125,7 +125,7 @@ end
 
 function M.safeName(name)
     if type(name) ~= "string" or not name:match("^[%w_%-]+$") then
-        return nil, "作业名只能包含字母、数字、下划线和短横线"
+        return nil, "job name may only contain letters, digits, underscore and dash"
     end
     return name
 end
@@ -146,7 +146,7 @@ function M.list()
             out[#out + 1] = {
                 name    = name,
                 ok      = def ~= nil,
-                summary = def and (def.summary or "") or ("加载失败: " .. tostring(err)),
+                summary = def and (def.summary or "") or ("load failed: " .. tostring(err)),
                 params  = def and def.params or nil,
             }
         end
@@ -191,9 +191,9 @@ end
 function M.split(def, args)
     if not def.split then return { args } end
     local ok, tasks = pcall(def.split, args)
-    if not ok then return nil, "split 执行失败: " .. tostring(tasks) end
+    if not ok then return nil, "split failed: " .. tostring(tasks) end
     if type(tasks) ~= "table" or #tasks == 0 then
-        return nil, "split 必须返回非空的任务数组"
+        return nil, "split must return a non-empty task array"
     end
     return tasks
 end
@@ -201,7 +201,7 @@ end
 function M.reduce(def, results, args)
     if not def.reduce then return results end
     local ok, res = pcall(def.reduce, results, args)
-    if not ok then return nil, "reduce 执行失败: " .. tostring(res) end
+    if not ok then return nil, "reduce failed: " .. tostring(res) end
     return res
 end
 
@@ -209,7 +209,7 @@ function M.format(def, res, args)
     if def.format then
         local ok, text = pcall(def.format, res, args)
         if ok and text ~= nil then return tostring(text) end
-        if not ok then return "format 执行失败: " .. tostring(text) end
+        if not ok then return "format failed: " .. tostring(text) end
     end
     local ok, text = pcall(textutils.serialize, res)
     if ok then return text end
@@ -224,13 +224,13 @@ function M.runMap(src, payload, ctx)
     local env = setmetatable({}, { __index = _G })
     env.ctx = ctx
     local fn, err = util.loadChunk(src, "=dcjob", env)
-    if not fn then return nil, "作业源码编译失败: " .. tostring(err) end
+    if not fn then return nil, "job source compile failed: " .. tostring(err) end
     local ok, def = pcall(fn)
-    if not ok then return nil, "作业初始化失败: " .. tostring(def) end
+    if not ok then return nil, "job init failed: " .. tostring(def) end
     local vok, verr = M.validate(def)
     if not vok then return nil, verr end
     if type(def.map) ~= "function" then
-        return nil, "该作业没有本地 map（只能交给云端执行）"
+        return nil, "job has no local map (cloud only)"
     end
 
     local callOk, res = pcall(def.map, payload, ctx)
@@ -238,12 +238,12 @@ function M.runMap(src, payload, ctx)
 
     -- 返回 nil 视为失败：既方便排错，也避免结果数组里出现空洞
     if res == nil then
-        return nil, "map 返回了 nil（要表达\"没找到\"请返回显式结构，例如 { hit = false }）"
+        return nil, "map returned nil (return an explicit structure for \"not found\", e.g. { hit = false })"
     end
 
     -- 结果必须可序列化，否则在网络上会静默丢失
     local sok = pcall(textutils.serialize, res)
-    if not sok then return nil, "map 返回值无法序列化（可能包含函数或协程）" end
+    if not sok then return nil, "map result is not serializable (may contain functions or coroutines)" end
     return res
 end
 

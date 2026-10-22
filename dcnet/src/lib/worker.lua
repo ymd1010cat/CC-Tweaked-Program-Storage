@@ -38,9 +38,9 @@ M.DEFAULTS = {
     rebootAfter  = 0,   -- 多久联系不上主控就重启电脑（秒，0=关）
 }
 M.CFG_META = {
-    maxRestarts  = "异常后最多自动重启次数",
-    restartDelay = "自动重启间隔（秒）",
-    rebootAfter  = "失联多久重启电脑（0=关）",
+    maxRestarts  = "max auto restarts after error",
+    restartDelay = "auto restart interval (s)",
+    rebootAfter  = "reboot after master lost (s, 0=off)",
 }
 
 --- 跑一轮节点（内部实现）。正常停止返回 true；异常返回 false, 原因
@@ -53,16 +53,16 @@ local function runOnce(opts)
     local function fileLog(text)
         util.appendLog(LOG, util.logLine(text))
     end
-    fileLog("节点启动 v" .. util.VERSION)
+    fileLog("Worker starting v" .. util.VERSION)
 
     -- ── 1. 网络 ──────────────────────────────────────────────────────
     -- 打开所有 modem：节点如果挂在多段网络上（或多插了一个无线），都能收到主控
     local modems, failedModems = net.openAll()
     if #modems == 0 then
-        printError("[dcnet] 没有检测到调制解调器（modem）")
-        print("[dcnet] 请在有线调制解调器上接好网络线缆，并用 peripheral.getNames() 确认。")
-        fileLog("没有检测到调制解调器")
-        return false, "没有检测到调制解调器"
+        printError("[dcnet] No modem detected")
+        print("[dcnet] Attach a network cable to a wired modem and check peripheral.getNames().")
+        fileLog("no modem detected")
+        return false, "no modem detected"
     end
 
     -- headless（ush 包）：不占终端，日志只写文件；交互终端下仍是原来的三区界面。
@@ -72,8 +72,8 @@ local function runOnce(opts)
     else
         ui = console.new({ title = "dcnet worker", hasPrompt = false })
     end
-    ui:log(string.format("dcnet 运算节点 v%s", util.VERSION), col("lime", 32))
-    ui:log(string.format("网络：已打开 %s（%s）  本机 ID #%d",
+    ui:log(string.format("dcnet worker v%s", util.VERSION), col("lime", 32))
+    ui:log(string.format("Network: opened %s (%s)  ID #%d",
         net.describe(modems),
         (function()
             local t = {}
@@ -82,7 +82,7 @@ local function runOnce(opts)
         end)(),
         os.getComputerID()))
     for _, e in ipairs(failedModems or {}) do
-        ui:log("  打开 modem 失败：" .. e, col("orange", 2))
+        ui:log("  Failed to open modem: " .. e, col("orange", 2))
     end
 
     local S = {
@@ -128,27 +128,27 @@ local function runOnce(opts)
     end
 
     if not S.master then
-        ui:log("正在寻找主控…")
+        ui:log("Looking for master...")
         if not discover() then
-            ui:log("没有找到主控。", col("red", 16384))
-            ui:log("请确认：① 主控程序已在同一条有线网络上运行；② 网络线缆接好。")
-            ui:log("也可以用 worker <主控ID> 直接指定。")
-            fileLog("找不到主控")
-            return false, "找不到主控"
+            ui:log("No master found.", col("red", 16384))
+            ui:log("Check that: 1) master runs on the same wired network; 2) cables are connected.")
+            ui:log("You can also pass worker <masterID> explicitly.")
+            fileLog("master not found")
+            return false, "master not found"
         end
     end
-    ui:log("已找到主控 #" .. tostring(S.master))
-    fileLog("已找到主控 #" .. tostring(S.master))
+    ui:log("Found master #" .. tostring(S.master))
+    fileLog("Found master #" .. tostring(S.master))
     hello()
 
     -- ── 3. 界面 ──────────────────────────────────────────────────────
     local function statusText()
-        local st = ({ connecting = "握手", idle = "空闲", busy = "运算" })[S.state] or S.state
+        local st = ({ connecting = "handshake", idle = "idle", busy = "computing" })[S.state] or S.state
         local cur = ""
         if S.state == "busy" then
             cur = string.format("  %s %d%%", util.trunc(S.curLabel, 18), math.floor((S.progress or 0) * 100))
         end
-        return string.format("节点 #%d %s | 主控 #%s | %s%s | 完成 %d 失败 %d",
+        return string.format("Worker #%d %s | Master #%s | %s%s | done %d failed %d",
             S.id, util.trunc(S.name, 10), tostring(S.master or "?"), st, cur, S.done, S.fail)
     end
 
@@ -185,7 +185,7 @@ local function runOnce(opts)
                 return state.poolGet(name)
             end
         end
-        return nil, "等待负载超时"
+        return nil, "timed out waiting for payload"
     end
 
     local function runTask(msg)
@@ -197,9 +197,9 @@ local function runOnce(opts)
                 S.curLabel = nil
                 net.send(S.master, proto.msg(proto.RESULT, {
                     job = msg.job, task = msg.task, ok = false,
-                    err = "取任务负载失败: " .. tostring(ferr), ms = 0,
+                    err = "task payload fetch failed: " .. tostring(ferr), ms = 0,
                 }), util.PROTO_CTRL)
-                ui:log(string.format("任务 %d.%d 取负载失败：%s",
+                ui:log(string.format("Task %d.%d payload fetch failed: %s",
                     msg.job or 0, msg.task or 0, tostring(ferr)), col("red", 16384))
                 return
             end
@@ -218,9 +218,9 @@ local function runOnce(opts)
             S.curLabel = nil
             net.send(S.master, proto.msg(proto.RESULT, {
                 job = msg.job, task = msg.task, ok = false,
-                err = "作业源码校验失败（哈希不符）", ms = 0,
+                err = "job source verification failed (hash mismatch)", ms = 0,
             }), util.PROTO_CTRL)
-            ui:log(string.format("任务 %d.%d 的源码哈希不符，拒绝执行",
+            ui:log(string.format("Task %d.%d hash mismatch, refusing to run",
                 msg.job or 0, msg.task or 0), col("red", 16384))
             S.cache[msg.hash] = nil
             return
@@ -229,16 +229,16 @@ local function runOnce(opts)
             S.state = "idle"
             net.send(S.master, proto.msg(proto.RESULT, {
                 job = msg.job, task = msg.task, ok = false,
-                err = "本地没有该作业源码（哈希 " .. tostring(msg.hash) .. "）", ms = 0,
+                err = "job source not found locally (hash " .. tostring(msg.hash) .. ")", ms = 0,
             }), util.PROTO_CTRL)
-            ui:log(string.format("任务 %d.%d 缺少作业源码", msg.job or 0, msg.task or 0), col("red", 16384))
+            ui:log(string.format("Task %d.%d missing job source", msg.job or 0, msg.task or 0), col("red", 16384))
             return
         end
         if msg.src and not S.cache[msg.hash] then
             S.cache[msg.hash] = msg.src
             S.cacheOrder[#S.cacheOrder + 1] = msg.hash
             trimCache()
-            ui:log(string.format("已接收作业源码 %s（%s）", tostring(msg.name), util.bytes(#msg.src)))
+            ui:log(string.format("Received job source %s (%s)", tostring(msg.name), util.bytes(#msg.src)))
         end
         S.have = msg.hash
 
@@ -292,14 +292,14 @@ local function runOnce(opts)
         S.task = nil
 
         if cur.cancelled then
-            ui:log(string.format("任务 %d.%d 已取消（%.1fs）", msg.job or 0, msg.task or 0, ms / 1000),
+            ui:log(string.format("Task %d.%d cancelled (%.1fs)", msg.job or 0, msg.task or 0, ms / 1000),
                 col("orange", 2))
         elseif res == nil and err then
             S.fail = S.fail + 1
             net.send(S.master, proto.msg(proto.RESULT, {
                 job = msg.job, task = msg.task, ok = false, err = err, ms = ms,
             }), util.PROTO_CTRL)
-            ui:log(string.format("任务 %d.%d 失败：%s", msg.job or 0, msg.task or 0, tostring(err)),
+            ui:log(string.format("Task %d.%d failed: %s", msg.job or 0, msg.task or 0, tostring(err)),
                 col("red", 16384))
         else
             S.done = S.done + 1
@@ -317,11 +317,11 @@ local function runOnce(opts)
                             local okPush, perr = xfer.waitFor(M0.reg, xid, 60)
                             if okPush then
                                 dataRef = name
-                                ui:log(string.format("任务 %d.%d 结果 %s，走文件通道推给主控",
+                                ui:log(string.format("Task %d.%d result %s, sent via file channel",
                                     msg.job or 0, msg.task or 0, util.bytes(#encoded)),
                                     col("lightGray", 1024))
                             else
-                                ui:log("结果推送失败，改回内联：" .. tostring(perr), col("orange", 2))
+                                ui:log("Result push failed, using inline: " .. tostring(perr), col("orange", 2))
                             end
                         end
                     end
@@ -331,7 +331,7 @@ local function runOnce(opts)
                 job = msg.job, task = msg.task, ok = true,
                 data = dataRef and nil or res, dataRef = dataRef, ms = ms,
             }), util.PROTO_CTRL)
-            ui:log(string.format("任务 %d.%d 完成（%s）", msg.job or 0, msg.task or 0, util.duration(ms)),
+            ui:log(string.format("Task %d.%d done (%s)", msg.job or 0, msg.task or 0, util.duration(ms)),
                 col("lime", 32))
         end
 
@@ -347,7 +347,7 @@ local function runOnce(opts)
             if msg and proto.valid(msg) then
                 local vok, why = net.verify(sender, msg)
                 if not vok then
-                    ui:log(string.format("丢弃 #%s 的消息：%s", tostring(sender), tostring(why)),
+                    ui:log(string.format("Dropped message from #%s: %s", tostring(sender), tostring(why)),
                         col("orange", 2))
                     S.dropped = (S.dropped or 0) + 1
                 else
@@ -357,8 +357,8 @@ local function runOnce(opts)
                 if msg.t == proto.WELCOME and fromMaster then
                     local vok, verr = proto.compatible(msg)
                     if not vok then
-                        ui:log("主控协议版本不兼容：" .. tostring(verr), col("red", 16384))
-                        ui:log("请把本节点与主控升级到同一版本后重试。", col("red", 16384))
+                        ui:log("Master protocol version incompatible: " .. tostring(verr), col("red", 16384))
+                        ui:log("Upgrade worker and master to the same version.", col("red", 16384))
                         S.running = false
                         return
                     end
@@ -374,7 +374,7 @@ local function runOnce(opts)
                     end
                     if S.state == "connecting" then
                         S.state = "idle"
-                        ui:log("已在主控登记，等待任务。", col("lime", 32))
+                        ui:log("Registered with master, waiting for tasks.", col("lime", 32))
                         refresh()
                     end
 
@@ -397,13 +397,13 @@ local function runOnce(opts)
                         reason = msg.reboot and "reboot" or "halt",
                     }), util.PROTO_CTRL)
                     if msg.reboot then
-                        ui:log("收到主控的重启指令，正在重启电脑…", col("orange", 2))
-                        ui:log("（重启后由 /startup.lua 自动拉起新版本的 worker.lua）",
+                        ui:log("Reboot command from master, rebooting...", col("orange", 2))
+                        ui:log("(/startup.lua starts the new worker.lua on reboot)",
                             col("lightGray", 1024))
                         os.sleep(0.6)          -- 给上面那条 bye 留出发送时间
                         os.reboot()            -- 不会返回
                     end
-                    ui:log("收到主控的 halt 指令，节点退出。", col("orange", 2))
+                    ui:log("Halt command from master, worker exiting.", col("orange", 2))
                     return
 
                 elseif msg.t == proto.PING and fromMaster then
@@ -416,7 +416,7 @@ local function runOnce(opts)
                     if who and who ~= S.master then
                         S.master = who
                         S.lastMasterMsg = util.now()
-                        ui:log("发现主控 #" .. tostring(who) .. "，重新登记…", col("lime", 32))
+                        ui:log("Found master #" .. tostring(who) .. ", re-registering...", col("lime", 32))
                         hello()
                     end
                 end
@@ -473,20 +473,20 @@ local function runOnce(opts)
                                         util.PROTO_PUSH)
                                     os.queueEvent("dcpool", name)
                                 else
-                                    ui:log("负载写入失败：" .. tostring(err), col("red", 16384))
+                                    ui:log("Payload write failed: " .. tostring(err), col("red", 16384))
                                 end
                             elseif name == "worker.lua" and #value <= 512 * 1024 then
                                 local ok, err = util.writeFile(util.WORKER_FILE, value)
                                 if ok then
                                     net.send(sender, proto.msg(proto.PUTOK, { xid = msg.xid }),
                                         util.PROTO_PUSH)
-                                    ui:log(string.format("已收到新版本（%s），用主控的 reboot 指令重启后生效",
+                                    ui:log(string.format("New version received (%s); reboot to apply",
                                         util.bytes(#value)), col("lime", 32))
                                 else
-                                    ui:log("写入失败：" .. tostring(err), col("red", 16384))
+                                    ui:log("Write failed: " .. tostring(err), col("red", 16384))
                                 end
                             else
-                                ui:log("拒绝写入未知文件：" .. name, col("red", 16384))
+                                ui:log("Refusing unknown file: " .. name, col("red", 16384))
                             end
 
                         elseif xfer.recvExpired(r) then
@@ -519,10 +519,10 @@ local function runOnce(opts)
             local reHello = (S.cfg.reHelloAfter or 8) * 1000
             local reDiscover = (S.cfg.rediscoverAfter or 25) * 1000
             if silent > reDiscover then
-                ui:log("与主控失联，重新搜索…", col("orange", 2))
+                ui:log("Lost master, searching again...", col("orange", 2))
                 S.master = nil
                 if discover() then
-                    ui:log("重新找到主控 #" .. tostring(S.master))
+                    ui:log("Master found again #" .. tostring(S.master))
                     hello()
                     S.lastMasterMsg = util.now()
                 else
@@ -538,9 +538,9 @@ local function runOnce(opts)
             local rebootAfter = tonumber(opts.rebootAfter) or 0
             if rebootAfter > 0 and S.master == nil
                 and (nowMs - (S.lastMasterMsg or nowMs)) > rebootAfter * 1000 then
-                ui:log(string.format("已经 %d 秒找不到主控，按看门狗设置重启电脑…", rebootAfter),
+                ui:log(string.format("No master for %d s, rebooting per watchdog...", rebootAfter),
                     col("orange", 2))
-                fileLog("看门狗：联系不上主控，重启电脑")
+                fileLog("watchdog: master unreachable, rebooting")
                 sleep(0.5)
                 os.reboot()
             end
@@ -561,30 +561,30 @@ local function runOnce(opts)
 
     -- ── 6. 启动 ──────────────────────────────────────────────────────
     refresh()
-    ui:log(string.format("节点名：%s（用 label set <名字> 可以改名）", S.name))
+    ui:log(string.format("Worker name: %s (use label set <name> to rename)", S.name))
 
     -- 共享密钥（可选）：设了就启用消息签名与防重放
     local savedKey = rawget(_G, "DCNET_KEY") or settings.get("dcnet.key")
     if savedKey and savedKey ~= "" then
         local kok, kerr = net.setKey(savedKey)
         if kok then
-            ui:log("消息签名已启用（密钥指纹 " .. tostring(net.fingerprint()) .. "）",
+            ui:log("Message signing enabled (key fingerprint " .. tostring(net.fingerprint()) .. ")",
                 col("lime", 32))
         else
-            ui:log("启用消息签名失败：" .. tostring(kerr), col("orange", 2))
+            ui:log("Failed to enable message signing: " .. tostring(kerr), col("orange", 2))
         end
     end
-    ui:log("按 Ctrl+T 可以终止节点。")
+    ui:log("Press Ctrl+T to stop the worker.")
 
     local ok, err = pcall(parallel.waitForAny, netLoop, workLoop, beatLoop, pushLoop)
     if not opts.headless then term.redirect(term.native()) end
     if not ok then
-        printError("[dcnet] 节点异常终止: " .. tostring(err))
-        fileLog("节点异常终止：" .. tostring(err))
+        printError("[dcnet] Worker crashed: " .. tostring(err))
+        fileLog("worker crashed: " .. tostring(err))
         return false, tostring(err)
     end
-    print("[dcnet] 节点已停止。")
-    fileLog("节点正常停止")
+    print("[dcnet] Worker stopped.")
+    fileLog("worker stopped normally")
     return true
 end
 
@@ -606,14 +606,14 @@ function M.run(opts)
 
         restarts = restarts + 1
         util.appendLog(util.ROOT .. "/logs/node-" .. os.getComputerID() .. ".log",
-            util.logLine(string.format("第 %d 次异常：%s", restarts, tostring(err))))
+            util.logLine(string.format("Restart %d after error: %s", restarts, tostring(err))))
 
         if restarts > maxRestarts then
-            printError(string.format("[dcnet] 节点连续异常 %d 次，停止自动重启：%s",
+            printError(string.format("[dcnet] Worker failed %d times in a row, no auto-restart: %s",
                 restarts, tostring(err)))
             return false, err
         end
-        print(string.format("[dcnet] 节点异常（%s），%d 秒后自动重启（第 %d/%d 次）",
+        print(string.format("[dcnet] Worker error (%s), auto-restart in %d s (%d/%d)",
             tostring(err), delay, restarts, maxRestarts))
         sleep(delay)
     end

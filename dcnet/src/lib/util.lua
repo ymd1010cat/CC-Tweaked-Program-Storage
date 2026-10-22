@@ -140,8 +140,8 @@ function M.fit(s, cols)
     cols = math.floor(tonumber(cols) or 0)
     if cols <= 0 then return "" end
     if M.textWidth(s) <= cols then return s end
-    -- 省略号本身也占宽度（"…" 是 2 列），必须一起算进去
-    local ell = "…"
+    -- 省略号本身也占宽度（"..." 是 3 列），必须一起算进去
+    local ell = "..."
     local limit = math.max(0, cols - M.textWidth(ell))
     local out, w, i, n = {}, 0, 1, #s
     while i <= n do
@@ -210,9 +210,9 @@ function M.ensureDir(path)
 end
 
 function M.readFile(path)
-    if not fs.exists(path) or fs.isDir(path) then return nil, "文件不存在: " .. tostring(path) end
+    if not fs.exists(path) or fs.isDir(path) then return nil, "file not found: " .. tostring(path) end
     local h = fs.open(path, "r")
-    if not h then return nil, "无法打开: " .. tostring(path) end
+    if not h then return nil, "cannot open: " .. tostring(path) end
     local data = h.readAll()
     h.close()
     return data
@@ -222,7 +222,7 @@ function M.writeFile(path, data)
     local dir = path:match("^(.*)/[^/]*$")
     if dir and dir ~= "" then M.ensureDir(dir) end
     local h = fs.open(path, "w")
-    if not h then return false, "无法写入: " .. tostring(path) end
+    if not h then return false, "cannot write: " .. tostring(path) end
     h.write(data)
     h.close()
     return true
@@ -295,7 +295,7 @@ function M.saveCfg(key, value)
         settings.set(M.CFG_PREFIX .. key, value)
         return true
     end
-    return false, "本机没有 settings API"
+    return false, "settings API not available"
 end
 
 --- 生成配置表的多行展示
@@ -331,9 +331,9 @@ end
 --- 编译并立刻执行，返回执行结果
 function M.runChunk(src, chunkname, env)
     local fn, err = M.loadChunk(src, chunkname, env)
-    if not fn then return nil, "编译失败: " .. tostring(err) end
+    if not fn then return nil, "compile failed: " .. tostring(err) end
     local ok, res = pcall(fn)
-    if not ok then return nil, "运行失败: " .. tostring(res) end
+    if not ok then return nil, "run failed: " .. tostring(res) end
     return res
 end
 
@@ -376,14 +376,14 @@ function M.parseArgs(tokens, params)
             out[p.name] = p.default
         else
             local v, err = M.coerce(raw, p.type)
-            if err then return nil, string.format("参数 %s 无效: %s", p.name, err) end
+            if err then return nil, string.format("invalid argument %s: %s", p.name, err) end
             out[p.name] = v
         end
         named[p.name] = nil
     end
     for k, v in pairs(named) do unknown[#unknown + 1] = k .. "=" .. tostring(v) end
     if #unknown > 0 then
-        return nil, "未知参数: " .. table.concat(unknown, ", ")
+        return nil, "unknown argument: " .. table.concat(unknown, ", ")
     end
     return out
 end
@@ -391,12 +391,12 @@ end
 function M.coerce(raw, kind)
     if kind == "number" then
         local n = tonumber(raw)
-        if not n then return nil, "不是数字" end
+        if not n then return nil, "not a number" end
         return n
     elseif kind == "boolean" then
         if raw == true or raw == "true" or raw == "1" or raw == "yes" then return true end
         if raw == false or raw == "false" or raw == "0" or raw == "no" then return false end
-        return nil, "不是布尔值"
+        return nil, "not a boolean"
     elseif kind == "string" or kind == nil then
         return tostring(raw)
     end

@@ -17,14 +17,14 @@ local SHADES = " .:-=+*#%@"
 
 return {
     name    = "mandelbrot",
-    summary = "并行渲染曼德博集合（演示数据块型作业）",
+    summary = "Parallel Mandelbrot render (data-block job demo)",
     -- 它的 reduce 是按行号拼接，不满足结合律，所以明确拒绝两级汇总
     twoLevel = false,
     params  = {
-        { name = "width",   type = "number", default = 48,   help = "图像宽度" },
-        { name = "height",  type = "number", default = 14,   help = "图像高度" },
-        { name = "rows",    type = "number", default = 2,    help = "每个任务渲染的行数" },
-        { name = "maxIter", type = "number", default = 32,   help = "最大迭代次数" },
+        { name = "width",   type = "number", default = 48,   help = "image width" },
+        { name = "height",  type = "number", default = 14,   help = "image height" },
+        { name = "rows",    type = "number", default = 2,    help = "rows rendered per task" },
+        { name = "maxIter", type = "number", default = 32,   help = "max iterations" },
         { name = "xmin",    type = "number", default = -2.1 },
         { name = "xmax",    type = "number", default = 0.7 },
         { name = "ymin",    type = "number", default = -1.1 },
@@ -71,7 +71,7 @@ return {
                 row[#row + 1] = SHADES:sub(idx, idx)
             end
             lines[#lines + 1] = table.concat(row)
-            ctx.progress((y - task.y0 + 1) / total, string.format("行 %d", y))
+            ctx.progress((y - task.y0 + 1) / total, string.format("row %d", y))
             ctx.tick()
             if ctx.canceled() then break end
         end

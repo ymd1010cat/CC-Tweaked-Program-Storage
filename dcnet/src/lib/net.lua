@@ -20,7 +20,7 @@ local function select_netlib()
     local ok, rpv = pcall(require, "rpvnet")
     if not ok or type(rpv) ~= "table" then
         if want == "rpv" then
-            error("dcnet: transport=rpv 但 lib/rpvnet.lua 不可用: " .. tostring(rpv), 0)
+            error("dcnet: transport=rpv but lib/rpvnet.lua unavailable: " .. tostring(rpv), 0)
         end
         return rednet, "rednet"
     end
@@ -79,10 +79,10 @@ function M.setKey(key)
         return true
     end
     if not M.signingSupported() then
-        return nil, "本机没有 bit32，无法启用消息签名"
+        return nil, "no bit32, cannot enable message signing"
     end
     if #key < 8 then
-        return nil, "密钥太短（至少 8 个字符）"
+        return nil, "key too short (at least 8 characters)"
     end
     M.key = tostring(key)
     if not M.sid then
@@ -158,34 +158,34 @@ end
 --- 校验一条收到的消息。返回 true / false, 原因
 function M.verify(sender, msg)
     if not M.hasKey() then return true end                 -- 没启用签名：放行
-    if type(msg) ~= "table" then return false, "消息格式非法" end
+    if type(msg) ~= "table" then return false, "invalid message format" end
     if not (msg.sid and msg.seq and msg.ts and msg.sig) then
         M.stats.unsigned = M.stats.unsigned + 1
-        M.lastBad = string.format("#%s 发来未签名的消息（type=%s）", tostring(sender), tostring(msg.t))
-        return false, "未签名"
+        M.lastBad = string.format("#%s sent unsigned message (type=%s)", tostring(sender), tostring(msg.t))
+        return false, "unsigned"
     end
     -- 时间戳
     local now = os.epoch and os.epoch("utc") or (os.time() * 1000)
     if type(msg.ts) ~= "number" or math.abs(now - msg.ts) > M.SEQ_SKEW * 1000 then
         M.stats.stale = M.stats.stale + 1
-        M.lastBad = string.format("#%s 的消息时间戳偏差过大", tostring(sender))
-        return false, "时间戳无效"
+        M.lastBad = string.format("#%s message timestamp skew too large", tostring(sender))
+        return false, "invalid timestamp"
     end
     -- 签名
     local bare = M._bare(msg)
     local want = crypto.hmacSha256(M.key, crypto.canonical(bare))
     if not want or not crypto.equal(want, tostring(msg.sig)) then
         M.stats.badSig = M.stats.badSig + 1
-        M.lastBad = string.format("#%s 的消息签名不对（type=%s）", tostring(sender), tostring(msg.t))
-        return false, "签名错误"
+        M.lastBad = string.format("#%s bad message signature (type=%s)", tostring(sender), tostring(msg.t))
+        return false, "bad signature"
     end
     -- 防重放：同一会话号必须严格递增
     local rec = M.seenSids[msg.sid]
     if rec and tonumber(msg.seq) and tonumber(msg.seq) <= rec.seq then
         M.stats.replay = M.stats.replay + 1
-        M.lastBad = string.format("#%s 重复/回退的消息被丢弃（seq %s ≤ %s）",
+        M.lastBad = string.format("#%s duplicate/regressed message dropped (seq %s <= %s)",
             tostring(sender), tostring(msg.seq), tostring(rec.seq))
-        return false, "重复消息"
+        return false, "duplicate message"
     end
     M.seenSids[msg.sid] = { seq = tonumber(msg.seq) or 0, at = util.mono() }
     -- 清理过期会话记录，别让它无限涨
@@ -203,11 +203,11 @@ end
 --- 认证失败时的统计行（给 net 指令用）
 function M.statsLines()
     local s = M.stats
-    local out = { string.format("签名：已签 %d　放行 %d　丢弃 %d", s.signed, s.fresh,
+    local out = { string.format("signature: signed %d  accepted %d  dropped %d", s.signed, s.fresh,
         s.badSig + s.replay + s.stale + s.unsigned) }
-    out[#out + 1] = string.format("  未签名 %d　签名错误 %d　重复 %d　时间戳无效 %d",
+    out[#out + 1] = string.format("  unsigned %d  bad signature %d  duplicate %d  stale %d",
         s.unsigned, s.badSig, s.replay, s.stale)
-    if M.lastBad then out[#out + 1] = "  最近一次拒绝：" .. M.lastBad end
+    if M.lastBad then out[#out + 1] = "  last rejection: " .. M.lastBad end
     return out
 end
 
@@ -245,7 +245,7 @@ end
 function M.open()
     local modems = M.findModems()
     if #modems == 0 then
-        return nil, "没有检测到调制解调器（modem）"
+        return nil, "no modem detected"
     end
     -- 已经有打开的就直接复用，避免重复 open 报错
     for _, md in ipairs(modems) do
@@ -257,7 +257,7 @@ function M.open()
         -- 换下一个 modem 再试
         if err then M.lastError = tostring(err) end
     end
-    return nil, "无法打开任何调制解调器" .. (M.lastError and (": " .. M.lastError) or "")
+    return nil, "cannot open any modem" .. (M.lastError and (": " .. M.lastError) or "")
 end
 
 --- 打开**所有**调制解调器。
@@ -287,19 +287,19 @@ function M.describe(list)
     for _, md in ipairs(list or {}) do
         if md.wireless then wireless = wireless + 1 else wired = wired + 1 end
     end
-    if wired + wireless == 0 then return "无" end
-    return string.format("%d 有线 / %d 无线", wired, wireless)
+    if wired + wireless == 0 then return "none" end
+    return string.format("%d wired / %d wireless", wired, wireless)
 end
 
 --- 发送单播。返回 true / false, err
 function M.send(target, msg, proto)
-    if type(target) ~= "number" then return false, "目标 ID 非法" end
+    if type(target) ~= "number" then return false, "invalid target ID" end
     -- 负数 ID 是云端虚拟端点，不走 rednet
-    if target <= 0 then return false, "目标不是网络节点" end
+    if target <= 0 then return false, "target is not a network node" end
     if type(msg) == "table" then M.sign(msg) end
     local ok, res = pcall(netlib.send, target, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
+    if res == false then return false, "network not open (" .. tostring(TRANSPORT) .. ")" end
     return true
 end
 
@@ -308,7 +308,7 @@ function M.broadcast(msg, proto)
     if type(msg) == "table" then M.sign(msg) end
     local ok, res = pcall(netlib.broadcast, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
+    if res == false then return false, "network not open (" .. tostring(TRANSPORT) .. ")" end
     return true
 end
 

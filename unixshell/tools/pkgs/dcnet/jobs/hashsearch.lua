@@ -15,12 +15,12 @@
 
 return {
     name    = "hashsearch",
-    summary = "并行暴力搜索（演示提前终止型作业）",
+    summary = "Parallel brute-force search (early-termination job demo)",
     params  = {
-        { name = "from",    type = "number", default = 1,       help = "起点" },
-        { name = "to",      type = "number", default = 4000000, help = "终点" },
-        { name = "chunk",   type = "number", default = 25000,   help = "每个任务扫描范围" },
-        { name = "modulus", type = "number", default = 65536,   help = "目标整除因子" },
+        { name = "from",    type = "number", default = 1,       help = "start" },
+        { name = "to",      type = "number", default = 4000000, help = "end" },
+        { name = "chunk",   type = "number", default = 25000,   help = "scan range per task" },
+        { name = "modulus", type = "number", default = 65536,   help = "target divisor" },
     },
 
     split = function(a)
@@ -73,9 +73,9 @@ return {
 
     format = function(res)
         if res.hit then
-            return string.format("最小命中 n = %d（hash(\"dc%d\") %% %d == 0），共扫描 %d 个数",
+            return string.format("min hit n = %d (hash(\"dc%d\") %% %d == 0), scanned %d values",
                 res.hit, res.hit, res.modulus, res.scanned)
         end
-        return string.format("[%d, %d] 内没有找到能被 %d 整除的哈希", 0, 0, res.modulus)
+        return string.format("[%d, %d] no hash divisible by %d found", 0, 0, res.modulus)
     end,
 }

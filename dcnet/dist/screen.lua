@@ -13,7 +13,7 @@ local function __dc_load(name)
     local cached = __dc_cache[name]
     if cached ~= nil then return cached end
     local fn = __dc_modules[name]
-    if not fn then error("dcnet: 找不到模块 " .. tostring(name), 0) end
+    if not fn then error("dcnet: module not found: " .. tostring(name), 0) end
     local mod = fn()
     if mod == nil then mod = true end
     __dc_cache[name] = mod
@@ -143,7 +143,7 @@ function M.fit(s, cols)
     if cols <= 0 then return "" end
     if M.textWidth(s) <= cols then return s end
 
-    local ell = "…"
+    local ell = "..."
     local limit = math.max(0, cols - M.textWidth(ell))
     local out, w, i, n = {}, 0, 1, #s
     while i <= n do
@@ -205,9 +205,9 @@ function M.ensureDir(path)
 end
 
 function M.readFile(path)
-    if not fs.exists(path) or fs.isDir(path) then return nil, "文件不存在: " .. tostring(path) end
+    if not fs.exists(path) or fs.isDir(path) then return nil, "file not found: " .. tostring(path) end
     local h = fs.open(path, "r")
-    if not h then return nil, "无法打开: " .. tostring(path) end
+    if not h then return nil, "cannot open: " .. tostring(path) end
     local data = h.readAll()
     h.close()
     return data
@@ -217,7 +217,7 @@ function M.writeFile(path, data)
     local dir = path:match("^(.*)/[^/]*$")
     if dir and dir ~= "" then M.ensureDir(dir) end
     local h = fs.open(path, "w")
-    if not h then return false, "无法写入: " .. tostring(path) end
+    if not h then return false, "cannot write: " .. tostring(path) end
     h.write(data)
     h.close()
     return true
@@ -281,7 +281,7 @@ function M.saveCfg(key, value)
         settings.set(M.CFG_PREFIX .. key, value)
         return true
     end
-    return false, "本机没有 settings API"
+    return false, "settings API not available"
 end
 
 function M.cfgLines(cfg, meta)
@@ -309,9 +309,9 @@ end
 
 function M.runChunk(src, chunkname, env)
     local fn, err = M.loadChunk(src, chunkname, env)
-    if not fn then return nil, "编译失败: " .. tostring(err) end
+    if not fn then return nil, "compile failed: " .. tostring(err) end
     local ok, res = pcall(fn)
-    if not ok then return nil, "运行失败: " .. tostring(res) end
+    if not ok then return nil, "run failed: " .. tostring(res) end
     return res
 end
 
@@ -351,14 +351,14 @@ function M.parseArgs(tokens, params)
             out[p.name] = p.default
         else
             local v, err = M.coerce(raw, p.type)
-            if err then return nil, string.format("参数 %s 无效: %s", p.name, err) end
+            if err then return nil, string.format("invalid argument %s: %s", p.name, err) end
             out[p.name] = v
         end
         named[p.name] = nil
     end
     for k, v in pairs(named) do unknown[#unknown + 1] = k .. "=" .. tostring(v) end
     if #unknown > 0 then
-        return nil, "未知参数: " .. table.concat(unknown, ", ")
+        return nil, "unknown argument: " .. table.concat(unknown, ", ")
     end
     return out
 end
@@ -366,12 +366,12 @@ end
 function M.coerce(raw, kind)
     if kind == "number" then
         local n = tonumber(raw)
-        if not n then return nil, "不是数字" end
+        if not n then return nil, "not a number" end
         return n
     elseif kind == "boolean" then
         if raw == true or raw == "true" or raw == "1" or raw == "yes" then return true end
         if raw == false or raw == "false" or raw == "0" or raw == "no" then return false end
-        return nil, "不是布尔值"
+        return nil, "not a boolean"
     elseif kind == "string" or kind == nil then
         return tostring(raw)
     end
@@ -436,7 +436,7 @@ end
 function M.compatible(m)
     local v = tonumber(m and m.ver) or 0
     if v ~= M.VERSION then
-        return false, string.format("协议版本不匹配（对端 %d，本机 %d）", v, M.VERSION)
+        return false, string.format("protocol version mismatch (peer %d, local %d)", v, M.VERSION)
     end
     return true
 end
@@ -455,7 +455,7 @@ local function select_netlib()
     local ok, rpv = pcall(require, "rpvnet")
     if not ok or type(rpv) ~= "table" then
         if want == "rpv" then
-            error("dcnet: transport=rpv 但 lib/rpvnet.lua 不可用: " .. tostring(rpv), 0)
+            error("dcnet: transport=rpv but lib/rpvnet.lua unavailable: " .. tostring(rpv), 0)
         end
         return rednet, "rednet"
     end
@@ -499,10 +499,10 @@ function M.setKey(key)
         return true
     end
     if not M.signingSupported() then
-        return nil, "本机没有 bit32，无法启用消息签名"
+        return nil, "no bit32, cannot enable message signing"
     end
     if #key < 8 then
-        return nil, "密钥太短（至少 8 个字符）"
+        return nil, "key too short (at least 8 characters)"
     end
     M.key = tostring(key)
     if not M.sid then
@@ -573,34 +573,34 @@ end
 
 function M.verify(sender, msg)
     if not M.hasKey() then return true end
-    if type(msg) ~= "table" then return false, "消息格式非法" end
+    if type(msg) ~= "table" then return false, "invalid message format" end
     if not (msg.sid and msg.seq and msg.ts and msg.sig) then
         M.stats.unsigned = M.stats.unsigned + 1
-        M.lastBad = string.format("#%s 发来未签名的消息（type=%s）", tostring(sender), tostring(msg.t))
-        return false, "未签名"
+        M.lastBad = string.format("#%s sent unsigned message (type=%s)", tostring(sender), tostring(msg.t))
+        return false, "unsigned"
     end
 
     local now = os.epoch and os.epoch("utc") or (os.time() * 1000)
     if type(msg.ts) ~= "number" or math.abs(now - msg.ts) > M.SEQ_SKEW * 1000 then
         M.stats.stale = M.stats.stale + 1
-        M.lastBad = string.format("#%s 的消息时间戳偏差过大", tostring(sender))
-        return false, "时间戳无效"
+        M.lastBad = string.format("#%s message timestamp skew too large", tostring(sender))
+        return false, "invalid timestamp"
     end
 
     local bare = M._bare(msg)
     local want = crypto.hmacSha256(M.key, crypto.canonical(bare))
     if not want or not crypto.equal(want, tostring(msg.sig)) then
         M.stats.badSig = M.stats.badSig + 1
-        M.lastBad = string.format("#%s 的消息签名不对（type=%s）", tostring(sender), tostring(msg.t))
-        return false, "签名错误"
+        M.lastBad = string.format("#%s bad message signature (type=%s)", tostring(sender), tostring(msg.t))
+        return false, "bad signature"
     end
 
     local rec = M.seenSids[msg.sid]
     if rec and tonumber(msg.seq) and tonumber(msg.seq) <= rec.seq then
         M.stats.replay = M.stats.replay + 1
-        M.lastBad = string.format("#%s 重复/回退的消息被丢弃（seq %s ≤ %s）",
+        M.lastBad = string.format("#%s duplicate/regressed message dropped (seq %s <= %s)",
             tostring(sender), tostring(msg.seq), tostring(rec.seq))
-        return false, "重复消息"
+        return false, "duplicate message"
     end
     M.seenSids[msg.sid] = { seq = tonumber(msg.seq) or 0, at = util.mono() }
 
@@ -617,11 +617,11 @@ end
 
 function M.statsLines()
     local s = M.stats
-    local out = { string.format("签名：已签 %d　放行 %d　丢弃 %d", s.signed, s.fresh,
+    local out = { string.format("signature: signed %d  accepted %d  dropped %d", s.signed, s.fresh,
         s.badSig + s.replay + s.stale + s.unsigned) }
-    out[#out + 1] = string.format("  未签名 %d　签名错误 %d　重复 %d　时间戳无效 %d",
+    out[#out + 1] = string.format("  unsigned %d  bad signature %d  duplicate %d  stale %d",
         s.unsigned, s.badSig, s.replay, s.stale)
-    if M.lastBad then out[#out + 1] = "  最近一次拒绝：" .. M.lastBad end
+    if M.lastBad then out[#out + 1] = "  last rejection: " .. M.lastBad end
     return out
 end
 
@@ -657,7 +657,7 @@ end
 function M.open()
     local modems = M.findModems()
     if #modems == 0 then
-        return nil, "没有检测到调制解调器（modem）"
+        return nil, "no modem detected"
     end
 
     for _, md in ipairs(modems) do
@@ -669,7 +669,7 @@ function M.open()
 
         if err then M.lastError = tostring(err) end
     end
-    return nil, "无法打开任何调制解调器" .. (M.lastError and (": " .. M.lastError) or "")
+    return nil, "cannot open any modem" .. (M.lastError and (": " .. M.lastError) or "")
 end
 
 function M.openAll()
@@ -694,18 +694,18 @@ function M.describe(list)
     for _, md in ipairs(list or {}) do
         if md.wireless then wireless = wireless + 1 else wired = wired + 1 end
     end
-    if wired + wireless == 0 then return "无" end
-    return string.format("%d 有线 / %d 无线", wired, wireless)
+    if wired + wireless == 0 then return "none" end
+    return string.format("%d wired / %d wireless", wired, wireless)
 end
 
 function M.send(target, msg, proto)
-    if type(target) ~= "number" then return false, "目标 ID 非法" end
+    if type(target) ~= "number" then return false, "invalid target ID" end
 
-    if target <= 0 then return false, "目标不是网络节点" end
+    if target <= 0 then return false, "target is not a network node" end
     if type(msg) == "table" then M.sign(msg) end
     local ok, res = pcall(netlib.send, target, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
+    if res == false then return false, "network not open (" .. tostring(TRANSPORT) .. ")" end
     return true
 end
 
@@ -713,7 +713,7 @@ function M.broadcast(msg, proto)
     if type(msg) == "table" then M.sign(msg) end
     local ok, res = pcall(netlib.broadcast, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
+    if res == false then return false, "network not open (" .. tostring(TRANSPORT) .. ")" end
     return true
 end
 
@@ -766,12 +766,12 @@ function M.run(opts)
 
     local modems, failed = net.openAll()
     if #modems == 0 then
-        printError("[dcnet] 网络屏幕：没有检测到调制解调器（modem）")
-        print("[dcnet] 屏幕电脑也要接在有线网络（或同一无线网络）里。")
+        printError("[dcnet] Network screen: no modem detected")
+        print("[dcnet] Screen computer must be on the wired (or same wireless) network.")
         return false
     end
     for _, e in ipairs(failed or {}) do
-        print("[dcnet] 网络屏幕：打开 modem 失败：" .. tostring(e))
+        print("[dcnet] Network screen: failed to open modem: " .. tostring(e))
     end
 
     local key = opts.key
@@ -782,17 +782,17 @@ function M.run(opts)
     if key ~= "" then
         local ok, err = net.setKey(key)
         if not ok then
-            print("[dcnet] 网络屏幕：启用消息签名失败：" .. tostring(err))
+            print("[dcnet] Network screen: failed to enable message signing: " .. tostring(err))
         else
-            print("[dcnet] 网络屏幕：消息签名已启用（指纹 " ..
-                tostring(net.fingerprint()) .. "）")
+            print("[dcnet] Network screen: message signing enabled (fingerprint " ..
+                tostring(net.fingerprint()) .. ")")
         end
     end
 
     local monitors = panel.findMonitors()
     if #monitors == 0 then
-        printError("[dcnet] 网络屏幕：这台电脑上没有显示器（monitor）")
-        print("[dcnet] 把显示器贴在电脑侧面，或用 screen.lua <外设名> 指定。")
+        printError("[dcnet] Network screen: no monitor on this computer")
+        print("[dcnet] Attach a monitor to this computer, or pass screen.lua <name>.")
         return false
     end
     local want = tostring(opts.monitor or "")
@@ -803,12 +803,12 @@ function M.run(opts)
     if not pick then
         local names = {}
         for _, m in ipairs(monitors) do names[#names + 1] = m.name end
-        printError("[dcnet] 网络屏幕：找不到显示器 " .. want ..
-            "；可用：" .. table.concat(names, ", "))
+        printError("[dcnet] Network screen: monitor not found " .. want ..
+            "; available: " .. table.concat(names, ", "))
         return false
     end
     if not pick.periph then
-        printError("[dcnet] 网络屏幕：无法打开显示器 " .. pick.name)
+        printError("[dcnet] Network screen: cannot open monitor " .. pick.name)
         return false
     end
 
@@ -837,33 +837,33 @@ function M.run(opts)
 
     local function statusLines()
         local out = {}
-        out[#out + 1] = { text = string.format("dcnet 网络屏幕 #%d", os.getComputerID()),
+        out[#out + 1] = { text = string.format("dcnet network screen #%d", os.getComputerID()),
             colour = col("lime", 32) }
-        out[#out + 1] = { text = string.format("显示器 %s  %dx%d", monName, w, h),
+        out[#out + 1] = { text = string.format("Monitor %s  %dx%d", monName, w, h),
             colour = col("lightGray", 1024) }
         if masterId and util.mono() - masterSeen <= timeout then
-            out[#out + 1] = { text = string.format("已连接主控 #%d", masterId),
+            out[#out + 1] = { text = string.format("Connected to master #%d", masterId),
                 colour = col("lime", 32) }
-            out[#out + 1] = { text = string.format("已收到 %d 帧面板", frames),
+            out[#out + 1] = { text = string.format("Received %d panel frames", frames),
                 colour = col("white", 1) }
         elseif offWhy == "off" then
-            out[#out + 1] = { text = "主控已关闭网络屏幕推送", colour = col("orange", 2) }
-            out[#out + 1] = { text = "在主控上执行 mon net on 重新开启",
+            out[#out + 1] = { text = "Master disabled network screen push", colour = col("orange", 2) }
+            out[#out + 1] = { text = "Run mon net on at the master to re-enable",
                 colour = col("lightGray", 1024) }
         elseif offWhy == "full" then
-            out[#out + 1] = { text = "主控的网络屏幕数量已满", colour = col("orange", 2) }
-            out[#out + 1] = { text = "在主控上 mon net 看列表 / 踢掉不用的屏幕",
+            out[#out + 1] = { text = "Master's network screen slots are full", colour = col("orange", 2) }
+            out[#out + 1] = { text = "Run mon net at master to list or kick screens",
                 colour = col("lightGray", 1024) }
         elseif offWhy == "ver" then
-            out[#out + 1] = { text = "协议版本不兼容", colour = col("red", 16384) }
-            out[#out + 1] = { text = "请把 screen.lua 更新到与主控相同的版本",
+            out[#out + 1] = { text = "Protocol version incompatible", colour = col("red", 16384) }
+            out[#out + 1] = { text = "Update screen.lua to match the master version",
                 colour = col("lightGray", 1024) }
         elseif offWhy == "kick" then
-            out[#out + 1] = { text = "已被主控断开", colour = col("orange", 2) }
-            out[#out + 1] = { text = "下次心跳会自动重连", colour = col("lightGray", 1024) }
+            out[#out + 1] = { text = "Disconnected by master", colour = col("orange", 2) }
+            out[#out + 1] = { text = "Will reconnect on next heartbeat", colour = col("lightGray", 1024) }
         else
-            out[#out + 1] = { text = "正在寻找主控…", colour = col("yellow", 256) }
-            out[#out + 1] = { text = "在主控上输入 mon 查看网络屏幕",
+            out[#out + 1] = { text = "Looking for master...", colour = col("yellow", 256) }
+            out[#out + 1] = { text = "Type mon at the master to view network screens",
                 colour = col("lightGray", 1024) }
         end
         out[#out + 1] = { text = os.date("%H:%M:%S"), colour = col("gray", 128) }
@@ -878,7 +878,7 @@ function M.run(opts)
     end
 
     panel.draw(dev, statusLines(), h)
-    print(string.format("[dcnet] 网络屏幕 %s 已启动：显示器 %s（%dx%d），等待主控…",
+    print(string.format("[dcnet] Network screen %s started: monitor %s (%dx%d), waiting for master...",
         name, monName, w, h))
 
     while true do
@@ -905,7 +905,7 @@ function M.run(opts)
             if not vok then
                 if now - lastBad > 10 then
                     lastBad = now
-                    print("[dcnet] 网络屏幕：丢弃一条消息（" .. tostring(why) .. "）")
+                    print("[dcnet] Network screen: dropped a message (" .. tostring(why) .. ")")
                 end
             elseif msg.t == proto.DISP and type(msg.lines) == "string" then
                 local parsed, lines = pcall(textutils.unserialize, msg.lines)
@@ -976,7 +976,7 @@ local K = {
 }
 
 function M.sha256bin(msg)
-    if not M.available then return nil, "本机没有 bit32，无法计算哈希" end
+    if not M.available then return nil, "no bit32, cannot compute hash" end
     msg = tostring(msg or "")
     local h = {
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -1046,12 +1046,12 @@ function M.sha256(msg)
 end
 
 function M.hmacSha256bin(key, msg)
-    if not M.available then return nil, "本机没有 bit32，无法计算 HMAC" end
+    if not M.available then return nil, "no bit32, cannot compute HMAC" end
     key = tostring(key or "")
     msg = tostring(msg or "")
     if #key > 64 then
         local k = M.sha256bin(key)
-        if not k then return nil, "密钥哈希失败" end
+        if not k then return nil, "key hash failed" end
         key = k
     end
     key = key .. string.rep("\0", 64 - #key)
@@ -1062,7 +1062,7 @@ function M.hmacSha256bin(key, msg)
         opad[i] = string.char(B.bxor(b, 0x5c))
     end
     local inner = M.sha256bin(table.concat(ipad) .. msg)
-    if not inner then return nil, "内部哈希失败" end
+    if not inner then return nil, "inner hash failed" end
     return M.sha256bin(table.concat(opad) .. inner)
 end
 
@@ -1138,7 +1138,7 @@ function M.selftest()
     expect("sha256(\"abc\")",
         M.sha256("abc"),
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-    expect("sha256(长串)",
+    expect("sha256(long string)",
         M.sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
         "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
 
@@ -1267,13 +1267,13 @@ function Panel:attach(target)
         self.periph, self.name = target, (target.__name or "fake")
     elseif type(target) == "string" and target ~= "" then
         if not isMonitorType(M.typeOf(target)) then
-            return nil, "不是显示器外设: " .. target
+            return nil, "not a monitor peripheral: " .. target
         end
         local ok, dev = pcall(peripheral.wrap, target)
-        if not ok or not dev then return nil, "无法打开显示器: " .. target end
+        if not ok or not dev then return nil, "cannot open monitor: " .. target end
         self.periph, self.name = dev, target
     else
-        return nil, "没有指定显示器"
+        return nil, "no monitor specified"
     end
     pcall(function() self.periph.setTextScale(self.scale) end)
     local ok2, w, h = pcall(function() return self.periph.getSize() end)
@@ -1293,7 +1293,7 @@ end
 
 function Panel:attachAuto()
     local list = M.findMonitors()
-    if #list == 0 then return nil, "没有检测到显示器" end
+    if #list == 0 then return nil, "no monitor detected" end
     local ok, err = self:attach(list[1].name)
     if not ok then return nil, err end
     return self.name
@@ -1314,11 +1314,11 @@ function M.linesFor(sched, cloud, w, h)
         out[#out + 1] = { text = util.trunc(text, w), colour = colour }
     end
 
-    add(string.format("dcnet 主控 #%d   %s", os.getComputerID(), os.date("%H:%M:%S")),
+    add(string.format("dcnet master #%d   %s", os.getComputerID(), os.date("%H:%M:%S")),
         col("lime", 32))
 
     if w < 20 or h < 4 then
-        add(string.format("节点 %d/%d 作业 %d", sched:onlineCount(), sched:workerCount(),
+        add(string.format("Workers %d/%d jobs %d", sched:onlineCount(), sched:workerCount(),
             sched:runningCount()), col("white", 1))
         return out
     end
@@ -1327,10 +1327,10 @@ function M.linesFor(sched, cloud, w, h)
     for _, j in pairs(sched.jobs) do
         if j.state == "queued" then queued = queued + 1 end
     end
-    add(string.format("节点 %d/%d 在线   并发 %d/%d   队列 %d%s",
+    add(string.format("Workers %d/%d online   parallel %d/%d   queue %d%s",
         sched:onlineCount(), sched:workerCount(), sched:runningCount(),
         math.max(1, sched.cfg.maxParallel or 1), queued,
-        sched.paused and "  [已暂停]" or ""), col("white", 1))
+        sched.paused and "  [paused]" or ""), col("white", 1))
 
     local jobs = sched:runningJobs()
     for i = 1, math.min(#jobs, 4) do
@@ -1339,7 +1339,7 @@ function M.linesFor(sched, cloud, w, h)
         add(string.format("#%d %s %s %3d%%", job.id, util.trunc(job.name, 12),
             util.bar(pct, 12), math.floor(pct * 100)),
             job.state == "running" and col("lightBlue", 512) or col("lightGray", 1024))
-        add(string.format("    %d/%d 完成  失败 %d  用时 %s",
+        add(string.format("    %d/%d done  failed %d  elapsed %s",
             job.counts.done + job.counts.failed, job.total, job.counts.failed,
             util.duration(util.now() - (job.submittedAt or util.now()))),
             col("lightGray", 1024))
@@ -1349,14 +1349,14 @@ function M.linesFor(sched, cloud, w, h)
     for _, wk in ipairs(sched:workerList()) do
         local cell
         if wk.virtual then
-            cell = string.format("%s:%d飞", util.trunc(wk.name or "cloud", 6),
+            cell = string.format("%s:%d run", util.trunc(wk.name or "cloud", 6),
                 cloud and cloud:countInflight(wk) or 0)
         elseif wk.state == "offline" then
-            cell = "#" .. wk.id .. ":离线"
+            cell = "#" .. wk.id .. ":offline"
         elseif wk.state == "busy" then
             cell = string.format("#%d:%d%%", wk.id, math.floor((wk.progress or 0) * 100))
         else
-            cell = "#" .. wk.id .. ":闲"
+            cell = "#" .. wk.id .. ":idle"
         end
         cells[#cells + 1] = cell
     end
@@ -1365,11 +1365,11 @@ function M.linesFor(sched, cloud, w, h)
     end
 
     if cloud and cloud.ok and #cloud.endpoints > 0 then
-        add(string.format("云端 %d 端点，在飞 %d，成功 %d / 失败 %d",
+        add(string.format("Cloud %d endpoints, %d in flight, ok %d / failed %d",
             #cloud.endpoints, cloud:totalInflight(), cloud.okCount, cloud.failCount),
             col("lightGray", 1024))
     end
-    add(string.format("累计任务 %d 失败 %d 重试 %d 冗余 %d",
+    add(string.format("Total tasks %d failed %d retries %d redundant %d",
         sched.stats.done, sched.stats.failed, sched.stats.retries, sched.stats.redundant or 0),
         col("gray", 128))
 
@@ -1408,13 +1408,13 @@ function Panel:redraw(sched, cloud, force)
 
     local ok, lines = pcall(self.lines, self, sched, cloud)
     if not ok then
-        self.log("面板绘制失败：" .. tostring(lines), 16384)
+        self.log("Panel draw failed: " .. tostring(lines), 16384)
         return false
     end
 
     local drawn = M.draw(self.periph, lines, self.h)
     if not drawn then
-        self.log("面板写入显示器失败（尺寸 " .. tostring(self.w) .. "x" .. tostring(self.h) .. "）", 16384)
+        self.log("Panel write to monitor failed (size " .. tostring(self.w) .. "x" .. tostring(self.h) .. ")", 16384)
     end
     return drawn
 end
@@ -1437,20 +1437,20 @@ if not _G.dc_require then
     _G.dc_require = function(name)
         if cache[name] then return cache[name] end
         local short = tostring(name):match("^dc%.(.+)$")
-        if not short then error("模块名非法: " .. tostring(name), 0) end
+        if not short then error("invalid module name: " .. tostring(name), 0) end
         local tried = {}
         for _, pat in ipairs(paths) do
             local path = pat:format(short)
             tried[#tried + 1] = path
             if fs.exists(path) and not fs.isDir(path) then
                 local fn, err = loadfile(path)
-                if not fn then error("加载模块 " .. name .. " 失败: " .. tostring(err), 0) end
+                if not fn then error("failed to load module " .. name .. ": " .. tostring(err), 0) end
                 local mod = fn()
                 cache[name] = mod
                 return mod
             end
         end
-        error("找不到模块 " .. name .. "（已尝试: " .. table.concat(tried, ", ") .. "）", 0)
+        error("module not found: " .. name .. " (tried: " .. table.concat(tried, ", ") .. ")", 0)
     end
 end
 
@@ -1475,7 +1475,7 @@ end
 
 local ok = screen.run(opts)
 if not ok then
-    printError("[dcnet] 网络屏幕启动失败。")
+    printError("[dcnet] screen failed to start.")
     return 1
 end
 return 0

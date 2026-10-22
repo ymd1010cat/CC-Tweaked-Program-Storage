@@ -137,13 +137,13 @@ function Panel:attach(target)
         self.periph, self.name = target, (target.__name or "fake")
     elseif type(target) == "string" and target ~= "" then
         if not isMonitorType(M.typeOf(target)) then
-            return nil, "不是显示器外设: " .. target
+            return nil, "not a monitor peripheral: " .. target
         end
         local ok, dev = pcall(peripheral.wrap, target)
-        if not ok or not dev then return nil, "无法打开显示器: " .. target end
+        if not ok or not dev then return nil, "cannot open monitor: " .. target end
         self.periph, self.name = dev, target
     else
-        return nil, "没有指定显示器"
+        return nil, "no monitor specified"
     end
     pcall(function() self.periph.setTextScale(self.scale) end)
     local ok2, w, h = pcall(function() return self.periph.getSize() end)
@@ -164,7 +164,7 @@ end
 --- 自动找一台显示器挂上
 function Panel:attachAuto()
     local list = M.findMonitors()
-    if #list == 0 then return nil, "没有检测到显示器" end
+    if #list == 0 then return nil, "no monitor detected" end
     local ok, err = self:attach(list[1].name)
     if not ok then return nil, err end
     return self.name
@@ -189,12 +189,12 @@ function M.linesFor(sched, cloud, w, h)
         out[#out + 1] = { text = util.trunc(text, w), colour = colour }
     end
 
-    add(string.format("dcnet 主控 #%d   %s", os.getComputerID(), os.date("%H:%M:%S")),
+    add(string.format("dcnet master #%d   %s", os.getComputerID(), os.date("%H:%M:%S")),
         col("lime", 32))
 
     -- 极简模式：显示器太小就只报集群概况
     if w < 20 or h < 4 then
-        add(string.format("节点 %d/%d 作业 %d", sched:onlineCount(), sched:workerCount(),
+        add(string.format("Workers %d/%d jobs %d", sched:onlineCount(), sched:workerCount(),
             sched:runningCount()), col("white", 1))
         return out
     end
@@ -203,10 +203,10 @@ function M.linesFor(sched, cloud, w, h)
     for _, j in pairs(sched.jobs) do
         if j.state == "queued" then queued = queued + 1 end
     end
-    add(string.format("节点 %d/%d 在线   并发 %d/%d   队列 %d%s",
+    add(string.format("Workers %d/%d online   parallel %d/%d   queue %d%s",
         sched:onlineCount(), sched:workerCount(), sched:runningCount(),
         math.max(1, sched.cfg.maxParallel or 1), queued,
-        sched.paused and "  [已暂停]" or ""), col("white", 1))
+        sched.paused and "  [paused]" or ""), col("white", 1))
 
     -- 正在跑的作业（最多 4 个）
     local jobs = sched:runningJobs()
@@ -216,7 +216,7 @@ function M.linesFor(sched, cloud, w, h)
         add(string.format("#%d %s %s %3d%%", job.id, util.trunc(job.name, 12),
             util.bar(pct, 12), math.floor(pct * 100)),
             job.state == "running" and col("lightBlue", 512) or col("lightGray", 1024))
-        add(string.format("    %d/%d 完成  失败 %d  用时 %s",
+        add(string.format("    %d/%d done  failed %d  elapsed %s",
             job.counts.done + job.counts.failed, job.total, job.counts.failed,
             util.duration(util.now() - (job.submittedAt or util.now()))),
             col("lightGray", 1024))
@@ -227,14 +227,14 @@ function M.linesFor(sched, cloud, w, h)
     for _, wk in ipairs(sched:workerList()) do
         local cell
         if wk.virtual then
-            cell = string.format("%s:%d飞", util.trunc(wk.name or "cloud", 6),
+            cell = string.format("%s:%d run", util.trunc(wk.name or "cloud", 6),
                 cloud and cloud:countInflight(wk) or 0)
         elseif wk.state == "offline" then
-            cell = "#" .. wk.id .. ":离线"
+            cell = "#" .. wk.id .. ":offline"
         elseif wk.state == "busy" then
             cell = string.format("#%d:%d%%", wk.id, math.floor((wk.progress or 0) * 100))
         else
-            cell = "#" .. wk.id .. ":闲"
+            cell = "#" .. wk.id .. ":idle"
         end
         cells[#cells + 1] = cell
     end
@@ -244,11 +244,11 @@ function M.linesFor(sched, cloud, w, h)
 
     -- 云端与统计
     if cloud and cloud.ok and #cloud.endpoints > 0 then
-        add(string.format("云端 %d 端点，在飞 %d，成功 %d / 失败 %d",
+        add(string.format("Cloud %d endpoints, %d in flight, ok %d / failed %d",
             #cloud.endpoints, cloud:totalInflight(), cloud.okCount, cloud.failCount),
             col("lightGray", 1024))
     end
-    add(string.format("累计任务 %d 失败 %d 重试 %d 冗余 %d",
+    add(string.format("Total tasks %d failed %d retries %d redundant %d",
         sched.stats.done, sched.stats.failed, sched.stats.retries, sched.stats.redundant or 0),
         col("gray", 128))
 
@@ -291,13 +291,13 @@ function Panel:redraw(sched, cloud, force)
 
     local ok, lines = pcall(self.lines, self, sched, cloud)
     if not ok then
-        self.log("面板绘制失败：" .. tostring(lines), 16384)
+        self.log("Panel draw failed: " .. tostring(lines), 16384)
         return false
     end
 
     local drawn = M.draw(self.periph, lines, self.h)
     if not drawn then
-        self.log("面板写入显示器失败（尺寸 " .. tostring(self.w) .. "x" .. tostring(self.h) .. "）", 16384)
+        self.log("Panel write to monitor failed (size " .. tostring(self.w) .. "x" .. tostring(self.h) .. ")", 16384)
     end
     return drawn
 end

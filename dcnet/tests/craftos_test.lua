@@ -198,8 +198,8 @@ do
     local bad = util.parseArgs({ "nope=1" }, {})
     check(bad == nil, "parseArgs 拒绝未知参数")
     check(util.textWidth("中文abc") == 7, "textWidth 按显示列算（中文 2 列）")
-    check(util.trunc("abcdef", 4) == "ab…", "trunc 按显示宽度截断（省略号占 2 列）")
-    check(util.trunc("中文测试", 5) == "中…", "trunc 中文：中(2)+省略号(2) = 4 列 ≤ 5")
+    check(util.trunc("abcdef", 4) == "a...", "trunc 按显示宽度截断（省略号占 2 列）")
+    check(util.trunc("中文测试", 5) == "中...", "trunc 中文：中(2)+省略号(2) = 4 列 ≤ 5")
     check(util.textWidth(util.trunc("中文测试abcdef", 9)) <= 9, "trunc 结果不超出给定列数")
     local chopped = util.trunc("中文字符", 3)
     check(chopped:byte(-2) ~= nil and util.textWidth(chopped) <= 3,
@@ -473,7 +473,7 @@ do
     for _, e in ipairs(failed) do out("      打开失败: " .. tostring(e)) end
     check(#list == 2 and #failed == 0, "openAll 打开了 2 个 modem")
     check(opened[1] == "left" and opened[2] == "back", "有线优先、两个都打开")
-    check(bareNet.describe(list) == "1 有线 / 1 无线", "describe 统计正确")
+    check(bareNet.describe(list) == "1 wired / 1 wireless", "describe 统计正确")
     check(#peripheral.getNames() == 2 and #bareNet.findModems() == 2, "两个 modem 都被识别")
 
     peripheral.getNames, peripheral.getType, peripheral.wrap, peripheral.call =
@@ -998,13 +998,13 @@ do
     local tampered = { t = "task", job = 1, task = 2, payload = { x = 99 },
         sid = m2.sid, seq = m2.seq, ts = m2.ts, sig = m2.sig }
     local ok2, why2 = net.verify(9, tampered)
-    check(ok2 == false and why2 == "签名错误", "被篡改的内容拒绝（原因：" .. tostring(why2) .. "）")
+    check(ok2 == false and why2 == "bad signature", "被篡改的内容拒绝（原因：" .. tostring(why2) .. "）")
 
     -- 重放同一条消息
     local replay = {}
     for k, v in pairs(m2) do replay[k] = v end
     local ok3, why3 = net.verify(9, replay)
-    check(ok3 == false and why3 == "重复消息", "重放被拒绝（原因：" .. tostring(why3) .. "）")
+    check(ok3 == false and why3 == "duplicate message", "重放被拒绝（原因：" .. tostring(why3) .. "）")
 
     -- 网络屏幕帧：lines 是序列化后的字符串，签名只覆盖它的校验和（BULK_FIELDS）
     local P = U["dc.protocol"]
@@ -1022,15 +1022,15 @@ do
         if k ~= "lines" then badFrame[k] = v end
     end
     local okd, whyd = net.verify(9, badFrame)
-    check(okd == false and whyd == "签名错误", "篡改屏幕帧内容会被签名拒绝")
+    check(okd == false and whyd == "bad signature", "篡改屏幕帧内容会被签名拒绝")
 
     -- 未签名
     local ok4, why4 = net.verify(9, { t = "result", job = 1, task = 1, ok = true })
-    check(ok4 == false and why4 == "未签名", "启用签名后未签名消息被拒绝")
+    check(ok4 == false and why4 == "unsigned", "启用签名后未签名消息被拒绝")
 
     -- 时间戳过期
     local ok5, why5 = net.verify(9, { t = "task", sid = "deadbeef", seq = 3, ts = 1000, sig = "x" })
-    check(ok5 == false and why5 == "时间戳无效", "时间戳过期的消息被拒绝")
+    check(ok5 == false and why5 == "invalid timestamp", "时间戳过期的消息被拒绝")
 
     -- 换密钥后旧签名失效
     net.setKey("another-key-456")
@@ -1128,12 +1128,12 @@ do
     P.w, P.h = 51, 19
     local text = ""
     for _, l in ipairs(P:lines(S, nil)) do text = text .. l.text .. "\n" end
-    check(text:find("dcnet 主控", 1, true) ~= nil, "标题行包含 dcnet 主控")
-    check(text:find("节点 2/3", 1, true) ~= nil, "集群概况显示在线/登记（2/3）")
+    check(text:find("dcnet master", 1, true) ~= nil, "标题行包含 dcnet 主控")
+    check(text:find("Workers 2/3", 1, true) ~= nil, "集群概况显示在线/登记（2/3）")
     check(text:find("#3:42%", 1, true) ~= nil, "节点矩阵显示忙碌节点进度")
-    check(text:find("#4:闲", 1, true) ~= nil, "节点矩阵显示空闲节点")
-    check(text:find("#5:离线", 1, true) ~= nil, "节点矩阵显示离线节点")
-    check(text:find("累计任务 12", 1, true) ~= nil, "统计行")
+    check(text:find("#4:idle", 1, true) ~= nil, "节点矩阵显示空闲节点")
+    check(text:find("#5:offline", 1, true) ~= nil, "节点矩阵显示离线节点")
+    check(text:find("Total tasks 12", 1, true) ~= nil, "统计行")
     check(text:find("#1 selftest", 1, true) ~= nil, "作业行")
 
     -- 极简模式：很小的显示器不能崩
@@ -1166,8 +1166,8 @@ do
     check(fake.scale == pm.DEFAULT_SCALE, "挂载时按缩放设置调字号")
     check(P:redraw(S, nil, true) == true, "重绘一帧成功")
     local drawn = table.concat(fake.buf, "\n")
-    check(drawn:find("dcnet 主控", 1, true) ~= nil, "假显示器收到了标题")
-    check(drawn:find("节点", 1, true) ~= nil, "假显示器收到了集群概况")
+    check(drawn:find("dcnet master", 1, true) ~= nil, "假显示器收到了标题")
+    check(drawn:find("Workers", 1, true) ~= nil, "假显示器收到了集群概况")
     check(P:detach() ~= nil, "可以卸载显示器")
     check(P:redraw(S, nil, true) == false, "没有显示器时重绘是空操作")
 
@@ -1201,7 +1201,7 @@ do
 
     -- 面板行生成可以按任意尺寸（网络屏幕用自己显示器的尺寸）
     local custom = pm.linesFor(S, nil, 30, 6)
-    check(custom[1].text:find("dcnet 主控", 1, true) ~= nil, "linesFor 按指定尺寸生成标题行")
+    check(custom[1].text:find("dcnet master", 1, true) ~= nil, "linesFor 按指定尺寸生成标题行")
     local allFit = true
     for _, l in ipairs(custom) do
         if U["dc.util"].textWidth(l.text) > 30 then allFit = false end
@@ -1360,22 +1360,22 @@ end
 
 -- 场景 1：正常链路 + 代码分发
 runScenario("场景 1：正常派发/回收 + push 分发", {}, function()
-    if not waitFor("节点 #4 已连接", 20) then
+    if not waitFor("Worker #4 connected", 20) then
         check(false, "两个节点在 20 秒内完成注册")
         return
     end
     check(true, "两个节点完成注册")
     typeLine("run selftest tasks=6 size=200")
-    check(waitFor("成功 6 / 失败 0", 40), "作业在 40 秒内结束且 6/6 成功")
-    check(seen("selftest 结束"), "日志里有作业结束行")
-    check(seen("结论：PASS"), "selftest 结论 PASS")
-    check(seen("平方和闭式解校验：全部一致"), "所有任务平方和一致")
-    check(seen("已保存：/dccomp/out/"), "结果自动落盘到 /dccomp/out/")
+    check(waitFor("done 6 / failed 0", 40), "作业在 40 秒内结束且 6/6 成功")
+    check(seen("selftest finished"), "日志里有作业结束行")
+    check(seen("Result: PASS"), "selftest 结论 PASS")
+    check(seen("Sum-of-squares closed-form check: all match"), "所有任务平方和一致")
+    check(seen("Result saved: /dccomp/out/"), "结果自动落盘到 /dccomp/out/")
 
     if workerBundle then
         typeLine("push 3")
-        check(waitFor("已推送 worker.lua", 25), "主控完成向 #3 的分块推送")
-        check(seen("已收到新版本"), "节点 #3 收到并落盘新版本")
+        check(waitFor("Pushed worker.lua", 25), "主控完成向 #3 的分块推送")
+        check(seen("New version received"), "节点 #3 收到并落盘新版本")
         -- 单机测试里主控与节点共享同一份 fs，"内容一致"这种检查没有意义；
         -- 字节级一致性由上面的 xfer 单元测试保证，这里只验证握手与落盘确实发生。
     end
@@ -1385,7 +1385,7 @@ runScenario("场景 1：正常派发/回收 + push 分发", {}, function()
     local nodeLog, logDir = nil, "/dccomp/logs"
     for _, name in ipairs(fs.list(logDir) or {}) do
         local t = readHost(logDir .. "/" .. name)
-        if t and t:find("节点启动", 1, true) then nodeLog = name end
+        if t and t:find("Worker starting", 1, true) then nodeLog = name end
     end
     check(nodeLog ~= nil, "节点日志已落盘且含启动记录（" .. tostring(nodeLog) .. "）")
     typeLine("quit")
@@ -1393,34 +1393,34 @@ end)
 
 -- 场景 2：故障注入（前 2 个任务故意报错）
 runScenario("场景 2：故障注入（2 个任务故意报错）", {}, function()
-    if not waitFor("节点 #4 已连接", 20) then
+    if not waitFor("Worker #4 connected", 20) then
         check(false, "两个节点完成注册")
         return
     end
     typeLine("run selftest tasks=6 size=200 fail=2")
-    check(waitFor("成功 4 / 失败 2", 40), "作业结束：成功 4 / 失败 2")
-    check(seen("重试"), "失败任务有重试记录")
-    check(seen("selftest 故意失败"), "日志里能看到故意的失败原因")
-    check(seen("预期成功 4，实际成功 4"), "reduce 拿到的成功数与预期一致")
+    check(waitFor("done 4 / failed 2", 40), "作业结束：成功 4 / 失败 2")
+    check(seen("retry"), "失败任务有重试记录")
+    check(seen("selftest deliberate failure"), "日志里能看到故意的失败原因")
+    check(seen("expected success 4, actual success 4"), "reduce 拿到的成功数与预期一致")
     typeLine("quit")
 end)
 
 -- 场景 3：节点掉线 → 任务重派（把 #4 隔离在总线之外，等价于拔网线/关机）
 runScenario("场景 3：节点掉线 → 任务重派",
     { workerTimeout = 3, taskTimeout = 15, verbose = true }, function()
-    if not waitFor("节点 #4 已连接", 20) then
+    if not waitFor("Worker #4 connected", 20) then
         check(false, "两个节点完成注册")
         return
     end
     -- 任务规模放大，并等到主控**确实把一个任务派给了 #4**，再拔它的线
     typeLine("run selftest tasks=10 size=20000000")
-    check(waitFor("开始执行", 15), "作业开始执行")
-    check(waitFor("派发给 #4", 20), "主控把任务派给了 #4")
+    check(waitFor("started", 15), "作业开始执行")
+    check(waitFor("dispatched to #4", 20), "主控把任务派给了 #4")
     blocked["node4"] = true
     out("  （已隔离节点 #4）")
-    check(waitFor("失去联系", 20), "主控检测到 #4 掉线")
-    check(waitFor("重新入队", 20), "掉线节点手上的任务被重新入队")
-    check(waitFor("成功 10 / 失败 0", 120), "10 个任务最终全部成功（重派生效）")
+    check(waitFor("lost contact", 20), "主控检测到 #4 掉线")
+    check(waitFor("requeued", 20), "掉线节点手上的任务被重新入队")
+    check(waitFor("done 10 / failed 0", 120), "10 个任务最终全部成功（重派生效）")
     typeLine("quit")
 end)
 
@@ -1431,19 +1431,19 @@ if cloudUrl then
 
     -- 场景 4：云端可用 → 任务真发 HTTP 出去算
     runScenario("场景 4：云端卸载（真 HTTP 到参考服务端）", {}, function()
-        if not waitFor("节点 #4 已连接", 20) then
+        if not waitFor("Worker #4 connected", 20) then
             check(false, "两个节点完成注册")
             return
         end
         typeLine("cloud add local " .. cloudUrl .. " 2")
-        check(waitFor("已注册云端端点", 15), "注册云端端点")
+        check(waitFor("Registered cloud endpoint", 15), "注册云端端点")
         typeLine("cloud test local")
-        check(waitFor("探活成功", 20), "cloud test 探活成功（真 HTTP GET）")
+        check(waitFor("probe ok", 20), "cloud test 探活成功（真 HTTP GET）")
         typeLine("run cloudprimes to=200000 chunk=25000")
-        check(waitFor("成功 8 / 失败 0", 60), "作业 8/8 成功")
+        check(waitFor("done 8 / failed 0", 60), "作业 8/8 成功")
         local cloudCount = 0
         for _, l in ipairs(captured) do
-            local n = l:match("其中云端 (%d+)")
+            local n = l:match("cloud (%d+) / local")
             if n then cloudCount = tonumber(n) end
         end
         check(cloudCount > 0, "确实有任务由云端完成（云端 = " .. cloudCount .. " 个）")
@@ -1455,21 +1455,21 @@ if cloudUrl then
 
     -- 场景 5：云端不可达 → 冷却 + 自动回落本机，作业照常完成
     runScenario("场景 5：云端不可达 → 自动回落本机", {}, function()
-        if not waitFor("节点 #4 已连接", 20) then
+        if not waitFor("Worker #4 connected", 20) then
             check(false, "两个节点完成注册")
             return
         end
         typeLine("cloud add bad http://127.0.0.1:1/dcnet 1")
-        check(waitFor("已注册云端端点", 15), "注册一个不可达端点")
+        check(waitFor("Registered cloud endpoint", 15), "注册一个不可达端点")
         typeLine("run cloudprimes to=100000 chunk=25000")
-        check(waitFor("成功 4 / 失败 0", 60), "云端挂了作业照样 4/4 成功")
+        check(waitFor("done 4 / failed 0", 60), "云端挂了作业照样 4/4 成功")
         local cloudCount = -1
         for _, l in ipairs(captured) do
-            local n = l:match("其中云端 (%d+)")
+            local n = l:match("cloud (%d+) / local")
             if n then cloudCount = tonumber(n) end
         end
         check(cloudCount == 0, "全部任务由本机完成（云端 = " .. tostring(cloudCount) .. "）")
-        check(seen("云端不可达") or seen("不可用"), "日志里能看到云端不可达/冷却")
+        check(seen("cloud unreachable") or seen("unavailable"), "日志里能看到云端不可达/冷却")
         typeLine("quit")
     end)
 else
@@ -1492,22 +1492,22 @@ do
         function() M1["dc.master"].run({ defaultJobs = defaultJobs }) end,
         function() M2["dc.master"].run({ defaultJobs = defaultJobs }) end,
         function()
-            if not waitFor("可用作业", 25) then
+            if not waitFor("Available jobs", 25) then
                 check(false, "两台主控启动")
                 return
             end
             check(true, "两台主控启动")
             typeLine("repo 42")
-            check(waitFor("的作业仓库", 20), "repo 查询收到对方清单")
+            check(waitFor("Job repo of #", 20), "repo 查询收到对方清单")
             check(seen("selftest.lua"), "清单里列出了 selftest.lua")
             -- 拉一个作业过来（同机共享 fs，所以这里验证的是握手与落盘链路真的跑通）
             typeLine("pull 42 cloudprimes")
-            check(waitFor("已从 #42 拉取作业", 25), "pull 完成分块传输并落盘")
+            check(waitFor("Pulled job from #42", 25), "pull 完成分块传输并落盘")
             check(fs.exists("/dccomp/jobs/cloudprimes.lua")
                 and fs.getSize("/dccomp/jobs/cloudprimes.lua") > 100, "拉取到的作业文件存在且有内容")
             -- 非法作业名会被服务端拒绝
             typeLine("pull 42 ../../evil")
-            check(waitFor("拒绝", 15) or waitFor("非法", 15), "非法作业名被拒绝")
+            check(waitFor("Refused", 15) or waitFor("invalid", 15), "非法作业名被拒绝")
             typeLine("quit")
         end)
     check(ok6, "作业仓库场景正常退出" .. (ok6 and "" or ("：" .. tostring(err6))))
@@ -1551,15 +1551,15 @@ do
     local ok7, err7 = pcall(parallel.waitForAny,
         function() shell.run(PROJECT .. "/dist/master.lua") end,
         function()
-            if not waitFor("dcnet 主控", 30) then
+            if not waitFor("dcnet master", 30) then
                 check(false, "打包产物能启动")
                 return
             end
             check(true, "打包产物能启动")
             typeLine("help")
-            check(waitFor("run <作业>", 20), "产物的指令表正常（help 输出）")
+            check(waitFor("run <job>", 20), "产物的指令表正常（help 输出）")
             typeLine("state")
-            check(waitFor("快照", 20), "产物的 state 指令可用")
+            check(waitFor("Snapshot", 20), "产物的 state 指令可用")
             typeLine("quit")
         end)
     check(ok7, "打包产物正常退出" .. (ok7 and "" or ("：" .. tostring(err7))))
@@ -1619,16 +1619,16 @@ do
         function() W1["dc.worker"].run({ master = REAL_ID, name = "node-3" }) end,
         function() W2["dc.worker"].run({ master = REAL_ID, name = "node-4" }) end,
         function()
-            if not waitFor("消息签名已启用", 25) then
+            if not waitFor("Message signing enabled", 25) then
                 check(false, "主控提示签名已启用")
                 return
             end
             check(true, "主控按 settings 里的密钥启用了签名")
-            if not waitFor("节点 #4 已连接", 25) then
+            if not waitFor("Worker #4 connected", 25) then
                 check(false, "签名集群完成注册")
                 -- 活性探针：直接发一条未签名消息，看主控是否收到并拒绝
                 busSend(3, REAL_ID, { t = "hello", ver = 1, name = "probe" }, "dccomp")
-                waitFor("未签名", 8)
+                waitFor("unsigned", 8)
                 out("  [诊断] 总线剩余 " .. tostring(#bus) .. " 条：")
                 for i = 1, math.min(#bus, 8) do
                     local d = textutils.unserialize(bus[i].msg) or {}
@@ -1646,16 +1646,16 @@ do
             end
             check(true, "签名集群的两个节点注册成功（真消息都通过了校验）")
             typeLine("key")
-            check(waitFor("密钥指纹", 15), "key 指令显示密钥指纹")
+            check(waitFor("key fingerprint", 15), "key 指令显示密钥指纹")
 
             -- 伪造：别的电脑直接发一条没签名的"结果"
             busSend(99, REAL_ID, { t = "result", ver = 1, job = 1, task = 1, ok = true,
                 data = { fake = 1 }, ms = 1 }, "dccomp")
-            check(waitFor("未签名", 15), "未签名的伪造消息被主控丢弃")
+            check(waitFor("unsigned", 15), "未签名的伪造消息被主控丢弃")
 
             -- 作业照常跑（签名不影响功能）
             typeLine("run selftest tasks=4 size=120")
-            check(waitFor("成功 4 / 失败 0", 45), "签名集群作业 4/4 成功")
+            check(waitFor("done 4 / failed 0", 45), "签名集群作业 4/4 成功")
 
             -- 重放：把抓到的真消息原样再发一次
             local pick
@@ -1665,7 +1665,7 @@ do
             end
             if pick then
                 bus[#bus + 1] = { from = pick.from, to = pick.to, msg = pick.msg, proto = pick.proto }
-                check(waitFor("重复", 15), "原样重放的真消息被丢弃（防重放）")
+                check(waitFor("duplicate", 15), "原样重放的真消息被丢弃（防重放）")
             else
                 check(false, "抓到了可供重放的消息")
             end
@@ -1687,15 +1687,15 @@ end
 
 -- 场景 9：大负载通道（负载与结果都超过内联阈值，自动走文件传输）
 runScenario("场景 9：大负载通道（负载/结果走文件）", {}, function()
-    if not waitFor("节点 #4 已连接", 25) then
+    if not waitFor("Worker #4 connected", 25) then
         check(false, "两个节点完成注册")
         return
     end
     check(true, "两个节点完成注册")
     typeLine("run bigdata tasks=4 size=24000 res=14000")
-    check(waitFor("成功 4 / 失败 0", 120), "大负载作业 4/4 成功")
-    check(seen("开始推送 task-") or seen("收到大结果"), "负载/结果通过文件通道传输")
-    check(seen("大负载通道"), "作业汇总行正常输出")
+    check(waitFor("done 4 / failed 0", 120), "大负载作业 4/4 成功")
+    check(seen("Pushing task-") or seen("Got big result"), "负载/结果通过文件通道传输")
+    check(seen("Big payload channel"), "作业汇总行正常输出")
     typeLine("quit")
 end)
 
@@ -1730,17 +1730,17 @@ do
         function() W1["dc.worker"].run({ master = 42, name = "node-3" }) end,
         function() W2["dc.worker"].run({ master = 42, name = "node-4" }) end,
         function()
-            if not waitFor("节点 #4 已连接", 25) then
+            if not waitFor("Worker #4 connected", 25) then
                 check(false, "两个节点注册到在岗主控")
                 return
             end
             check(true, "两个节点注册到在岗主控")
-            check(seen("以待命主控模式启动"), "备用主控以待命模式启动")
+            check(seen("Starting standby"), "备用主控以待命模式启动")
             typeLine("standby")
-            check(waitFor("当前是 待命 模式", 15) or seen("待命"), "standby 指令显示待命状态")
+            check(waitFor("in standby mode", 15) or seen("standby"), "standby 指令显示待命状态")
 
             typeLine("run selftest tasks=8 size=400")
-            if not waitFor("开始执行", 25) then
+            if not waitFor("started", 25) then
                 check(false, "作业开始执行")
                 return
             end
@@ -1751,11 +1751,11 @@ do
             local mark = #captured
             blocked["master2"] = true
             blocked[42] = true
-            check(waitForAfter(mark, "★ 接管主控", 40), "备用主控完成接管")
-            check(waitForAfter(mark, "已接续", 25), "接管时接续了作业状态（断点续算）")
+            check(waitForAfter(mark, "* Took over as master", 40), "备用主控完成接管")
+            check(waitForAfter(mark, "Resumed", 25), "接管时接续了作业状态（断点续算）")
             -- 节点重新登记到新主控：单机桩里两台主控同 ID，无法把它当成断言，
             -- 这里只做信息输出（需要两台真机的部分见上面注释与 README）。
-            if waitForAfter(mark, "节点 #4 已连接", 20) then
+            if waitForAfter(mark, "Worker #4 connected", 20) then
                 out("  [注] 节点也重新登记到了新主控")
             else
                 out("  [注] 节点未重新登记（单机桩固有限制：两台主控电脑 ID 相同）")
@@ -1764,7 +1764,7 @@ do
             -- 电脑 ID 都是 7，节点重连的目标 ID 无法区分（谁在岗都是 #7）。
             -- 节点换主、粘性登记、作业在新主控上跑完，需要**两台真机**才能验证——
             -- 步骤写在 README 第 6 节，和 A1（真机多机联调）同类。
-            if waitForAfter(mark, "成功 8 / 失败 0", 30) then
+            if waitForAfter(mark, "done 8 / failed 0", 30) then
                 out("  [注] 新主控上作业也跑完了（超出单机测试桩能力，属参考信息）")
             else
                 out("  [注] 单机测试桩无法验证「节点换主后继续算完」——需两台真机（见 README 第 6 节）")
@@ -1785,7 +1785,7 @@ end
 -- 并把第一段的等待放宽到 240s（最坏 6 个任务各丢一次也能自愈）。
 runScenario("场景 11：混沌（丢包/杀节点/重放，结果仍须正确）",
     { taskTimeout = 15, adaptiveTimeout = false }, function()
-    if not waitFor("节点 #4 已连接", 25) then
+    if not waitFor("Worker #4 connected", 25) then
         check(false, "两个节点完成注册")
         return
     end
@@ -1794,19 +1794,19 @@ runScenario("场景 11：混沌（丢包/杀节点/重放，结果仍须正确�
     -- 开混沌：每 7 条丢 1 条（确定性，可复现——不用真随机）
     chaos.dropEvery, chaos.count, chaos.dropped = 7, 0, 0
     typeLine("run selftest tasks=6 size=200")
-    check(waitFor("成功 6 / 失败 0", 240), "丢包 1/7 的情况下作业仍然 6/6 成功")
+    check(waitFor("done 6 / failed 0", 240), "丢包 1/7 的情况下作业仍然 6/6 成功")
     check(chaos.dropped > 0, "确实丢了 " .. tostring(chaos.dropped) .. " 条消息")
     -- 注意：丢包多半落在"轮询/心跳"这类本来就会周期重发的消息上，不一定触发重试日志，
     -- 所以这里只做信息输出（真正的判据是上面的 6/6 成功与下面的结果正确性）。
     out("  [注] 丢包 " .. tostring(chaos.dropped) .. " 条；重试日志：" ..
-        tostring(seen("重试") or seen("重派") or seen("失去联系")))
-    check(seen("结论：PASS"), "结果仍然正确（selftest 闭式解校验通过）")
+        tostring(seen("retry") or seen("requeued") or seen("lost contact")))
+    check(seen("Result: PASS"), "结果仍然正确（selftest 闭式解校验通过）")
 
     -- 杀节点：断掉 #3 的接收（它还能发，属于"半断链"）。主控因此不会判它离线，
     -- 但派给它的任务它收不到 → 超时后重派给 #4，作业最终仍然完成。
     blocked["node3"] = true
     typeLine("run selftest tasks=4 size=200")
-    check(waitFor("成功 4 / 失败 0", 180), "杀掉一个节点后作业照样 4/4 成功")
+    check(waitFor("done 4 / failed 0", 180), "杀掉一个节点后作业照样 4/4 成功")
     out("  [注] 半断链下主控仍认为 #3 在线（它还能发消息），靠任务超时重派兜底")
     blocked["node3"] = nil
 
@@ -1819,9 +1819,9 @@ runScenario("场景 11：混沌（丢包/杀节点/重放，结果仍须正确�
         data = { n = 200, sum = 0, sq = 0 } })
     busSend(3, REAL_ID, dup, "dccomp")       -- 伪装成节点 #3 再报一次已完成任务的结果
     sleep(2)
-    check(not seenAfter(mark, "失败") and not seenAfter(mark, "重试"),
+    check(not seenAfter(mark, "failed") and not seenAfter(mark, "retry"),
         "重复上报已完成任务的结果没有引起失败或重试")
-    check(seen("成功 4 / 失败 0"), "总统计没有被污染（仍是 4/4）")
+    check(seen("done 4 / failed 0"), "总统计没有被污染（仍是 4/4）")
     chaos.dropEvery = 0
     typeLine("quit")
 end)
@@ -1871,29 +1871,29 @@ do
         function() M["dc.master"].run({ defaultJobs = defaultJobs, cfg = { monitor = "off" } }) end,
         function() SC["dc.screen"].run({ name = "screen-test", interval = 1, timeout = 5 }) end,
         function()
-            if not waitFor("网络屏幕 #" .. SCR_ID .. " 已连接", 25) then
+            if not waitFor("Net screen #" .. SCR_ID .. " connected", 25) then
                 check(false, "主控登记了网络屏幕 #" .. SCR_ID)
                 return
             end
             check(true, "主控登记了网络屏幕 #" .. SCR_ID)
-            check(waitBuf("dcnet 主控", 25), "网络屏幕画出了主控面板标题")
-            check(waitBuf("节点 0/0", 10), "网络屏幕收到了集群概况")
+            check(waitBuf("dcnet master", 25), "网络屏幕画出了主控面板标题")
+            check(waitBuf("Workers 0/0", 10), "网络屏幕收到了集群概况")
 
             typeLine("mon net")
-            check(waitFor("推送中", 10), "mon net 显示网络屏幕列表（推送中）")
+            check(waitFor("pushing", 10), "mon net 显示网络屏幕列表（推送中）")
             check(seen("screen-test"), "mon net 显示屏幕名字")
 
             typeLine("mon net off")
-            check(waitFor("已关闭网络屏幕推送", 10), "mon net off 关闭推送")
-            check(waitBuf("主控已关闭", 15), "屏幕收到 screenoff 并提示主控已关闭")
+            check(waitFor("Net screen push off", 10), "mon net off 关闭推送")
+            check(waitBuf("Master disabled", 15), "屏幕收到 screenoff 并提示主控已关闭")
 
             typeLine("mon net on")
-            check(waitFor("已开启网络屏幕推送", 10), "mon net on 重新开启推送")
-            check(waitBuf("dcnet 主控", 20), "屏幕重新连上并画出面板")
+            check(waitFor("Net screen push on", 10), "mon net on 重新开启推送")
+            check(waitBuf("dcnet master", 20), "屏幕重新连上并画出面板")
 
             local mark = #captured
             typeLine("mon net kick " .. SCR_ID)
-            check(waitForAfter(mark, "已断开网络屏幕 #" .. SCR_ID, 10), "mon net kick 断开指定屏幕")
+            check(waitForAfter(mark, "Net screen #" .. SCR_ID .. " kicked", 10), "mon net kick 断开指定屏幕")
             typeLine("quit")
         end)
     check(ok12, "网络屏幕场景正常退出" .. (ok12 and "" or ("：" .. tostring(err12))))

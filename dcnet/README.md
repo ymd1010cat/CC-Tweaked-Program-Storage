@@ -102,7 +102,7 @@ local m=peripheral.find("modem",function(_,d)return not d.isWireless()end) redne
 ### 方式 D：一键安装器（最省事）
 
 `dist/install.lua` 是**一个自包含的安装器**（把主控、节点、拉取器、全部作业都塞在
-里面，约 260KB）：拷到任意一台电脑上运行即可。
+里面，约 370KB）：拷到任意一台电脑上运行即可。
 
 ```
 install.lua                       装全部（主控 + 节点 + 网络屏幕 + 拉取器 + 作业）
@@ -114,7 +114,7 @@ install.lua all --startup=master  顺便生成开机自启（跑主控）
 install.lua all --startup=worker  顺便生成开机自启（跑节点）
 install.lua all --startup=screen  顺便生成开机自启（跑网络屏幕）
 install.lua all --force           覆盖已存在的文件
-install.lua all --cleanup         装完把安装器自己删掉（省 ~220KB 磁盘）
+install.lua all --cleanup         装完把安装器自己删掉（省 ~370KB 磁盘）
 ```
 
 默认**不覆盖**已存在的文件，所以重复运行很安全（你改过的作业不会被冲掉）。
@@ -148,6 +148,10 @@ end
 看到状态栏 + 命令提示符 `dcnet> ` 就成功了。首次运行会自动把 5 个示例作业
 写到 `/dccomp/jobs/`（含集群自检 `selftest`）。
 
+> **界面语言**：dcnet 的游戏内界面、日志与作业结果全部是**英文**（ASCII），
+> 原版 CC 字体即可正常显示，不需要中文字体资源包。本文档为了说明方便仍用中文，
+> 部分示例输出可能是旧版界面。
+
 **每台运算机：**
 
 ```
@@ -170,18 +174,18 @@ result                   看结果
 输出示例：
 
 ```
-[12:03:41] 节点 #3 已连接：node-3（有线）
-[12:03:44] 节点 #4 已连接：node-4（有线）
+[12:03:41] Worker #3 connected: node-3 (wired)
+[12:03:44] Worker #4 connected: node-4 (wired)
 dcnet> run primes to=2000000
-作业 #1 primes 已提交：80 个任务  from=2 to=2000000 chunk=25000
-作业 #1 primes 开始执行（80 个任务）
+Job #1 primes submitted: 80 tasks  from=2 to=2000000 chunk=25000
+Job #1 primes started (80 tasks, priority 0)
 dcnet> status
-#1   primes       执行中 ############--------  57%  任务 46/80 失败 0  用时 12.4s
-节点    名称         状态     完成   失败  累计耗时     均速      当前
-#3      node-3       忙碌       24      0     5.1s    4.7/s   #1.47 88%
-#4      node-4       忙碌       22      0     4.9s    4.5/s   #1.48 12%
-[12:04:02] 作业 #1 primes 结束：成功 80 / 失败 0，用时 18.3s
-  [2, 2000000] 内素数个数 = 148933（最大素数 1999993），由 80 个任务汇总
+#1   primes       running pri0   ############  57%  tasks 46/80 failed 0  elapsed 12.4s
+worker  name         state  done  failed  elapsed   avg/s  current
+#3      node-3       busy     24       0     5.1s    4.7/s  #1.47 88%
+#4      node-4       busy     22       0     4.9s    4.5/s  #1.48 12%
+[12:04:02] Job #1 primes finished: done 80 / failed 0, elapsed 18.3s
+  primes in [2, 2000000] = 148933 (max prime 1999993), reduced from 80 tasks
 ```
 
 对答案：π(1e6)=78498、π(2e6)=148933、π(1e7)=664579。
@@ -258,12 +262,12 @@ dcnet> status
 `mon right` 指定、`mon off` 关掉，都会持久化）。面板内容随尺寸自适应：
 
 ```
-dcnet 主控 #2   12:03:41
-节点 3/3 在线   并发 1/2   队列 1
+dcnet master #2   12:03:41
+Workers 3/3 online   parallel 1/2   queue 1
 #1 primes    ############-------  57%
-    46/80 完成  失败 0  用时 12.4s
-#3:42% #4:闲 #5:63%  云:1飞
-累计任务 128 失败 1 重试 2 冗余 4
+    46/80 done  failed 0  elapsed 12.4s
+#3:42% #4:idle #5:63%  cloud:1 run
+Total tasks 128 failed 1 retries 2 redundant 4
 ```
 
 **网络上的显示器**：有线网络会把「贴着有线调制解调器的显示器」暴露成外设
@@ -361,7 +365,7 @@ master.lua standby          # 或者先 set standby true，之后直接跑 maste
 | 发现另一台在岗主控（ID 更小） | 自动退回待命，避免"双主控"打架 |
 
 **状态接续**靠断点续算快照：已算完的任务带着结果回来（不重算），没算完的重新排队。接管时会打印
-`★ 接管主控（已 N 秒没有主控心跳）` 和 `已接续 N 个作业`。节点侧无需配置——它们发现主控静默超过
+`* Took over as master (no master heartbeat for N s)` 和 `Resumed N jobs`。节点侧无需配置——它们发现主控静默超过
 `rediscoverAfter`（默认 25s，由主控下发）就重新广播 `who` 找主控，谁应答就跟谁走。
 
 ```
@@ -374,8 +378,8 @@ standby on / off     # 本机是否默认以待命模式启动（持久化）
 > 1. 两台电脑跑 `master.lua`，第三台跑 `master.lua standby`，再加 1~2 台 `worker.lua`；
 > 2. 主控上 `run selftest tasks=32 size=3000`，等它跑到一半；
 > 3. 把在岗主控**退出/断电**；
-> 4. 15 秒内待命机应打印 `★ 接管主控` + `已接续 1 个作业`；
-> 5. 再过 ≤25 秒，各节点应打印"重新找到主控 #N"，作业在新主控上继续跑完（总数不变）。
+> 4. 15 秒内待命机应打印 `* Took over as master` + `Resumed 1 jobs`；
+> 5. 再过 ≤25 秒，各节点应打印 "found master #N"，作业在新主控上继续跑完（总数不变）。
 
 ### 4.4 节点侧（worker 自己的 settings）
 
@@ -421,12 +425,12 @@ run hashsearch to=8000000 modulus=1048576
 
 ```
 dcnet> run selftest tasks=48 size=5000
-作业 #1 selftest 已提交：48 个任务  tasks=48 size=5000 fail=0
-…
-  任务 48 个：预期成功 48，实际成功 48；预期失败 0（与主控日志核对）
-  平方和闭式解校验：全部一致
-  任务号完整性：齐全且无重复
-  结论：PASS —— 链路正常
+Job #1 selftest submitted: 48 tasks  tasks=48 size=5000 fail=0
+...
+  tasks 48: expected success 48, actual success 48; expected failures 0 (check main log)
+  Sum-of-squares closed-form check: all match
+  Task ids: complete, no duplicates
+  Result: PASS - link OK
 ```
 
 再跑一次**故障注入**，验证重派逻辑（前 3 个任务故意报错，会被重派 3 次后记为失败，
@@ -434,12 +438,12 @@ dcnet> run selftest tasks=48 size=5000
 
 ```
 dcnet> run selftest tasks=24 fail=3
-  ~ 任务 1.1 重试：节点报错: selftest 故意失败（任务 1）
-  …（每个失败任务出现 3 次）
-  x 任务 1.1 失败：节点报错: selftest 故意失败（任务 1）（已派发 3 次）
-作业 #1 selftest 结束：成功 21 / 失败 3，用时 1.8s
-  任务 24 个：预期成功 21，实际成功 21；预期失败 3（与主控日志核对）
-  结论：PASS —— 链路正常
+  ~ task 1.1 retry: worker error: selftest deliberate failure (task 1)
+  ...（每个失败任务出现 3 次）
+  x task 1.1 failed: worker error: selftest deliberate failure (task 1) (dispatched 3 times)
+Job #1 selftest finished: done 21 / failed 3, elapsed 1.8s
+  tasks 24: expected success 21, actual success 21; expected failures 3 (check main log)
+  Result: PASS - link OK
 ```
 
 这两步能过，说明「注册 → 派发 → 计算 → 回传 → 汇总 → 超时重派 → 失败统计」
@@ -785,13 +789,13 @@ CC 电脑默认磁盘上限只有 **1MB**，所以打包时会**剥掉注释与�
 
 | 产物 | 剥注释后 | 说明 |
 | --- | --- | --- |
-| `dist/master.lua` | **194 KB** | 主控常驻的就是这个 |
+| `dist/master.lua` | **202 KB** | 主控常驻的就是这个 |
 | `dist/worker.lua` | **80 KB** | 每台运算节点一份 |
-| `dist/install.lua` | **314 KB** | 只在安装时用，装完可删 |
+| `dist/install.lua` | **367 KB** | 只在安装时用，装完可删 |
 
-界面文案（中文）本身只占约 **9.5KB（2.2%）**。另外注意：**字库不在电脑磁盘上**——
-CC 的终端字体是客户端资源包、CraftOS-PC 是宿主配置，所以中文显示不占电脑空间；
-但原版 CC 客户端字体没有 CJK 字形，需要装中文字体资源包才能正常显示。
+界面文案全部是英文（ASCII），不再依赖中文字体：原版 CC 客户端与 CraftOS-PC 都能直接
+正常显示，不需要中文字体资源包。字库本身也不在电脑磁盘上（CC 的终端字体是客户端资源包、
+CraftOS-PC 是宿主配置），所以界面文字不占电脑空间。
 
 ---
 
@@ -841,7 +845,7 @@ python tools/build_dcnet_pkg.py
 python tools/build_worker.py
 ```
 
-得到 `unixshell/dist/worker-image/`（15 文件，约 123 KB）：只有 `startup.lua` 和 dcnet
+得到 `unixshell/dist/worker-image/`（15 文件，约 125 KB）：只有 `startup.lua` 和 dcnet
 包的 worker 所需模块，循环执行 `dcnet worker --headless`。镜像里**没有** ush、firstboot、
 BIOS、man/usr/cmd、`fontdata/`、`lib/cc_chinese.lua`/`cc_font*` 或桌面包——计算端没有
 中文字体支持和交互界面。主控端保留完整 unixshell + multishell。

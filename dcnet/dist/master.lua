@@ -13,7 +13,7 @@ local function __dc_load(name)
     local cached = __dc_cache[name]
     if cached ~= nil then return cached end
     local fn = __dc_modules[name]
-    if not fn then error("dcnet: 找不到模块 " .. tostring(name), 0) end
+    if not fn then error("dcnet: module not found: " .. tostring(name), 0) end
     local mod = fn()
     if mod == nil then mod = true end
     __dc_cache[name] = mod
@@ -143,7 +143,7 @@ function M.fit(s, cols)
     if cols <= 0 then return "" end
     if M.textWidth(s) <= cols then return s end
 
-    local ell = "…"
+    local ell = "..."
     local limit = math.max(0, cols - M.textWidth(ell))
     local out, w, i, n = {}, 0, 1, #s
     while i <= n do
@@ -205,9 +205,9 @@ function M.ensureDir(path)
 end
 
 function M.readFile(path)
-    if not fs.exists(path) or fs.isDir(path) then return nil, "文件不存在: " .. tostring(path) end
+    if not fs.exists(path) or fs.isDir(path) then return nil, "file not found: " .. tostring(path) end
     local h = fs.open(path, "r")
-    if not h then return nil, "无法打开: " .. tostring(path) end
+    if not h then return nil, "cannot open: " .. tostring(path) end
     local data = h.readAll()
     h.close()
     return data
@@ -217,7 +217,7 @@ function M.writeFile(path, data)
     local dir = path:match("^(.*)/[^/]*$")
     if dir and dir ~= "" then M.ensureDir(dir) end
     local h = fs.open(path, "w")
-    if not h then return false, "无法写入: " .. tostring(path) end
+    if not h then return false, "cannot write: " .. tostring(path) end
     h.write(data)
     h.close()
     return true
@@ -281,7 +281,7 @@ function M.saveCfg(key, value)
         settings.set(M.CFG_PREFIX .. key, value)
         return true
     end
-    return false, "本机没有 settings API"
+    return false, "settings API not available"
 end
 
 function M.cfgLines(cfg, meta)
@@ -309,9 +309,9 @@ end
 
 function M.runChunk(src, chunkname, env)
     local fn, err = M.loadChunk(src, chunkname, env)
-    if not fn then return nil, "编译失败: " .. tostring(err) end
+    if not fn then return nil, "compile failed: " .. tostring(err) end
     local ok, res = pcall(fn)
-    if not ok then return nil, "运行失败: " .. tostring(res) end
+    if not ok then return nil, "run failed: " .. tostring(res) end
     return res
 end
 
@@ -351,14 +351,14 @@ function M.parseArgs(tokens, params)
             out[p.name] = p.default
         else
             local v, err = M.coerce(raw, p.type)
-            if err then return nil, string.format("参数 %s 无效: %s", p.name, err) end
+            if err then return nil, string.format("invalid argument %s: %s", p.name, err) end
             out[p.name] = v
         end
         named[p.name] = nil
     end
     for k, v in pairs(named) do unknown[#unknown + 1] = k .. "=" .. tostring(v) end
     if #unknown > 0 then
-        return nil, "未知参数: " .. table.concat(unknown, ", ")
+        return nil, "unknown argument: " .. table.concat(unknown, ", ")
     end
     return out
 end
@@ -366,12 +366,12 @@ end
 function M.coerce(raw, kind)
     if kind == "number" then
         local n = tonumber(raw)
-        if not n then return nil, "不是数字" end
+        if not n then return nil, "not a number" end
         return n
     elseif kind == "boolean" then
         if raw == true or raw == "true" or raw == "1" or raw == "yes" then return true end
         if raw == false or raw == "false" or raw == "0" or raw == "no" then return false end
-        return nil, "不是布尔值"
+        return nil, "not a boolean"
     elseif kind == "string" or kind == nil then
         return tostring(raw)
     end
@@ -436,7 +436,7 @@ end
 function M.compatible(m)
     local v = tonumber(m and m.ver) or 0
     if v ~= M.VERSION then
-        return false, string.format("协议版本不匹配（对端 %d，本机 %d）", v, M.VERSION)
+        return false, string.format("protocol version mismatch (peer %d, local %d)", v, M.VERSION)
     end
     return true
 end
@@ -455,7 +455,7 @@ local function select_netlib()
     local ok, rpv = pcall(require, "rpvnet")
     if not ok or type(rpv) ~= "table" then
         if want == "rpv" then
-            error("dcnet: transport=rpv 但 lib/rpvnet.lua 不可用: " .. tostring(rpv), 0)
+            error("dcnet: transport=rpv but lib/rpvnet.lua unavailable: " .. tostring(rpv), 0)
         end
         return rednet, "rednet"
     end
@@ -499,10 +499,10 @@ function M.setKey(key)
         return true
     end
     if not M.signingSupported() then
-        return nil, "本机没有 bit32，无法启用消息签名"
+        return nil, "no bit32, cannot enable message signing"
     end
     if #key < 8 then
-        return nil, "密钥太短（至少 8 个字符）"
+        return nil, "key too short (at least 8 characters)"
     end
     M.key = tostring(key)
     if not M.sid then
@@ -573,34 +573,34 @@ end
 
 function M.verify(sender, msg)
     if not M.hasKey() then return true end
-    if type(msg) ~= "table" then return false, "消息格式非法" end
+    if type(msg) ~= "table" then return false, "invalid message format" end
     if not (msg.sid and msg.seq and msg.ts and msg.sig) then
         M.stats.unsigned = M.stats.unsigned + 1
-        M.lastBad = string.format("#%s 发来未签名的消息（type=%s）", tostring(sender), tostring(msg.t))
-        return false, "未签名"
+        M.lastBad = string.format("#%s sent unsigned message (type=%s)", tostring(sender), tostring(msg.t))
+        return false, "unsigned"
     end
 
     local now = os.epoch and os.epoch("utc") or (os.time() * 1000)
     if type(msg.ts) ~= "number" or math.abs(now - msg.ts) > M.SEQ_SKEW * 1000 then
         M.stats.stale = M.stats.stale + 1
-        M.lastBad = string.format("#%s 的消息时间戳偏差过大", tostring(sender))
-        return false, "时间戳无效"
+        M.lastBad = string.format("#%s message timestamp skew too large", tostring(sender))
+        return false, "invalid timestamp"
     end
 
     local bare = M._bare(msg)
     local want = crypto.hmacSha256(M.key, crypto.canonical(bare))
     if not want or not crypto.equal(want, tostring(msg.sig)) then
         M.stats.badSig = M.stats.badSig + 1
-        M.lastBad = string.format("#%s 的消息签名不对（type=%s）", tostring(sender), tostring(msg.t))
-        return false, "签名错误"
+        M.lastBad = string.format("#%s bad message signature (type=%s)", tostring(sender), tostring(msg.t))
+        return false, "bad signature"
     end
 
     local rec = M.seenSids[msg.sid]
     if rec and tonumber(msg.seq) and tonumber(msg.seq) <= rec.seq then
         M.stats.replay = M.stats.replay + 1
-        M.lastBad = string.format("#%s 重复/回退的消息被丢弃（seq %s ≤ %s）",
+        M.lastBad = string.format("#%s duplicate/regressed message dropped (seq %s <= %s)",
             tostring(sender), tostring(msg.seq), tostring(rec.seq))
-        return false, "重复消息"
+        return false, "duplicate message"
     end
     M.seenSids[msg.sid] = { seq = tonumber(msg.seq) or 0, at = util.mono() }
 
@@ -617,11 +617,11 @@ end
 
 function M.statsLines()
     local s = M.stats
-    local out = { string.format("签名：已签 %d　放行 %d　丢弃 %d", s.signed, s.fresh,
+    local out = { string.format("signature: signed %d  accepted %d  dropped %d", s.signed, s.fresh,
         s.badSig + s.replay + s.stale + s.unsigned) }
-    out[#out + 1] = string.format("  未签名 %d　签名错误 %d　重复 %d　时间戳无效 %d",
+    out[#out + 1] = string.format("  unsigned %d  bad signature %d  duplicate %d  stale %d",
         s.unsigned, s.badSig, s.replay, s.stale)
-    if M.lastBad then out[#out + 1] = "  最近一次拒绝：" .. M.lastBad end
+    if M.lastBad then out[#out + 1] = "  last rejection: " .. M.lastBad end
     return out
 end
 
@@ -657,7 +657,7 @@ end
 function M.open()
     local modems = M.findModems()
     if #modems == 0 then
-        return nil, "没有检测到调制解调器（modem）"
+        return nil, "no modem detected"
     end
 
     for _, md in ipairs(modems) do
@@ -669,7 +669,7 @@ function M.open()
 
         if err then M.lastError = tostring(err) end
     end
-    return nil, "无法打开任何调制解调器" .. (M.lastError and (": " .. M.lastError) or "")
+    return nil, "cannot open any modem" .. (M.lastError and (": " .. M.lastError) or "")
 end
 
 function M.openAll()
@@ -694,18 +694,18 @@ function M.describe(list)
     for _, md in ipairs(list or {}) do
         if md.wireless then wireless = wireless + 1 else wired = wired + 1 end
     end
-    if wired + wireless == 0 then return "无" end
-    return string.format("%d 有线 / %d 无线", wired, wireless)
+    if wired + wireless == 0 then return "none" end
+    return string.format("%d wired / %d wireless", wired, wireless)
 end
 
 function M.send(target, msg, proto)
-    if type(target) ~= "number" then return false, "目标 ID 非法" end
+    if type(target) ~= "number" then return false, "invalid target ID" end
 
-    if target <= 0 then return false, "目标不是网络节点" end
+    if target <= 0 then return false, "target is not a network node" end
     if type(msg) == "table" then M.sign(msg) end
     local ok, res = pcall(netlib.send, target, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
+    if res == false then return false, "network not open (" .. tostring(TRANSPORT) .. ")" end
     return true
 end
 
@@ -713,7 +713,7 @@ function M.broadcast(msg, proto)
     if type(msg) == "table" then M.sign(msg) end
     local ok, res = pcall(netlib.broadcast, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
+    if res == false then return false, "network not open (" .. tostring(TRANSPORT) .. ")" end
     return true
 end
 
@@ -890,7 +890,7 @@ function M.newRegistry()
 end
 
 function M.enqueue(reg, target, name, what, data, onDone)
-    if type(data) ~= "string" or #data == 0 then return nil, "内容为空" end
+    if type(data) ~= "string" or #data == 0 then return nil, "empty content" end
     local s = M.newSender({ target = target, name = name, what = what, data = data,
         onDone = onDone })
     reg.senders[s.xid] = s
@@ -918,12 +918,12 @@ function M.waitFor(reg, xid, timeout)
         if st then
             reg.results[xid] = nil
             if st == "ok" then return true end
-            return nil, "传输失败"
+            return nil, "transfer failed"
         end
         if util.mono() > deadline then
             reg.senders[xid] = nil
             reg.results[xid] = nil
-            return nil, "传输超时"
+            return nil, "transfer timeout"
         end
         os.startTimer(0.2)
         os.pullEvent()
@@ -991,7 +991,7 @@ function M.senderPoll(s, send)
             if now - s.sentAt < M.ACK_TIMEOUT then return s.state end
             s.tries = s.tries + 1
             if s.tries > M.MAX_TRIES then
-                s.state, s.err = "fail", "分块确认超时"
+                s.state, s.err = "fail", "chunk ack timeout"
                 if s.onDone then s.onDone(s.state, s) end
                 return s.state
             end
@@ -1017,7 +1017,7 @@ function M.senderPoll(s, send)
     if now - s.sentAt > M.ACK_TIMEOUT then
         s.tries = s.tries + 1
         if s.tries > M.MAX_TRIES then
-            s.state, s.err = "fail", "结束确认超时"
+            s.state, s.err = "fail", "final ack timeout"
             if s.onDone then s.onDone(s.state, s) end
             return s.state
         end
@@ -1053,11 +1053,11 @@ end
 
 function M.senderSummary(s)
     if s.state == "ok" then
-        return string.format("%s 已送达 #%d（%d 块，%s）", s.name, s.target, s.n, util.duration((util.mono() - s.startedAt) * 1000))
+        return string.format("%s delivered to #%d (%d chunks, %s)", s.name, s.target, s.n, util.duration((util.mono() - s.startedAt) * 1000))
     elseif s.state == "fail" then
-        return string.format("%s → #%d 失败：%s", s.name, s.target, tostring(s.err))
+        return string.format("%s -> #%d failed: %s", s.name, s.target, tostring(s.err))
     end
-    return string.format("%s → #%d 传输中 %d/%d", s.name, s.target, math.min(s.next - 1, s.n), s.n)
+    return string.format("%s -> #%d transferring %d/%d", s.name, s.target, math.min(s.next - 1, s.n), s.n)
 end
 
 function M.newReceiver(xid, name, n)
@@ -1112,68 +1112,68 @@ local util = dc_require("dc.util")
 local M = {}
 
 function M.validate(def)
-    if type(def) ~= "table" then return nil, "作业必须 return 一个 table" end
-    if type(def.name) ~= "string" or def.name == "" then return nil, "缺少 name 字段" end
+    if type(def) ~= "table" then return nil, "job must return a table" end
+    if type(def.name) ~= "string" or def.name == "" then return nil, "missing name field" end
     if type(def.map) ~= "function" and type(def.cloud) ~= "table" then
-        return nil, "缺少 map 函数（或用于云端卸载的 cloud 定义）"
+        return nil, "missing map function (or cloud definition for cloud offload)"
     end
-    if def.map ~= nil and type(def.map) ~= "function" then return nil, "map 必须是函数" end
+    if def.map ~= nil and type(def.map) ~= "function" then return nil, "map must be a function" end
     if def.cloud ~= nil then
-        if type(def.cloud) ~= "table" then return nil, "cloud 必须是 table" end
-        if type(def.cloud.build) ~= "function" then return nil, "cloud.build 必须是函数" end
-        if type(def.cloud.parse) ~= "function" then return nil, "cloud.parse 必须是函数" end
+        if type(def.cloud) ~= "table" then return nil, "cloud must be a table" end
+        if type(def.cloud.build) ~= "function" then return nil, "cloud.build must be a function" end
+        if type(def.cloud.parse) ~= "function" then return nil, "cloud.parse must be a function" end
         if def.cloud.endpoint ~= nil and type(def.cloud.endpoint) ~= "string" then
-            return nil, "cloud.endpoint 必须是字符串"
+            return nil, "cloud.endpoint must be a string"
         end
     end
-    if def.split ~= nil and type(def.split) ~= "function" then return nil, "split 必须是函数" end
-    if def.reduce ~= nil and type(def.reduce) ~= "function" then return nil, "reduce 必须是函数" end
-    if def.format ~= nil and type(def.format) ~= "function" then return nil, "format 必须是函数" end
-    if def.params ~= nil and type(def.params) ~= "table" then return nil, "params 必须是数组" end
+    if def.split ~= nil and type(def.split) ~= "function" then return nil, "split must be a function" end
+    if def.reduce ~= nil and type(def.reduce) ~= "function" then return nil, "reduce must be a function" end
+    if def.format ~= nil and type(def.format) ~= "function" then return nil, "format must be a function" end
+    if def.params ~= nil and type(def.params) ~= "table" then return nil, "params must be an array" end
     return true
 end
 
 function M.buildCloudRequest(def, task, args)
     if not (def and def.cloud and def.cloud.build) then
-        return nil, "作业没有定义 cloud.build"
+        return nil, "job does not define cloud.build"
     end
     local ok, body = pcall(def.cloud.build, task, args)
     if not ok then return nil, tostring(body) end
-    if body == nil then return nil, "cloud.build 返回了 nil" end
+    if body == nil then return nil, "cloud.build returned nil" end
     return body
 end
 
 function M.parseCloudResponse(def, decoded, task, args)
     if not (def and def.cloud and def.cloud.parse) then
-        return nil, "作业没有定义 cloud.parse"
+        return nil, "job does not define cloud.parse"
     end
     local ok, data = pcall(def.cloud.parse, decoded, task, args)
     if not ok then return nil, tostring(data) end
-    if data == nil then return nil, "cloud.parse 返回了 nil" end
+    if data == nil then return nil, "cloud.parse returned nil" end
     return data
 end
 
 function M.runReduce(src, payload, args, ctx)
     if type(payload) ~= "table" or type(payload.__reduce) ~= "table" then
-        return nil, "reduce 任务负载格式不对（缺少 __reduce）"
+        return nil, "bad reduce task payload (missing __reduce)"
     end
     local env = setmetatable({}, { __index = _G })
     env.ctx = ctx
     local fn, err = util.loadChunk(src, "=dcjob", env)
-    if not fn then return nil, "作业源码编译失败: " .. tostring(err) end
+    if not fn then return nil, "job source compile failed: " .. tostring(err) end
     local ok, def = pcall(fn)
-    if not ok then return nil, "作业初始化失败: " .. tostring(def) end
+    if not ok then return nil, "job init failed: " .. tostring(def) end
     local vok, verr = M.validate(def)
     if not vok then return nil, verr end
     if type(def.reduce) ~= "function" then
-        return nil, "该作业没有 reduce，不能做两级汇总"
+        return nil, "job has no reduce, cannot do two-level reduce"
     end
 
     local rok, res = pcall(def.reduce, payload.__reduce, args)
     if not rok then return nil, tostring(res) end
-    if res == nil then return nil, "reduce 返回了 nil" end
+    if res == nil then return nil, "reduce returned nil" end
     local sok = pcall(textutils.serialize, res)
-    if not sok then return nil, "reduce 返回值无法序列化" end
+    if not sok then return nil, "reduce result is not serializable" end
     return res
 end
 
@@ -1198,7 +1198,7 @@ end
 
 function M.safeName(name)
     if type(name) ~= "string" or not name:match("^[%w_%-]+$") then
-        return nil, "作业名只能包含字母、数字、下划线和短横线"
+        return nil, "job name may only contain letters, digits, underscore and dash"
     end
     return name
 end
@@ -1218,7 +1218,7 @@ function M.list()
             out[#out + 1] = {
                 name    = name,
                 ok      = def ~= nil,
-                summary = def and (def.summary or "") or ("加载失败: " .. tostring(err)),
+                summary = def and (def.summary or "") or ("load failed: " .. tostring(err)),
                 params  = def and def.params or nil,
             }
         end
@@ -1256,9 +1256,9 @@ end
 function M.split(def, args)
     if not def.split then return { args } end
     local ok, tasks = pcall(def.split, args)
-    if not ok then return nil, "split 执行失败: " .. tostring(tasks) end
+    if not ok then return nil, "split failed: " .. tostring(tasks) end
     if type(tasks) ~= "table" or #tasks == 0 then
-        return nil, "split 必须返回非空的任务数组"
+        return nil, "split must return a non-empty task array"
     end
     return tasks
 end
@@ -1266,7 +1266,7 @@ end
 function M.reduce(def, results, args)
     if not def.reduce then return results end
     local ok, res = pcall(def.reduce, results, args)
-    if not ok then return nil, "reduce 执行失败: " .. tostring(res) end
+    if not ok then return nil, "reduce failed: " .. tostring(res) end
     return res
 end
 
@@ -1274,7 +1274,7 @@ function M.format(def, res, args)
     if def.format then
         local ok, text = pcall(def.format, res, args)
         if ok and text ~= nil then return tostring(text) end
-        if not ok then return "format 执行失败: " .. tostring(text) end
+        if not ok then return "format failed: " .. tostring(text) end
     end
     local ok, text = pcall(textutils.serialize, res)
     if ok then return text end
@@ -1285,24 +1285,24 @@ function M.runMap(src, payload, ctx)
     local env = setmetatable({}, { __index = _G })
     env.ctx = ctx
     local fn, err = util.loadChunk(src, "=dcjob", env)
-    if not fn then return nil, "作业源码编译失败: " .. tostring(err) end
+    if not fn then return nil, "job source compile failed: " .. tostring(err) end
     local ok, def = pcall(fn)
-    if not ok then return nil, "作业初始化失败: " .. tostring(def) end
+    if not ok then return nil, "job init failed: " .. tostring(def) end
     local vok, verr = M.validate(def)
     if not vok then return nil, verr end
     if type(def.map) ~= "function" then
-        return nil, "该作业没有本地 map（只能交给云端执行）"
+        return nil, "job has no local map (cloud only)"
     end
 
     local callOk, res = pcall(def.map, payload, ctx)
     if not callOk then return nil, tostring(res) end
 
     if res == nil then
-        return nil, "map 返回了 nil（要表达\"没找到\"请返回显式结构，例如 { hit = false }）"
+        return nil, "map returned nil (return an explicit structure for \"not found\", e.g. { hit = false })"
     end
 
     local sok = pcall(textutils.serialize, res)
-    if not sok then return nil, "map 返回值无法序列化（可能包含函数或协程）" end
+    if not sok then return nil, "map result is not serializable (may contain functions or coroutines)" end
     return res
 end
 
@@ -1334,8 +1334,8 @@ function Sched:log(text, colour)
 end
 
 local STATE_TEXT = {
-    queued = "排队", running = "执行中", done = "完成",
-    failed = "失败", cancelled = "取消",
+    queued = "queued", running = "running", done = "done",
+    failed = "failed", cancelled = "cancelled",
 }
 
 M.DEFAULTS = {
@@ -1372,36 +1372,36 @@ M.DEFAULTS = {
 }
 
 M.CFG_META = {
-    workerTimeout   = "节点失联判定（秒）",
-    taskTimeout     = "任务初始超时（秒）",
-    taskTimeoutMin  = "自适应超时下限（秒）",
-    taskTimeoutMax  = "自适应超时上限（秒）",
-    adaptiveTimeout = "按历史耗时自适应超时",
-    maxTries        = "单任务最多派发次数",
-    pollInterval    = "节点空闲轮询间隔（秒）",
-    maxParallel     = "同时执行的作业数",
-    redundancy      = "抢尾冗余派发阈值（0=关）",
-    verbose         = "打印每次任务派发",
-    snapshot        = "把未完成作业写快照（断点续算）",
-    snapshotInterval = "兜底快照间隔（秒）",
-    autoResume      = "启动时自动接上未完成作业",
-    cache           = "使用结果缓存",
-    cloud           = "启用云端卸载（HTTP 计算服务）",
-    cloudFirst      = "优先用云端（关闭=本机空闲时不用云端）",
-    cloudChunk      = "云端请求超过多少字节就分块上传",
-    twoLevelReduce  = "结果多时并行 reduce（两级汇总）",
-    reduceThreshold = "超过多少条结果启用两级汇总",
-    reduceGroupSize = "每个 reduce 任务处理多少条结果",
-    standby         = "本机作为待命主控启动",
-    beatInterval    = "在岗主控心跳间隔（秒）",
-    takeoverAfter   = "收不到心跳多久后接管（秒）",
-    reHelloAfter    = "节点重发 hello 的静默阈值（秒）",
-    rediscoverAfter = "节点重新搜索主控的静默阈值（秒）",
-    monitor         = "大屏显示器名（空=自动找）",
-    monitorScale    = "大屏字号缩放",
-    netScreen       = "向网络屏幕推送面板（屏幕节点）",
-    fileChannel     = "大负载走文件通道",
-    inlineLimit     = "超过多少字节改走文件通道",
+    workerTimeout   = "worker offline timeout (s)",
+    taskTimeout     = "initial task timeout (s)",
+    taskTimeoutMin  = "adaptive timeout min (s)",
+    taskTimeoutMax  = "adaptive timeout max (s)",
+    adaptiveTimeout = "adaptive timeout from task history",
+    maxTries        = "max dispatches per task",
+    pollInterval    = "idle worker poll interval (s)",
+    maxParallel     = "parallel jobs",
+    redundancy      = "straggler redundancy threshold (0=off)",
+    verbose         = "log every task dispatch",
+    snapshot        = "snapshot unfinished jobs",
+    snapshotInterval = "fallback snapshot interval (s)",
+    autoResume      = "auto resume unfinished jobs on start",
+    cache           = "use result cache",
+    cloud           = "enable cloud offload (HTTP compute)",
+    cloudFirst      = "prefer cloud (off=only when busy)",
+    cloudChunk      = "cloud request chunk size (bytes)",
+    twoLevelReduce  = "parallel reduce when many results",
+    reduceThreshold = "results needed for two-level reduce",
+    reduceGroupSize = "results per reduce task",
+    standby         = "start as standby master",
+    beatInterval    = "serving master heartbeat (s)",
+    takeoverAfter   = "takeover after missed heartbeats (s)",
+    reHelloAfter    = "worker re-hello silence (s)",
+    rediscoverAfter = "worker rediscover silence (s)",
+    monitor         = "monitor name (empty=auto)",
+    monitorScale    = "monitor text scale",
+    netScreen       = "push panel to network screens",
+    fileChannel     = "large payloads via file channel",
+    inlineLimit     = "file channel threshold (bytes)",
 }
 
 function M.new(opts)
@@ -1428,7 +1428,7 @@ function M.new(opts)
 end
 
 function Sched:saveSnapshot()
-    if not self.cfg.snapshot then return false, "快照已关闭" end
+    if not self.cfg.snapshot then return false, "snapshot disabled" end
     local ok, err = state.snapshot(self)
     if ok then
         self.dirty, self.lastSnap = false, util.mono()
@@ -1463,32 +1463,32 @@ function Sched:topLines(limit)
         return a.id < b.id
     end)
 
-    local out = { string.format("%-7s %-12s %8s %8s %10s", "节点", "名称", "累计完成", "累计失败", "最近在线") }
+    local out = { string.format("%-7s %-12s %8s %8s %10s", "worker", "name", "done", "failed", "last seen") }
     for i = 1, math.min(#rows, limit or 10) do
         local r = rows[i]
         out[#out + 1] = string.format("%-7s %-12s %8d %8d %10s", "#" .. r.id,
             util.trunc(r.name or "-", 12), r.done, r.fail,
-            r.lastSeen and util.duration(util.now() - r.lastSeen) .. "前" or "-")
+            r.lastSeen and util.duration(util.now() - r.lastSeen) .. " ago" or "-")
     end
-    if #rows == 0 then out[#out + 1] = "（还没有节点贡献记录）" end
+    if #rows == 0 then out[#out + 1] = "(no worker contribution records)" end
     return out
 end
 
 function Sched:restore()
     local n, err, skipped = state.restore(self, jobs)
     for _, s in ipairs(skipped or {}) do
-        self:log("  无法恢复 " .. s, colour("red", 16384))
+        self:log("  cannot restore " .. s, colour("red", 16384))
     end
     if n > 0 then self:pump() end
     return n, err
 end
 
 function Sched:setCfg(key, value)
-    if self.cfg[key] == nil then return nil, "未知配置项: " .. tostring(key) end
+    if self.cfg[key] == nil then return nil, "unknown config: " .. tostring(key) end
     local old = self.cfg[key]
     if type(old) == "number" then
         local n = tonumber(value)
-        if not n then return nil, "需要数字" end
+        if not n then return nil, "number required" end
         self.cfg[key] = n
     elseif type(old) == "boolean" then
         if value == true or value == "true" or value == "on" or value == "1" then
@@ -1496,7 +1496,7 @@ function Sched:setCfg(key, value)
         elseif value == false or value == "false" or value == "off" or value == "0" then
             self.cfg[key] = false
         else
-            return nil, "需要 true/false"
+            return nil, "expected true/false"
         end
     else
         self.cfg[key] = tostring(value)
@@ -1541,7 +1541,7 @@ end
 function Sched:workerLines()
     local out = {
         string.format("%-7s %-12s %-6s %6s %6s %9s %8s  %s",
-            "节点", "名称", "状态", "完成", "失败", "累计耗时", "均速", "当前"),
+            "worker", "name", "state", "done", "failed", "elapsed", "avg/s", "current"),
     }
     for _, w in ipairs(self:workerList()) do
         local speed = "-"
@@ -1552,16 +1552,16 @@ function Sched:workerLines()
         if w.state == "busy" and w.job and w.task then
             cur = string.format("#%d.%d %d%%", w.job, w.task, math.floor((w.progress or 0) * 100))
         elseif w.state == "offline" then
-            cur = "离线 " .. util.duration(util.now() - (w.lastSeen or 0))
+            cur = "offline " .. util.duration(util.now() - (w.lastSeen or 0))
         end
         out[#out + 1] = string.format("%-7s %-12s %-6s %6d %6d %9s %8s  %s",
-            w.virtual and "云端" or ("#" .. w.id),
+            w.virtual and "cloud" or ("#" .. w.id),
             util.trunc(w.name or "-", 12),
-            w.virtual and "云端" or (w.state == "busy" and "忙碌" or (w.state == "offline" and "离线" or "空闲")),
+            w.virtual and "cloud" or (w.state == "busy" and "busy" or (w.state == "offline" and "offline" or "idle")),
             w.done, w.fail,
             util.duration(w.totalMs), speed, cur)
     end
-    if #out == 1 then out[#out + 1] = "（还没有节点连接）" end
+    if #out == 1 then out[#out + 1] = "(no workers connected)" end
     return out
 end
 
@@ -1607,7 +1607,7 @@ function Sched:addJob(def, tokens, opts)
             job.counts.done, job.counts.pending = job.total, 0
             self.jobs[id] = job
             self.jobOrder[#self.jobOrder + 1] = id
-            self:log(string.format("作业 #%d %s 命中结果缓存（%s 前算过），直接出结果",
+            self:log(string.format("Job #%d %s result cache hit (computed %s ago), returning result",
                 id, job.name, util.duration(util.now() - (hit.at or util.now()))), colour("lime", 32))
             for _, line in ipairs(util.split(job.resultText, "\n")) do
                 self:log("  " .. line, colour("white", 1))
@@ -1620,10 +1620,10 @@ function Sched:addJob(def, tokens, opts)
     self.jobs[id] = job
     self.jobOrder[#self.jobOrder + 1] = id
     self.dirty = true
-    self:log(string.format("作业 #%d %s 已提交：%d 个任务  %s",
+    self:log(string.format("Job #%d %s submitted: %d tasks  %s",
         id, job.name, job.total, jobs.paramHelp(def)), colour("lime", 32))
     if #(job.source or "") > 8000 then
-        self:log(string.format("  注意：作业源码 %s 偏大，每个任务下发时会附带源码，建议拆小",
+        self:log(string.format("  note: job source %s is large; sent with every task, consider splitting",
             util.bytes(#job.source)), colour("orange", 2))
     end
     self:pump()
@@ -1642,7 +1642,7 @@ function Sched:pump()
             job.startedAt = util.mono()
             self.running[id] = true
             running = running + 1
-            self:log(string.format("作业 #%d %s 开始执行（%d 个任务，优先级 %d）",
+            self:log(string.format("Job #%d %s started (%d tasks, priority %d)",
                 id, job.name, job.total, job.priority or 0), colour("lightBlue", 512))
             if running >= limit then return end
         end
@@ -1765,12 +1765,12 @@ function Sched:dispatch(job, tid, workerId, isDup)
                 t.payloadBytes = #encoded
                 useFile = true
                 if self.cfg.verbose then
-                    self:log(string.format("  任务 %d.%d 负载 %s，改走文件通道（%s）",
+                    self:log(string.format("  task %d.%d payload %s via file channel (%s)",
                         job.id, tid, util.bytes(size), name), colour("lightGray", 1024))
                 end
             end
             if not wrote then
-                self:log("负载落盘失败，退回内联：" .. tostring(wsize), colour("orange", 2))
+                self:log("payload write failed, inline fallback: " .. tostring(wsize), colour("orange", 2))
             end
         end
     end
@@ -1792,8 +1792,8 @@ function Sched:dispatch(job, tid, workerId, isDup)
     net.send(workerId, msg, util.PROTO_CTRL)
     self.dirty = true
     if self.cfg.verbose or t.tries > 1 or isDup then
-        self:log(string.format("  → 任务 %d.%d 派发给 #%d（第 %d 次%s）",
-            job.id, tid, workerId, t.tries, isDup and "，冗余" or ""), colour("yellow", 256))
+        self:log(string.format("  -> task %d.%d dispatched to #%d (try %d%s)",
+            job.id, tid, workerId, t.tries, isDup and ", redundant" or ""), colour("yellow", 256))
     end
     return msg
 end
@@ -1872,14 +1872,14 @@ function Sched:requeue(jobId, tid, why)
         self.stats.failed = self.stats.failed + 1
         local w = oldWorker and self.workers[oldWorker]
         if w then w.fail = w.fail + 1 end
-        self:log(string.format("  x 任务 %d.%d 失败：%s（已派发 %d 次）",
+        self:log(string.format("  x task %d.%d failed: %s (dispatched %d times)",
             jobId, tid, why, t.tries), colour("red", 16384))
     else
         t.state, t.worker = "pending", nil
         job.queue[#job.queue + 1] = tid
         job.counts.pending = job.counts.pending + 1
         self.stats.retries = self.stats.retries + 1
-        self:log(string.format("  ~ 任务 %d.%d 重新入队：%s", jobId, tid, why),
+        self:log(string.format("  ~ task %d.%d requeued: %s", jobId, tid, why),
             colour("orange", 2))
     end
     self.dirty = true
@@ -1931,7 +1931,7 @@ function Sched:maybeTwoLevel(job)
         job.order[i] = i
         job.queue[i] = i
     end
-    self:log(string.format("作业 #%d 进入两级汇总：%d 条结果分成 %d 组并行 reduce",
+    self:log(string.format("Job #%d two-level reduce: %d results split into %d groups",
         job.id, #results, #groups), colour("lightBlue", 512))
     self.dirty = true
     return true
@@ -1944,7 +1944,7 @@ function Sched:finalize(job)
 
     if job.counts.done == 0 then
         job.state = "failed"
-        job.error = "所有任务都失败了"
+        job.error = "all tasks failed"
     else
         local results = {}
         for _, tid in ipairs(job.order) do
@@ -1967,7 +1967,7 @@ function Sched:finalize(job)
         end
     end
 
-    self:log(string.format("作业 #%d %s 结束：成功 %d / 失败 %d，用时 %s",
+    self:log(string.format("Job #%d %s finished: done %d / failed %d, elapsed %s",
         job.id, job.name, job.counts.done, job.counts.failed, util.duration(job.durationMs)),
         job.state == "done" and colour("lime", 32) or colour("red", 16384))
     if job.state == "done" and job.resultText then
@@ -1990,9 +1990,9 @@ end
 
 function Sched:cancel(jobId)
     local job = self.jobs[jobId]
-    if not job then return nil, "没有这个作业" end
+    if not job then return nil, "no such job" end
     if job.state ~= "queued" and job.state ~= "running" then
-        return nil, "作业已经结束"
+        return nil, "job already finished"
     end
     job.state = "cancelled"
     job.finishedAt = util.now()
@@ -2005,11 +2005,11 @@ function Sched:cancel(jobId)
             if w then w.task, w.job, w.state = nil, nil, "idle" end
         end
         if t.state ~= "done" then
-            t.state, t.err = "failed", "已取消"
+            t.state, t.err = "failed", "cancelled"
         end
     end
     job.counts = { pending = 0, running = 0, done = 0, failed = #job.order }
-    self:log(string.format("作业 #%d %s 已取消", jobId, job.name), colour("orange", 2))
+    self:log(string.format("Job #%d %s cancelled", jobId, job.name), colour("orange", 2))
     self:pump()
     return true
 end
@@ -2029,9 +2029,9 @@ function Sched:onMessage(sender, msg)
     if msg.t == proto.HELLO then
         local vok, verr = proto.compatible(msg)
         if not vok then
-            self:log(string.format("节点 #%d 协议版本不兼容：%s", sender, tostring(verr)),
+            self:log(string.format("Worker #%d protocol version incompatible: %s", sender, tostring(verr)),
                 colour("red", 16384))
-            self:log("  请把该节点升级到与主控同一版本（主控执行 push，或重新拷贝 worker.lua）",
+            self:log("  upgrade this worker to the master version (run push on the master, or copy worker.lua again)",
                 colour("red", 16384))
             return true
         end
@@ -2040,9 +2040,9 @@ function Sched:onMessage(sender, msg)
         w.wireless = msg.wireless
         w.have     = msg.have
         if w.state == "offline" then w.state = "idle" end
-        self:log(string.format("节点 #%d 已%s：%s（%s）", sender,
-            known and "重新连接" or "连接", w.name,
-            w.wireless and "无线" or "有线"), colour("lime", 32))
+        self:log(string.format("Worker #%d %s: %s (%s)", sender,
+            known and "reconnected" or "connected", w.name,
+            w.wireless and "wireless" or "wired"), colour("lime", 32))
         net.send(sender, proto.msg(proto.WELCOME, {
             master = os.getComputerID(),
             cfg = {
@@ -2085,7 +2085,7 @@ function Sched:onMessage(sender, msg)
 
     if msg.t == proto.BYE then
         w.state, w.task, w.job = "offline", nil, nil
-        self:log(string.format("节点 #%d 主动下线：%s", sender, tostring(msg.reason or "无")),
+        self:log(string.format("Worker #%d went offline: %s", sender, tostring(msg.reason or "none")),
             colour("orange", 2))
         return true
     end
@@ -2103,7 +2103,7 @@ function Sched:onResult(sender, msg)
     if msg.ok and msg.data == nil and msg.dataRef then
         local value, derr = state.poolGet(msg.dataRef)
         if value == nil then
-            msg.ok, msg.err = false, "结果文件读取失败: " .. tostring(derr)
+            msg.ok, msg.err = false, "failed to read result file: " .. tostring(derr)
         else
             msg.data = value
         end
@@ -2162,23 +2162,23 @@ function Sched:onResult(sender, msg)
         w.done = w.done + 1
         self.stats.done = self.stats.done + 1
         if self.cfg.verbose or job.total <= 40 then
-            self:log(string.format("  <- 任务 %d.%d 完成于 #%d（%s）",
+            self:log(string.format("  <- task %d.%d done on #%d (%s)",
                 job.id, t.id, sender, util.duration(ms)), colour("lightGray", 1024))
         end
     else
-        local why = "节点报错: " .. tostring(msg.err or "未知")
+        local why = "worker error: " .. tostring(msg.err or "unknown")
         if t.tries >= self.cfg.maxTries then
             t.state, t.err = "failed", why
             job.counts.failed = job.counts.failed + 1
             self.stats.failed = self.stats.failed + 1
             w.fail = w.fail + 1
-            self:log(string.format("  x 任务 %d.%d 失败：%s", job.id, t.id, why), colour("red", 16384))
+            self:log(string.format("  x task %d.%d failed: %s", job.id, t.id, why), colour("red", 16384))
         else
             t.state, t.worker = "pending", nil
             job.queue[#job.queue + 1] = t.id
             job.counts.pending = job.counts.pending + 1
             self.stats.retries = self.stats.retries + 1
-            self:log(string.format("  ~ 任务 %d.%d 重试：%s", job.id, t.id, why), colour("orange", 2))
+            self:log(string.format("  ~ task %d.%d retry: %s", job.id, t.id, why), colour("orange", 2))
         end
     end
 
@@ -2194,13 +2194,13 @@ function Sched:tick()
         if not w.virtual and w.state ~= "offline"
             and (nowMs - (w.lastSeen or 0)) > self.cfg.workerTimeout * 1000 then
             w.state = "offline"
-            self:log(string.format("节点 #%d 失去联系（>%ds）", id, self.cfg.workerTimeout),
+            self:log(string.format("Worker #%d lost contact (>%ds)", id, self.cfg.workerTimeout),
                 colour("red", 16384))
             if w.task and w.job then
                 local job = self.jobs[w.job]
                 local t = job and job.tasks[w.task]
                 if t and t.state == "running" and t.worker == id then
-                    self:requeue(w.job, w.task, "节点离线")
+                    self:requeue(w.job, w.task, "worker offline")
                 elseif t and t.dups then
 
                     for i, wid in ipairs(t.dups) do
@@ -2216,7 +2216,7 @@ function Sched:tick()
         if job.state == "running" then
             for tid, t in pairs(job.tasks) do
                 if t.state == "running" and t.deadline and mono > t.deadline then
-                    self:requeue(job.id, tid, string.format("超过 %.0fs 无进展",
+                    self:requeue(job.id, tid, string.format("no progress for %.0fs",
                         t.deadline - (t.lastProgressAt or t.startedAt or mono)))
                 end
             end
@@ -2232,7 +2232,7 @@ function Sched:tick()
             local ok, err = self:saveSnapshot()
             if not ok and not self.snapWarned then
                 self.snapWarned = true
-                self:log("快照写入失败：" .. tostring(err), colour("red", 16384))
+                self:log("snapshot write failed: " .. tostring(err), colour("red", 16384))
             end
         end
     end
@@ -2240,17 +2240,17 @@ end
 
 function Sched:setPriority(jobId, pri)
     local job = self.jobs[jobId]
-    if not job then return nil, "没有这个作业" end
+    if not job then return nil, "no such job" end
     job.priority = tonumber(pri) or 0
-    self:log(string.format("作业 #%d 优先级改为 %d", jobId, job.priority), colour("yellow", 256))
+    self:log(string.format("Job #%d priority set to %d", jobId, job.priority), colour("yellow", 256))
     return true
 end
 
 function Sched:pauseJob(jobId, on)
     local job = self.jobs[jobId]
-    if not job then return nil, "没有这个作业" end
+    if not job then return nil, "no such job" end
     job.paused = on and true or false
-    self:log(string.format("作业 #%d %s", jobId, job.paused and "已暂停派发" or "已恢复派发"),
+    self:log(string.format("Job #%d %s", jobId, job.paused and "dispatch paused" or "dispatch resumed"),
         colour("orange", 2))
     return true
 end
@@ -2268,8 +2268,8 @@ end
 function Sched:statusLine()
     local running = self:runningCount()
     local parts = {
-        string.format("主控 #%d", os.getComputerID()),
-        string.format("节点 %d/%d", self:onlineCount(), self:workerCount()),
+        string.format("master #%d", os.getComputerID()),
+        string.format("workers %d/%d", self:onlineCount(), self:workerCount()),
     }
     local queued = 0
     for _, j in pairs(self.jobs) do
@@ -2282,20 +2282,20 @@ function Sched:statusLine()
         parts[#parts + 1] = string.format("#%d %s %s %d%% %d/%d%s", job.id, job.name,
             util.bar(pct, 8), math.floor(pct * 100),
             job.counts.done + job.counts.failed, job.total,
-            job.counts.failed > 0 and (" 失败" .. job.counts.failed) or "")
+            job.counts.failed > 0 and (" failed " .. job.counts.failed) or "")
     end
     if running > 1 then
-        parts[#parts + 1] = string.format("并发 %d/%d", running, math.max(1, self.cfg.maxParallel or 1))
+        parts[#parts + 1] = string.format("parallel %d/%d", running, math.max(1, self.cfg.maxParallel or 1))
     end
     if queued > 0 then
-        parts[#parts + 1] = "队列 " .. queued
+        parts[#parts + 1] = "queue " .. queued
     elseif running == 0 then
-        parts[#parts + 1] = "空闲"
+        parts[#parts + 1] = "idle"
     end
     if self.cfg.redundancy and self.cfg.redundancy > 0 then
-        parts[#parts + 1] = "抢尾 " .. self.cfg.redundancy
+        parts[#parts + 1] = "redundant " .. self.cfg.redundancy
     end
-    if self.paused then parts[#parts + 1] = "已暂停" end
+    if self.paused then parts[#parts + 1] = "paused" end
     return table.concat(parts, " | ")
 end
 
@@ -2311,14 +2311,14 @@ function Sched:jobLines(jobId)
         if job then
             local pct = self:progress(job)
             local elapsed = job.durationMs or (util.now() - job.submittedAt)
-            out[#out + 1] = string.format("#%-3d %-12s %-6s pri%-3d %s %3d%%  任务 %d/%d 失败 %d  用时 %s%s",
+            out[#out + 1] = string.format("#%-3d %-12s %-6s pri%-3d %s %3d%%  tasks %d/%d failed %d  elapsed %s%s",
                 job.id, job.name, STATE_TEXT[job.state] or job.state,
                 job.priority or 0, util.bar(pct, 12), math.floor(pct * 100),
                 job.counts.done + job.counts.failed, job.total, job.counts.failed,
-                util.duration(elapsed), job.paused and "  [已暂停]" or "")
+                util.duration(elapsed), job.paused and "  [paused]" or "")
         end
     end
-    if #out == 0 then out[1] = "（还没有作业）" end
+    if #out == 0 then out[1] = "(no jobs)" end
     return out
 end
 
@@ -2329,7 +2329,7 @@ function Sched:failedTaskLines(jobId, limit)
     for _, tid in ipairs(job.order) do
         local t = job.tasks[tid]
         if t.state == "failed" then
-            out[#out + 1] = string.format("  任务 %d 失败：%s", tid, tostring(t.err))
+            out[#out + 1] = string.format("  task %d failed: %s", tid, tostring(t.err))
             if #out >= (limit or 5) then break end
         end
     end
@@ -2370,9 +2370,9 @@ function M.run(opts)
 
     local modems, failedModems = net.openAll()
     if #modems == 0 then
-        printError("[dcnet] 没有检测到调制解调器（modem）")
-        print("[dcnet] 有线网络接法：电脑旁放有线调制解调器，调制解调器上接网络线缆，")
-        print("[dcnet] 所有机器串到同一段线缆上即可；要多网段就给主控挂多个 modem。")
+        printError("[dcnet] No modem detected")
+        print("[dcnet] Wired setup: put a wired modem beside the computer, cable into the modem,")
+        print("[dcnet] chain all machines on one cable; add more modems to bridge more networks.")
         return false
     end
 
@@ -2387,10 +2387,10 @@ function M.run(opts)
     else
         ui = console.new({ title = "dcnet master" })
     end
-    ui:setStatus("主控启动中…")
-    ui:log(string.format("dcnet 主控 v%s   本机 ID #%d", util.VERSION, os.getComputerID()),
+    ui:setStatus("Master starting...")
+    ui:log(string.format("dcnet master v%s   local ID #%d", util.VERSION, os.getComputerID()),
         col("lime", 32))
-    ui:log(string.format("网络：已打开 %s（%s）", net.describe(modems),
+    ui:log(string.format("Network: opened %s (%s)", net.describe(modems),
         (function()
             local t = {}
             for _, md in ipairs(modems) do t[#t + 1] = md.name end
@@ -2401,27 +2401,27 @@ function M.run(opts)
     if savedKey and savedKey ~= "" then
         local kok, kerr = net.setKey(savedKey)
         if kok then
-            ui:log("消息签名已启用（密钥指纹 " .. tostring(net.fingerprint()) ..
-                "），未签名/重复消息会被丢弃", col("lime", 32))
+            ui:log("Message signing enabled (key fingerprint " .. tostring(net.fingerprint()) ..
+                "), unsigned/replay messages dropped", col("lime", 32))
         else
-            ui:log("启用消息签名失败：" .. tostring(kerr), col("orange", 2))
+            ui:log("Failed to enable signing: " .. tostring(kerr), col("orange", 2))
         end
     end
     for _, e in ipairs(failedModems or {}) do
-        ui:log("  打开 modem 失败：" .. e, col("orange", 2))
+        ui:log("  Failed to open modem: " .. e, col("orange", 2))
     end
     if #created > 0 then
-        ui:log("已释放示例作业到 " .. util.JOB_DIR .. "：" .. table.concat(created, ", "),
+        ui:log("Installed sample jobs to " .. util.JOB_DIR .. ": " .. table.concat(created, ", "),
             col("lightBlue", 512))
     end
     local avail = jobs.list()
-    ui:log(string.format("可用作业 %d 个：%s", #avail,
+    ui:log(string.format("Available jobs %d: %s", #avail,
         table.concat((function()
             local t = {}
             for _, j in ipairs(avail) do t[#t + 1] = j.name end
             return t
         end)(), " ")))
-    ui:log("输入 help 查看指令。")
+    ui:log("Type help for commands.")
 
     local cfg = util.loadCfg(sched.DEFAULTS, sched.CFG_META)
     for k, v in pairs(opts.cfg or {}) do cfg[k] = v end
@@ -2433,15 +2433,15 @@ function M.run(opts)
 
             local path = string.format("%s/job-%d-%s.txt", util.OUT_DIR, job.id, job.name)
             local lines = {
-                string.format("# 作业 %d  %s", job.id, job.name),
-                string.format("# 参数: %s", jobs.paramHelp(job.def)),
-                string.format("# 状态: %s  任务 %d 成功 / %d 失败  用时 %s",
+                string.format("# job %d  %s", job.id, job.name),
+                string.format("# params: %s", jobs.paramHelp(job.def)),
+                string.format("# state: %s  tasks %d ok / %d failed  elapsed %s",
                     job.state, job.counts.done, job.counts.failed, util.duration(job.durationMs)),
                 "",
                 job.resultText or tostring(job.error or ""),
             }
             local ok = util.writeFile(path, table.concat(lines, "\n") .. "\n")
-            if ok then ui:log("结果已保存：" .. path, col("lightGray", 1024)) end
+            if ok then ui:log("Result saved: " .. path, col("lightGray", 1024)) end
         end,
     })
 
@@ -2466,11 +2466,11 @@ function M.run(opts)
     })
     CL:registerWorkers()
     if not CL.ok then
-        ui:log("云端卸载不可用：" .. tostring(CL.reason), col("orange", 2))
+        ui:log("Cloud offload unavailable: " .. tostring(CL.reason), col("orange", 2))
     elseif #CL.endpoints > 0 then
         local names = {}
         for _, ep in ipairs(CL.endpoints) do names[#names + 1] = ep.name end
-        ui:log(string.format("云端端点 %d 个：%s（cloud 查看详情）", #CL.endpoints,
+        ui:log(string.format("Cloud endpoints %d: %s (cloud for details)", #CL.endpoints,
             table.concat(names, ",")), col("lightBlue", 512))
     end
 
@@ -2483,11 +2483,11 @@ function M.run(opts)
         local ok, which
         if monCfg ~= "" then
             ok, which = PN:attach(monCfg)
-            if not ok then ui:log("挂载显示器失败：" .. tostring(which), col("orange", 2)) end
+            if not ok then ui:log("Failed to attach monitor: " .. tostring(which), col("orange", 2)) end
         else
             ok, which = pcall(PN.attachAuto, PN)
             if ok and which then
-                ui:log("已自动挂载显示器：" .. tostring(which) .. "（mon off 可关闭）",
+                ui:log("Auto-attached monitor: " .. tostring(which) .. " (mon off to disable)",
                     col("lightBlue", 512))
             end
         end
@@ -2517,7 +2517,7 @@ function M.run(opts)
         local ok, err = net.send(scr.id, proto.msg(proto.DISP, screenFrame(scr)), util.PROTO_CTRL)
         if not ok and now - (scr.lastWarn or 0) > 10 then
             scr.lastWarn = now
-            ui:log(string.format("给网络屏幕 #%d 推送失败：%s", scr.id, tostring(err)),
+            ui:log(string.format("Push to net screen #%d failed: %s", scr.id, tostring(err)),
                 col("orange", 2))
         end
     end
@@ -2530,7 +2530,7 @@ function M.run(opts)
         local vok, verr = proto.compatible(msg)
         if not vok then
             net.send(sender, proto.msg(proto.SCREENOFF, { why = "ver" }), util.PROTO_CTRL)
-            ui:log(string.format("网络屏幕 #%s 协议版本不兼容：%s", tostring(sender),
+            ui:log(string.format("Net screen #%s protocol incompatible: %s", tostring(sender),
                 tostring(verr)), col("orange", 2))
             return
         end
@@ -2547,10 +2547,10 @@ function M.run(opts)
             end
             scr = { id = sender, firstSeen = util.now() }
             M0.screens[sender] = scr
-            ui:log(string.format("网络屏幕 #%d 已连接：%s（%dx%d）", sender, name, w, h),
+            ui:log(string.format("Net screen #%d connected: %s (%dx%d)", sender, name, w, h),
                 col("lime", 32))
         elseif scr.w ~= w or scr.h ~= h then
-            ui:log(string.format("网络屏幕 #%d 尺寸变化：%dx%d → %dx%d", sender,
+            ui:log(string.format("Net screen #%d size changed: %dx%d -> %dx%d", sender,
                 scr.w or 0, scr.h or 0, w, h), col("lightBlue", 512))
         end
         scr.name, scr.w, scr.h = name, w, h
@@ -2561,7 +2561,7 @@ function M.run(opts)
     local function screenBye(sender, msg)
         if M0.screens[sender] then
             M0.screens[sender] = nil
-            ui:log(string.format("网络屏幕 #%d 已退出：%s", sender, tostring(msg.reason or "无")),
+            ui:log(string.format("Net screen #%d left: %s", sender, tostring(msg.reason or "none")),
                 col("lightGray", 1024))
         end
     end
@@ -2572,7 +2572,7 @@ function M.run(opts)
         for id, scr in pairs(M0.screens) do
             if now - (scr.lastSeen or 0) > SCREEN_TIMEOUT then
                 M0.screens[id] = nil
-                ui:log(string.format("网络屏幕 #%d 已离线（%.0f 秒没有消息）", id,
+                ui:log(string.format("Net screen #%d offline (no msg for %.0f s)", id,
                     now - (scr.lastSeen or now)), col("orange", 2))
             else
                 sendFrame(scr)
@@ -2585,16 +2585,16 @@ function M.run(opts)
         local ids = {}
         for id in pairs(M0.screens) do ids[#ids + 1] = id end
         table.sort(ids)
-        out[#out + 1] = string.format("网络屏幕：%s（%d/%d 台）",
-            S.cfg.netScreen and "推送中" or "已关闭", #ids, SCREEN_MAX)
+        out[#out + 1] = string.format("Net screens: %s (%d/%d)",
+            S.cfg.netScreen and "pushing" or "off", #ids, SCREEN_MAX)
         for _, id in ipairs(ids) do
             local s = M0.screens[id]
-            out[#out + 1] = string.format("  #%-3d %-16s %3dx%-3d  %7s前  已发 %d 帧",
+            out[#out + 1] = string.format("  #%-3d %-16s %3dx%-3d  %7s ago  %d frames",
                 id, s.name or "?", s.w or 0, s.h or 0,
                 util.duration(util.now() - (s.seenAt or util.now())), s.frames or 0)
         end
         if #ids == 0 then
-            out[#out + 1] = "  （屏幕电脑上运行 screen.lua 就会自动连上）"
+            out[#out + 1] = "  (run screen.lua on the screen computer to connect)"
         end
         return out
     end
@@ -2602,77 +2602,77 @@ function M.run(opts)
     local function startPush(target, path, what)
         local data, err = util.readFile(path)
         if not data then
-            ui:log("推送失败：" .. tostring(err), col("red", 16384))
+            ui:log("Push failed: " .. tostring(err), col("red", 16384))
             return nil
         end
         local name = util.basename(path)
         local xid, eerr = xfer.enqueue(M0.reg, target, name, what or "worker", data,
             function(state, self)
                 if state ~= "ok" then
-                    ui:log(string.format("推送 %s 到 #%d 失败：%s",
+                    ui:log(string.format("Push %s to #%d failed: %s",
                         self.name, self.target, tostring(self.err)), col("red", 16384))
                 elseif what == "worker" then
-                    ui:log(string.format("已推送 %s 给节点 #%d（%s）",
+                    ui:log(string.format("Pushed %s to worker #%d (%s)",
                         self.name, self.target, util.bytes(#data)), col("lime", 32))
-                    ui:log("  节点仍在跑旧代码，需要 reboot #" .. self.target .. " 才会加载新版本",
+                    ui:log("  Worker still runs old code; reboot #" .. self.target .. " to load the new version",
                         col("lightGray", 1024))
                 else
-                    ui:log(string.format("已把 %s 推给 #%d（%s）",
+                    ui:log(string.format("Pushed %s to #%d (%s)",
                         self.name, self.target, util.bytes(#data)), col("lightGray", 1024))
                 end
             end)
         if not xid then
-            ui:log("推送失败：" .. tostring(eerr), col("red", 16384))
+            ui:log("Push failed: " .. tostring(eerr), col("red", 16384))
             return nil
         end
-        ui:log(string.format("开始推送 %s → #%d（%s）",
+        ui:log(string.format("Pushing %s -> #%d (%s)",
             name, target, util.bytes(#data)), col("lightGray", 1024))
         return xid
     end
 
     local function cmdHelp()
         local lines = {
-            "  help                    显示本帮助",
-            "  status                  作业总览 + 节点列表",
-            "  workers                 只看节点列表",
-            "  jobs                    列出 /dccomp/jobs 下的作业",
-            "  run <作业> [参数..] [pri=N]",
-            "                          提交作业，例如 run primes to=2000000 pri=5",
-            "  run! <作业> ...         同上但跳过结果缓存（强制重算）",
-            "  queue                   查看作业队列",
-            "  result [作业号]          查看某个作业的结果（缺省=最近完成的）",
-            "  cancel <作业号>          取消作业",
-            "  pause [作业号]           暂停派发（不带作业号=全部）",
-            "  resume [作业号]          恢复派发",
-            "  pri <作业号> <优先级>    调整优先级（高者先抢任务）",
-            "  limit [N]               同时执行几个作业（并发上限）",
-            "  redun [N]               抢尾冗余派发阈值（0=关，抑制慢节点拖尾）",
-            "  set <配置项> <值>        改配置并持久化（cfg 看全部）",
-            "  cfg                     显示当前生效的全部配置",
-            "  net                     显示 modem / 网络情况",
-            "  state [save|clear]      断点续算快照的状态 / 立即写 / 清除",
-            "  cache [clear]           结果缓存列表 / 清空",
-            "  history [N]             最近的作业运行历史",
-            "  top [N]                 节点累计贡献排行（跨会话）",
-            "  cloud                   云端端点列表与状态",
-            "  cloud add <名字> <url> [并发]   注册一个 HTTP 计算服务（持久化）",
-            "  cloud del <名字>        删除端点",
-            "  cloud test <名字>       探活（GET 一次）",
-            "  mon [名字|off]          挂载/关闭本地 monitor 大屏面板（持久化）",
-            "  mon net [on|off|kick ID] 网络屏幕：另一台电脑 + 显示器当大屏",
-            "  setkey <密钥>           启用消息签名（防冒充/防重放，各机器设成一样）",
-            "  key                     查看签名状态、密钥指纹与丢弃统计",
-            "  standby [on|off]        待命主控：在岗主控掉线时自动接管并接续作业",
-            "  repo <主控ID>           查询另一台主控的作业仓库",
-            "  pull <主控ID> <作业名…> 从它那里拉作业（自动补 .lua）",
-            "  pullall <主控ID>        只拉本地没有的（先 repo 看清单）",
-            "  push [节点ID..]          把 " .. util.WORKER_FILE .. " 推给节点（升级用）",
-            "  reboot [节点ID..]        让节点重启电脑（配合 push 加载新代码）",
-            "  kick <节点ID>            让某个节点退出",
-            "  halt                    让所有节点退出",
-            "  save <作业号> [路径]     结果另存为文件",
-            "  clear                   重绘界面",
-            "  quit                    关闭主控（节点会保留，重启主控后自动重连）",
+            "  help                    Show this help",
+            "  status                  Job overview + worker list",
+            "  workers                 Worker list only",
+            "  jobs                    List jobs under /dccomp/jobs",
+            "  run <job> [params..] [pri=N]",
+            "                          Submit a job, e.g. run primes to=2000000 pri=5",
+            "  run! <job> ...          Same but skip result cache (force)",
+            "  queue                   Show job queue",
+            "  result [job id]         Show a job result (default=latest done)",
+            "  cancel <job id>         Cancel a job",
+            "  pause [job id]          Pause dispatch (no id=all)",
+            "  resume [job id]         Resume dispatch",
+            "  pri <job id> <priority> Set priority (higher grabs tasks first)",
+            "  limit [N]               Max jobs in parallel",
+            "  redun [N]               Redundant tail threshold (0=off, tames slow tails)",
+            "  set <key> <value>       Change config and persist (cfg lists all)",
+            "  cfg                     Show all active config",
+            "  net                     Show modem / network status",
+            "  state [save|clear]      Snapshot state / write now / clear",
+            "  cache [clear]           Result cache list / clear",
+            "  history [N]             Recent job run history",
+            "  top [N]                 Worker total contribution ranking",
+            "  cloud                   Cloud endpoint list and status",
+            "  cloud add <name> <url> [parallel] Register an HTTP compute service (persisted)",
+            "  cloud del <name>        Delete endpoint",
+            "  cloud test <name>       Probe (one GET)",
+            "  mon [name|off]          Attach/close local monitor panel (persisted)",
+            "  mon net [on|off|kick ID] Net screen: another computer + monitor as panel",
+            "  setkey <key>            Enable signing (anti-spoof/replay, same everywhere)",
+            "  key                     Show signing state, key fingerprint, drop stats",
+            "  standby [on|off]        Standby master: take over and resume if active dies",
+            "  repo <master id>        Query another master's job repo",
+            "  pull <master id> <job names...> Pull jobs from it (adds .lua)",
+            "  pullall <master id>     Pull only missing ones (repo first)",
+            "  push [worker id..]      Push " .. util.WORKER_FILE .. " to workers (upgrade)",
+            "  reboot [worker id..]    Reboot workers (load new code after push)",
+            "  kick <worker id>        Make one worker exit",
+            "  halt                    Make all workers exit",
+            "  save <job id> [path]    Save result to a file",
+            "  clear                   Redraw the UI",
+            "  quit                    Close master (workers stay, reconnect on restart)",
         }
         for _, l in ipairs(lines) do ui:log(l) end
     end
@@ -2680,7 +2680,7 @@ function M.run(opts)
     local function cmdJobList()
         local list = jobs.list()
         if #list == 0 then
-            ui:log("（" .. util.JOB_DIR .. " 下没有作业文件）")
+            ui:log("(no job files under " .. util.JOB_DIR .. ")")
             return
         end
         for _, j in ipairs(list) do
@@ -2691,7 +2691,7 @@ function M.run(opts)
                 for _, p in ipairs(j.params) do
                     parts[#parts + 1] = string.format("%s=%s", p.name, tostring(p.default))
                 end
-                ui:log(string.format("              参数：%s", table.concat(parts, "  ")))
+                ui:log(string.format("              params: %s", table.concat(parts, "  ")))
             end
         end
     end
@@ -2699,7 +2699,7 @@ function M.run(opts)
     local function cmdRun(toks, nocache)
         local name = toks[1]
         if not name then
-            ui:log("用法：run <作业名> [参数..] [pri=N]（用 jobs 查看可用作业）", col("orange", 2))
+            ui:log("Usage: run <job> [params..] [pri=N] (jobs lists available)", col("orange", 2))
             return
         end
 
@@ -2710,14 +2710,14 @@ function M.run(opts)
         end
         local def, err = jobs.loadName(name)
         if not def then
-            ui:log("加载作业失败：" .. tostring(err), col("red", 16384))
+            ui:log("Load job failed: " .. tostring(err), col("red", 16384))
             return
         end
         local job, err2 = S:addJob(def, rest, { priority = pri, nocache = nocache })
         if not job then
-            ui:log("提交失败：" .. tostring(err2), col("red", 16384))
+            ui:log("Submit failed: " .. tostring(err2), col("red", 16384))
         elseif S:onlineCount() == 0 then
-            ui:log("提示：当前没有节点在线，作业会排队等待节点接入。", col("orange", 2))
+            ui:log("Note: no worker online; job queues until one connects.", col("orange", 2))
         end
     end
 
@@ -2733,12 +2733,12 @@ function M.run(opts)
         local id = tonumber(toks[1])
         local job = id and S.jobs[id] or lastFinishedJob()
         if not job then
-            ui:log("还没有完成的作业。", col("orange", 2))
+            ui:log("No finished job yet.", col("orange", 2))
             return
         end
-        ui:log(string.format("作业 #%d %s（%s）参数：%s", job.id, job.name,
+        ui:log(string.format("Job #%d %s (%s) params: %s", job.id, job.name,
             job.state, jobs.paramHelp(job.def)), col("lightBlue", 512))
-        ui:log(string.format("任务 %d 成功 / %d 失败，用时 %s",
+        ui:log(string.format("Tasks %d ok / %d failed, elapsed %s",
             job.counts.done, job.counts.failed, util.duration(job.durationMs or 0)))
         for _, line in ipairs(S:failedTaskLines(job.id, 5)) do ui:log(line, col("red", 16384)) end
         if job.resultText then
@@ -2746,7 +2746,7 @@ function M.run(opts)
         elseif job.error then
             ui:log("  " .. job.error, col("red", 16384))
         else
-            ui:log("  （作业还没有结束）", col("orange", 2))
+            ui:log("  (job has not finished yet)", col("orange", 2))
         end
     end
 
@@ -2789,34 +2789,34 @@ function M.run(opts)
             cmdResult(toks)
         elseif c == "cancel" then
             local id = tonumber(toks[1])
-            if not id then ui:log("用法：cancel <作业号>", col("orange", 2)) else
+            if not id then ui:log("Usage: cancel <job id>", col("orange", 2)) else
                 local ok, err = S:cancel(id)
-                if not ok then ui:log("取消失败：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("Cancel failed: " .. tostring(err), col("red", 16384)) end
             end
         elseif c == "pause" then
             local id = tonumber(toks[1])
             if id then
                 local ok, err = S:pauseJob(id, true)
-                if not ok then ui:log("暂停失败：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("Pause failed: " .. tostring(err), col("red", 16384)) end
             else
                 S.paused = true
-                ui:log("已暂停全部派发（正在执行的任务不受影响）。", col("orange", 2))
+                ui:log("Paused all dispatch (running tasks unaffected).", col("orange", 2))
             end
         elseif c == "resume" then
             local id = tonumber(toks[1])
             if id then
                 local ok, err = S:pauseJob(id, false)
-                if not ok then ui:log("恢复失败：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("Resume failed: " .. tostring(err), col("red", 16384)) end
             else
                 S.paused = false
-                ui:log("已恢复派发。", col("lime", 32))
+                ui:log("Dispatch resumed.", col("lime", 32))
             end
         elseif c == "pri" then
             local id, pri = tonumber(toks[1]), tonumber(toks[2])
-            if not id or not pri then ui:log("用法：pri <作业号> <优先级>", col("orange", 2))
+            if not id or not pri then ui:log("Usage: pri <job id> <priority>", col("orange", 2))
             else
                 local ok, err = S:setPriority(id, pri)
-                if not ok then ui:log("设置失败：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("Set failed: " .. tostring(err), col("red", 16384)) end
             end
         elseif c == "limit" or c == "redun" then
             local key = (c == "limit") and "maxParallel" or "redundancy"
@@ -2825,93 +2825,93 @@ function M.run(opts)
                 ui:log(string.format("%s = %s", key, tostring(S.cfg[key])), col("lightBlue", 512))
             else
                 local ok, err = S:setCfg(key, v)
-                if not ok then ui:log("设置失败：" .. tostring(err), col("red", 16384))
+                if not ok then ui:log("Set failed: " .. tostring(err), col("red", 16384))
                 else
                     util.saveCfg(key, S.cfg[key])
-                    ui:log(string.format("%s = %s（已持久化）", key, tostring(S.cfg[key])), col("lime", 32))
+                    ui:log(string.format("%s = %s (persisted)", key, tostring(S.cfg[key])), col("lime", 32))
                     S:pump()
                 end
             end
         elseif c == "set" then
             local key, v = toks[1], toks[2]
             if not key or v == nil then
-                ui:log("用法：set <配置项> <值>（用 cfg 看全部配置项）", col("orange", 2))
+                ui:log("Usage: set <key> <value> (cfg lists all keys)", col("orange", 2))
             else
                 local ok, err = S:setCfg(key, v)
                 if not ok then
-                    ui:log("设置失败：" .. tostring(err), col("red", 16384))
+                    ui:log("Set failed: " .. tostring(err), col("red", 16384))
                 else
                     util.saveCfg(key, S.cfg[key])
-                    ui:log(string.format("%s = %s（已持久化，重启后仍生效）", key, tostring(S.cfg[key])),
+                    ui:log(string.format("%s = %s (persisted, survives reboot)", key, tostring(S.cfg[key])),
                         col("lime", 32))
                 end
             end
         elseif c == "cfg" then
             ui:logLines(util.cfgLines(S.cfg, sched.CFG_META))
         elseif c == "net" then
-            ui:log(string.format("已打开 modem：%s", net.describe(modems)))
+            ui:log(string.format("Opened modems: %s", net.describe(modems)))
             for _, md in ipairs(modems) do
-                ui:log(string.format("  %-8s %s", md.name, md.wireless and "无线" or "有线"))
+                ui:log(string.format("  %-8s %s", md.name, md.wireless and "wireless" or "wired"))
             end
-            ui:log(string.format("在线节点 %d / 登记 %d", S:onlineCount(), S:workerCount()))
+            ui:log(string.format("Online workers %d / registered %d", S:onlineCount(), S:workerCount()))
             local screenCount = 0
             for _ in pairs(M0.screens) do screenCount = screenCount + 1 end
-            ui:log(string.format("网络屏幕 %d 台（mon net 查看 / 开关）", screenCount))
+            ui:log(string.format("Net screens %d (mon net to list / toggle)", screenCount))
             if net.hasKey() then
-                ui:log("消息签名：已启用，密钥指纹 " .. tostring(net.fingerprint()),
+                ui:log("Message signing: enabled, key fingerprint " .. tostring(net.fingerprint()),
                     col("lime", 32))
             else
-                ui:log("消息签名：未启用（setkey <密钥> 可以打开）", col("orange", 2))
+                ui:log("Message signing: off (setkey <key> enables)", col("orange", 2))
             end
             ui:logLines(net.statsLines())
         elseif c == "state" then
             local sub = toks[1]
             if sub == "clear" then
                 state.clearSnapshot()
-                ui:log("已清除快照（下次启动不再续算）。", col("lime", 32))
+                ui:log("Snapshot cleared (no resume on next start).", col("lime", 32))
             elseif sub == "save" then
                 local ok, err = S:saveSnapshot()
-                ui:log(ok and "快照已写入。" or ("快照失败：" .. tostring(err)),
+                ui:log(ok and "Snapshot written." or ("Snapshot failed: " .. tostring(err)),
                     ok and col("lime", 32) or col("red", 16384))
             else
                 local size = util.exists(state.SNAP) and fs.getSize(state.SNAP) or 0
-                ui:log(string.format("快照：%s（%s）", state.SNAP,
-                    size > 0 and util.bytes(size) or "无"))
+                ui:log(string.format("Snapshot: %s (%s)", state.SNAP,
+                    size > 0 and util.bytes(size) or "none"))
                 local pending = 0
                 for _, j in pairs(S.jobs) do
                     if j.state == "queued" or j.state == "running" then pending = pending + 1 end
                 end
-                ui:log(string.format("未完成作业 %d 个；有变化时每 ≥3s 自动写一次，兜底 %ds",
+                ui:log(string.format("Unfinished jobs %d; auto-write every >=3s on change, fallback %ds",
                     pending, S.cfg.snapshotInterval))
-                ui:log("  state save 立即写 / state clear 清除 / set snapshot false 关闭")
+                ui:log("  state save writes now / state clear wipes / set snapshot false off")
             end
         elseif c == "cache" then
             if toks[1] == "clear" then
-                ui:log(string.format("已清除 %d 条结果缓存。", state.cacheClear()), col("lime", 32))
+                ui:log(string.format("Cleared %d result cache entries.", state.cacheClear()), col("lime", 32))
             else
                 local list = state.cacheList()
-                ui:log(string.format("结果缓存 %d 条（%s）：", #list, state.CACHE_DIR))
+                ui:log(string.format("Result cache %d entries (%s):", #list, state.CACHE_DIR))
                 for i = 1, math.min(#list, 8) do
                     local e = list[i].entry
-                    ui:log(string.format("  %s  %-10s %s前", list[i].key, tostring(e and e.job or "?"),
+                    ui:log(string.format("  %s  %-10s %s ago", list[i].key, tostring(e and e.job or "?"),
                         util.duration(util.now() - ((e and e.at) or util.now()))))
                 end
-                ui:log("  cache clear 清空 / run! 跳过缓存 / set cache false 关闭")
+                ui:log("  cache clear wipes / run! skips cache / set cache false off")
             end
         elseif c == "repo" then
             local id = tonumber((tostring(toks[1] or ""):gsub("^#", "")))
             if not id then
-                ui:log("用法：repo <主控ID>（列出对方有哪些作业）", col("orange", 2))
+                ui:log("Usage: repo <master id> (lists its jobs)", col("orange", 2))
             else
                 net.send(id, proto.msg(proto.REPO, {}), util.PROTO_CTRL)
-                ui:log("已向 #" .. id .. " 查询作业仓库…", col("lightBlue", 512))
+                ui:log("Querying job repo of #" .. id .. "...", col("lightBlue", 512))
             end
         elseif c == "pull" or c == "pullall" then
             local id = tonumber((tostring(toks[1] or ""):gsub("^#", "")))
             local names = {}
             if c == "pullall" then
                 if not id or not M0.lastRepo or M0.lastRepo.target ~= id then
-                    ui:log("用法：先 repo <主控ID> 看清单，再 pullall <主控ID>", col("orange", 2))
+                    ui:log("Usage: repo <master id> first, then pullall <master id>", col("orange", 2))
                     id = nil
                 else
                     for _, j in ipairs(M0.lastRepo.jobs) do
@@ -2919,7 +2919,7 @@ function M.run(opts)
                         if not util.exists(util.JOB_DIR .. "/" .. name) then names[#names + 1] = name end
                     end
                     if #names == 0 then
-                        ui:log("对方的作业本地都有了。", col("lime", 32))
+                        ui:log("All its jobs already exist locally.", col("lime", 32))
                         id = nil
                     end
                 end
@@ -2931,7 +2931,7 @@ function M.run(opts)
                 end
             end
             if id and #names == 0 then
-                ui:log("用法：pull <主控ID> <作业名…>（自动补 .lua）", col("orange", 2))
+                ui:log("Usage: pull <master id> <job names...> (adds .lua)", col("orange", 2))
                 id = nil
             end
             for _, name in ipairs(names) do
@@ -2939,74 +2939,74 @@ function M.run(opts)
                 net.send(id, proto.msg(proto.FETCH, {
                     xid = net.newXid("job"), what = "job", name = name,
                 }), util.PROTO_PUSH)
-                ui:log("请求拉取作业 " .. name .. " …", col("lightBlue", 512))
+                ui:log("Requesting job " .. name .. " ...", col("lightBlue", 512))
             end
         elseif c == "standby" then
             local sub = tostring(toks[1] or "")
             if sub == "on" or sub == "true" then
                 util.saveCfg("standby", true)
                 S.cfg.standby = true
-                ui:log("已设为待命主控（下次启动生效）：只盯心跳，在岗主控掉线就接管",
+                ui:log("Set as standby master (next start): watch heartbeat, take over if active dies",
                     col("lime", 32))
             elseif sub == "off" or sub == "false" then
                 util.saveCfg("standby", false)
                 S.cfg.standby = false
-                ui:log("已取消待命设置（下次启动直接当在岗主控）", col("lime", 32))
+                ui:log("Standby cleared (next start runs as active master)", col("lime", 32))
             else
-                ui:log(string.format("高可用：本机 #%d 当前是 %s 模式%s",
-                    M0.masterId, M0.mode == "standby" and "待命" or "在岗",
-                    M0.activeMaster and ("，最近看到在岗主控 #" .. tostring(M0.activeMaster)) or ""))
-                ui:log(string.format("  心跳间隔 %ss，接管阈值 %ss（set beatInterval / takeoverAfter 可调）",
+                ui:log(string.format("HA: node #%d is in %s mode%s",
+                    M0.masterId, M0.mode == "standby" and "standby" or "active",
+                    M0.activeMaster and (", last saw active master #" .. tostring(M0.activeMaster)) or ""))
+                ui:log(string.format("  Heartbeat %ss, takeover after %ss (set beatInterval / takeoverAfter)",
                     tostring(S.cfg.beatInterval), tostring(S.cfg.takeoverAfter)))
-                ui:log("  standby on|off：本机默认以待命模式启动（会持久化）")
+                ui:log("  standby on|off: start in standby by default (persisted)")
                 if M0.mode == "standby" then
-                    ui:log(string.format("  已静默 %.1f 秒", util.mono() - M0.lastBeatAt))
+                    ui:log(string.format("  Silent for %.1f s", util.mono() - M0.lastBeatAt))
                 elseif M0.tookOver and M0.tookOver > 0 then
-                    ui:log("  本机是接管上来的（原主控掉线）", col("orange", 2))
+                    ui:log("  This master took over (original went offline)", col("orange", 2))
                 end
             end
         elseif c == "setkey" then
             local k = toks[1]
             if not k then
-                ui:log("用法：setkey <共享密钥>（至少 8 位；各机器设成同一个才会互相接受）",
+                ui:log("Usage: setkey <shared key> (min 8 chars; same key on all)",
                     col("orange", 2))
-                ui:log("  setkey off 关闭签名；节点上用 CC 自带的 set dcnet.key <密钥>",
+                ui:log("  setkey off disables signing; on workers use set dcnet.key <key>",
                     col("lightGray", 1024))
             elseif k == "off" or k == "none" then
                 net.setKey(nil)
                 settings.set("dcnet.key", "")
                 settings.save()
-                ui:log("已关闭消息签名（同网段任何人都能冒充主控/节点）", col("orange", 2))
+                ui:log("Signing off (anyone on the subnet can impersonate master/worker)", col("orange", 2))
             else
                 local ok2, kerr = net.setKey(k)
                 if not ok2 then
-                    ui:log("设置失败：" .. tostring(kerr), col("red", 16384))
+                    ui:log("Set failed: " .. tostring(kerr), col("red", 16384))
                 else
                     settings.set("dcnet.key", k)
                     settings.save()
-                    ui:log("已启用消息签名，密钥指纹 " .. tostring(net.fingerprint()),
+                    ui:log("Signing enabled, key fingerprint " .. tostring(net.fingerprint()),
                         col("lime", 32))
-                    ui:log("  其它机器要用同一个密钥（主控 setkey / 节点 set dcnet.key），" ..
-                        "核对指纹一致即可", col("lightGray", 1024))
+                    ui:log("  Other machines need the same key (master setkey / worker set dcnet.key)," ..
+                        "just match the fingerprint", col("lightGray", 1024))
                 end
             end
         elseif c == "key" then
             if net.hasKey() then
-                ui:log("消息签名：已启用，密钥指纹 " .. tostring(net.fingerprint()),
+                ui:log("Message signing: enabled, key fingerprint " .. tostring(net.fingerprint()),
                     col("lime", 32))
             else
-                ui:log("消息签名：未启用（同网段任何程序都能冒充主控或节点）", col("orange", 2))
-                ui:log("  用 setkey <共享密钥> 打开；自己单机玩可以不开", col("lightGray", 1024))
+                ui:log("Signing off (any program on the subnet can impersonate)", col("orange", 2))
+                ui:log("  Use setkey <shared key> to enable; optional on one machine", col("lightGray", 1024))
             end
             ui:logLines(net.statsLines())
-            if M0.dropped then ui:log("  本机总计丢弃 " .. M0.dropped .. " 条消息") end
+            if M0.dropped then ui:log("  Dropped " .. M0.dropped .. " messages in total") end
         elseif c == "mon" then
             local sub = toks[1]
             if sub == "off" then
                 local old = PN:detach()
                 util.saveCfg("monitor", "off")
                 S.cfg.monitor = "off"
-                ui:log("已关闭本地大屏面板" .. (old and ("（" .. tostring(old) .. "）") or ""),
+                ui:log("Local panel closed" .. (old and (" (" .. tostring(old) .. ")") or ""),
                     col("lime", 32))
             elseif sub == "net" then
                 local action = toks[2]
@@ -3019,99 +3019,99 @@ function M.run(opts)
                                 util.PROTO_CTRL)
                         end
                         M0.screens = {}
-                        ui:log("已关闭网络屏幕推送（屏幕端会显示「主控已关闭」）",
+                        ui:log("Net screen push off (screens show 'master closed')",
                             col("orange", 2))
                     else
-                        ui:log("已开启网络屏幕推送（屏幕电脑上运行 screen.lua 即可）",
+                        ui:log("Net screen push on (run screen.lua on the screen computer)",
                             col("lime", 32))
                     end
                 elseif action == "kick" then
                     local id = tonumber((tostring(toks[3] or ""):gsub("^#", "")))
                     if not id then
-                        ui:log("用法：mon net kick <屏幕ID>（mon net 看列表）", col("orange", 2))
+                        ui:log("Usage: mon net kick <screen id> (mon net lists them)", col("orange", 2))
                     elseif not M0.screens[id] then
-                        ui:log("没有这块网络屏幕：#" .. id, col("orange", 2))
+                        ui:log("No such net screen: #" .. id, col("orange", 2))
                     else
                         M0.screens[id] = nil
                         net.send(id, proto.msg(proto.SCREENOFF, { why = "kick" }), util.PROTO_CTRL)
-                        ui:log("已断开网络屏幕 #" .. id .. "（它下次心跳会再连上来）",
+                        ui:log("Net screen #" .. id .. " kicked (reconnects on next heartbeat)",
                             col("lime", 32))
                     end
                 else
                     ui:logLines(screenLines())
-                    ui:log("  mon net on|off 开关 / mon net kick <ID> 断开一台",
+                    ui:log("  mon net on|off toggles / mon net kick <ID> drops one",
                         col("lightGray", 1024))
                 end
             elseif sub then
                 local ok, err = PN:attach(sub)
                 if not ok then
-                    ui:log("挂载失败：" .. tostring(err), col("red", 16384))
+                    ui:log("Attach failed: " .. tostring(err), col("red", 16384))
                 else
                     util.saveCfg("monitor", sub)
                     S.cfg.monitor = sub
                     PN:redraw(S, CL, true)
-                    ui:log("已挂载显示器 " .. tostring(PN.name) ..
-                        string.format("（%dx%d）", PN.w, PN.h), col("lime", 32))
+                    ui:log("Attached monitor " .. tostring(PN.name) ..
+                        string.format(" (%dx%d)", PN.w, PN.h), col("lime", 32))
                 end
             else
                 if PN:attached() then
-                    ui:log(string.format("大屏：%s（%dx%d，缩放 %.2f）",
+                    ui:log(string.format("Panel: %s (%dx%d, scale %.2f)",
                         tostring(PN.name), PN.w, PN.h, PN.scale), col("lightBlue", 512))
                 else
-                    ui:log("当前没有挂载本地显示器。")
+                    ui:log("No local monitor attached.")
                 end
                 local list = panel.findMonitors()
                 if #list == 0 then
-                    ui:log("  没有检测到 monitor 外设（贴到主控侧面，或用 screen.lua 当网络屏幕）")
+                    ui:log("  No monitor peripheral (attach to master, or use screen.lua)")
                 else
                     for _, m in ipairs(list) do
-                        ui:log("  可用显示器：" .. m.name .. (m.net and "（有线网络）" or "") ..
-                            "（mon " .. m.name .. " 挂载）")
+                        ui:log("  Monitors: " .. m.name .. (m.net and " (wired network)" or "") ..
+                            " (attach: mon " .. m.name .. ")")
                     end
                 end
                 ui:logLines(screenLines())
-                ui:log("  mon <名字> 挂本地显示器 / mon off 关本地 / mon net 网络屏幕")
+                ui:log("  mon <name> attach local / mon off close local / mon net net screens")
             end
         elseif c == "cloud" then
             local sub = toks[1]
             if sub == "add" then
                 local name, url, slots = toks[2], toks[3], toks[4]
                 if not name or not url then
-                    ui:log("用法：cloud add <名字> <url> [并发数]", col("orange", 2))
+                    ui:log("Usage: cloud add <name> <url> [parallel]", col("orange", 2))
                 else
                     local ep, err = cloud.addEndpoint(CL.endpoints, name, url, slots)
                     if not ep then
-                        ui:log("添加失败：" .. tostring(err), col("red", 16384))
+                        ui:log("Add failed: " .. tostring(err), col("red", 16384))
                     else
                         CL:registerWorkers()
-                        ui:log(string.format("已注册云端端点 %s → %s（%d 并发，已持久化）",
+                        ui:log(string.format("Registered cloud endpoint %s -> %s (%d parallel, persisted)",
                             ep.name, ep.url, ep.slots), col("lime", 32))
                     end
                 end
             elseif sub == "del" then
                 local ep, err = cloud.removeEndpoint(CL.endpoints, toks[2])
                 if not ep then
-                    ui:log("删除失败：" .. tostring(err), col("red", 16384))
+                    ui:log("Delete failed: " .. tostring(err), col("red", 16384))
                 else
                     S.workers[ep.id] = nil
-                    ui:log("已删除端点 " .. tostring(ep.name), col("lime", 32))
+                    ui:log("Deleted endpoint " .. tostring(ep.name), col("lime", 32))
                 end
             elseif sub == "test" then
                 local name = toks[2]
                 if not name then
-                    ui:log("用法：cloud test <名字>", col("orange", 2))
+                    ui:log("Usage: cloud test <name>", col("orange", 2))
                 else
                     local sent, terr = CL:test(name, function(ok2, data, e)
                         if ok2 then
                             local info = type(data) == "table" and data.status or data
-                            ui:log(string.format("端点 %s 探活成功：%s", name,
+                            ui:log(string.format("Endpoint %s probe ok: %s", name,
                                 util.trunc(tostring(info), 60)), col("lime", 32))
                         else
-                            ui:log(string.format("端点 %s 探活失败：%s", name, tostring(e)),
+                            ui:log(string.format("Endpoint %s probe failed: %s", name, tostring(e)),
                                 col("red", 16384))
                         end
                     end)
-                    if not sent then ui:log("探活没发出去：" .. tostring(terr), col("red", 16384)) end
+                    if not sent then ui:log("Probe not sent: " .. tostring(terr), col("red", 16384)) end
                 end
             else
                 ui:logLines(CL:lines())
@@ -3121,24 +3121,24 @@ function M.run(opts)
         elseif c == "history" then
             local n = tonumber(toks[1]) or 10
             local list, total = state.history(n)
-            ui:log(string.format("运行历史（最近 %d / 共 %d 条）：", #list, total))
+            ui:log(string.format("Run history (latest %d / total %d):", #list, total))
             for _, e in ipairs(list) do
-                ui:log(string.format("  #%-3d %-12s %-4s 成功%d 失败%d  %s  %s", e.id, tostring(e.name),
-                    e.state == "done" and "完成" or "失败", e.done or 0, e.failed or 0,
+                ui:log(string.format("  #%-3d %-12s %-4s ok%d fail%d  %s  %s", e.id, tostring(e.name),
+                    e.state == "done" and "done" or "failed", e.done or 0, e.failed or 0,
                     util.duration(e.ms or 0), util.trunc(tostring(e.summary or ""), 36)))
             end
         elseif c == "push" then
             local list = targetWorkers(toks)
-            if #list == 0 then ui:log("没有可推送的节点。", col("orange", 2)) else
+            if #list == 0 then ui:log("No workers to push to.", col("orange", 2)) else
                 for _, w in ipairs(list) do startPush(w.id, util.WORKER_FILE, "worker") end
-                ui:log(string.format("开始向 %d 个节点推送 %s…", #list, util.WORKER_FILE))
+                ui:log(string.format("Begin push to %d workers: %s...", #list, util.WORKER_FILE))
             end
         elseif c == "kick" then
             local id = tonumber((toks[1] or ""):gsub("^#", ""))
-            if not id then ui:log("用法：kick <节点ID>", col("orange", 2))
+            if not id then ui:log("Usage: kick <worker id>", col("orange", 2))
             else
                 net.send(id, proto.msg(proto.HALT, {}), util.PROTO_CTRL)
-                ui:log("已通知节点 #" .. id .. " 退出。", col("orange", 2))
+                ui:log("Told worker #" .. id .. " to exit.", col("orange", 2))
             end
         elseif c == "halt" then
             local list = targetWorkers(toks)
@@ -3146,35 +3146,35 @@ function M.run(opts)
                 net.send(w.id, proto.msg(proto.HALT, {}), util.PROTO_CTRL)
             end
             M0.halted = true
-            ui:log(string.format("已通知 %d 个节点退出。", #list), col("orange", 2))
+            ui:log(string.format("Told %d workers to exit.", #list), col("orange", 2))
         elseif c == "reboot" then
 
             local list = targetWorkers(toks)
-            if #list == 0 then ui:log("没有可重启的节点。", col("orange", 2)) else
+            if #list == 0 then ui:log("No workers to reboot.", col("orange", 2)) else
                 for _, w in ipairs(list) do
                     net.send(w.id, proto.msg(proto.HALT, { reboot = true }), util.PROTO_CTRL)
                 end
-                ui:log(string.format("已通知 %d 个节点重启。", #list), col("orange", 2))
-                ui:log("  注意：节点电脑必须有 /startup.lua 之类的开机自启，才能自动回到集群。",
+                ui:log(string.format("Told %d workers to reboot.", #list), col("orange", 2))
+                ui:log("  Note: workers need /startup.lua autorun to rejoin the cluster.",
                     col("lightGray", 1024))
             end
         elseif c == "save" then
             local id = tonumber(toks[1])
             local job = id and S.jobs[id] or lastFinishedJob()
             if not job or not job.resultText then
-                ui:log("没有可保存的结果。", col("orange", 2))
+                ui:log("No result to save.", col("orange", 2))
             else
                 local path = toks[2] or string.format("%s/job-%d-%s.txt", util.OUT_DIR, job.id, job.name)
                 local ok = util.writeFile(path, job.resultText .. "\n")
-                ui:log(ok and ("已保存：" .. path) or "保存失败", ok and col("lime", 32) or col("red", 16384))
+                ui:log(ok and ("Saved: " .. path) or "Save failed", ok and col("lime", 32) or col("red", 16384))
             end
         elseif c == "clear" then
             ui:rebuild()
         elseif c == "quit" or c == "exit" then
-            ui:log("主控退出。节点会继续等待，重新运行 master.lua 后会自动重连。", col("orange", 2))
+            ui:log("Master exiting. Workers keep waiting and reconnect on restart.", col("orange", 2))
             M0.quit = true
         else
-            ui:log("未知指令：" .. c .. "（输入 help 查看帮助）", col("orange", 2))
+            ui:log("Unknown command: " .. c .. " (type help)", col("orange", 2))
         end
     end
 
@@ -3206,7 +3206,7 @@ function M.run(opts)
             if msg and proto.valid(msg) then
                 local vok, why = net.verify(sender, msg)
                 if not vok then
-                    ui:log(string.format("丢弃 #%s 的消息：%s", tostring(sender), tostring(why)),
+                    ui:log(string.format("Dropped #%s message: %s", tostring(sender), tostring(why)),
                         col("orange", 2))
                     M0.dropped = (M0.dropped or 0) + 1
                 elseif msg.t == proto.BEAT then
@@ -3216,19 +3216,19 @@ function M.run(opts)
                     if M0.mode == "active" and M0.activeMaster and M0.activeMaster < M0.masterId then
                         M0.mode = "standby"
                         S.paused = true
-                        ui:log(string.format("主控 #%d 在岗（ID 更小），本机退回待命模式",
+                        ui:log(string.format("Master #%d active (lower ID), this node goes standby",
                             M0.activeMaster), col("orange", 2))
                     end
                 elseif msg.t == proto.TAKEOVER then
                     local who = tonumber(msg.id) or sender
                     M0.activeMaster = who
                     if M0.mode == "standby" then
-                        ui:log(string.format("主控 #%d 已接管，本机继续待命", who),
+                        ui:log(string.format("Master #%d took over, staying standby", who),
                             col("lightGray", 1024))
                     elseif who ~= M0.masterId and who < M0.masterId then
                         M0.mode = "standby"
                         S.paused = true
-                        ui:log(string.format("#%d 宣布接管（ID 更小），本机退回待命", who),
+                        ui:log(string.format("#%d announced takeover (lower ID), going standby", who),
                             col("orange", 2))
                     end
                 elseif msg.t == proto.SCREEN or msg.t == proto.SCREENBYE then
@@ -3239,7 +3239,7 @@ function M.run(opts)
                     end
                 elseif M0.mode == "standby" and msg.t ~= proto.REPO then
 
-                    ui:log(string.format("待命模式：忽略 #%s 的 %s", tostring(sender),
+                    ui:log(string.format("Standby: ignoring #%s %s", tostring(sender),
                         tostring(msg.t)), col("gray", 128))
                 elseif msg.t == proto.REPO then
 
@@ -3253,25 +3253,25 @@ function M.run(opts)
                         }
                     end
                     net.send(sender, proto.msg(proto.REPOINFO, { jobs = list }), util.PROTO_CTRL)
-                    ui:log(string.format("#%d 查询了作业仓库，已回复 %d 个作业", sender, #list),
+                    ui:log(string.format("#%d queried job repo, replied %d jobs", sender, #list),
                         col("lightGray", 1024))
 
                 elseif msg.t == proto.REPOINFO then
                     local list = msg.jobs or {}
                     M0.lastRepo = { target = sender, jobs = list, at = util.now() }
-                    ui:log(string.format("#%d 的作业仓库（%d 个）：", sender, #list), col("lightBlue", 512))
+                    ui:log(string.format("Job repo of #%d (%d):", sender, #list), col("lightBlue", 512))
                     for _, j in ipairs(list) do
                         local name = tostring(j.name or "?")
                         local have = util.exists(util.JOB_DIR .. "/" .. name)
                         ui:log(string.format("  %-18s %8s  %s%s", name, util.bytes(j.size or 0),
-                            util.trunc(tostring(j.summary or ""), 28), have and "  [已有]" or ""))
+                            util.trunc(tostring(j.summary or ""), 28), have and "  [have]" or ""))
                     end
-                    ui:log("  pull <主控ID> <作业名…> 拉取 / pullall <主控ID> 只拉本地没有的")
+                    ui:log("  pull <master id> <job names...> / pullall <master id> missing only")
 
                 else
                     local ok, err = pcall(S.onMessage, S, sender, msg)
                     if not ok then
-                        ui:log("处理消息出错：" .. tostring(err), col("red", 16384))
+                        ui:log("Message error: " .. tostring(err), col("red", 16384))
                     end
                 end
             end
@@ -3285,7 +3285,7 @@ function M.run(opts)
             if msg and proto.valid(msg) then
                 local vok, why = net.verify(sender, msg)
                 if not vok then
-                    ui:log(string.format("丢弃 #%s 的传输消息：%s", tostring(sender), tostring(why)),
+                    ui:log(string.format("Dropped transfer from #%s: %s", tostring(sender), tostring(why)),
                         col("orange", 2))
                 elseif msg.t == proto.FETCH then
                     local what = tostring(msg.what or "worker")
@@ -3294,14 +3294,14 @@ function M.run(opts)
                         local name = tostring(msg.name or "")
                         local path = util.JOB_DIR .. "/" .. name
                         if not name:match("^[%w_%-_%.]+%.lua$") or name:find("%.%.") then
-                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "非法作业名" }),
+                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "invalid job name" }),
                                 util.PROTO_PUSH)
-                            ui:log("拒绝分发非法作业名：" .. name, col("red", 16384))
+                            ui:log("Refused invalid job name: " .. name, col("red", 16384))
                         elseif not util.exists(path) then
-                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "没有这个作业" }),
+                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "no such job" }),
                                 util.PROTO_PUSH)
                         else
-                            ui:log(string.format("节点 #%d 请求拉取作业 %s…", sender, name),
+                            ui:log(string.format("Worker #%d requests job %s...", sender, name),
                                 col("lightBlue", 512))
                             startPush(sender, path, "job")
                         end
@@ -3310,10 +3310,10 @@ function M.run(opts)
 
                         local name = tostring(msg.name or "")
                         if not state.validPoolName(name) or not name:match("^task%-") then
-                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "非法负载名" }),
+                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "invalid payload name" }),
                                 util.PROTO_PUSH)
                         elseif not util.exists(state.poolPath(name)) then
-                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "负载不存在" }),
+                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "payload not found" }),
                                 util.PROTO_PUSH)
                         else
                             startPush(sender, state.poolPath(name), "taskdata")
@@ -3321,11 +3321,11 @@ function M.run(opts)
 
                     elseif not util.exists(util.WORKER_FILE) then
                         net.send(sender, proto.msg(proto.REFERR, {
-                            xid = msg.xid, err = "主控上没有 " .. util.WORKER_FILE,
+                            xid = msg.xid, err = "master has no " .. util.WORKER_FILE,
                         }), util.PROTO_PUSH)
-                        ui:log("  × " .. util.WORKER_FILE .. " 不存在，无法分发", col("red", 16384))
+                        ui:log("  x " .. util.WORKER_FILE .. " missing, cannot distribute", col("red", 16384))
                     else
-                        ui:log(string.format("节点 #%d 请求拉取 %s…", sender, what),
+                        ui:log(string.format("Worker #%d requests %s...", sender, what),
                             col("lightBlue", 512))
                         startPush(sender, util.WORKER_FILE, "worker")
                     end
@@ -3336,7 +3336,7 @@ function M.run(opts)
                     if not r and msg.t == proto.PUT then
                         r = xfer.newReceiver(msg.xid, msg.name, msg.n)
                         recvs[msg.xid] = r
-                        ui:log(string.format("开始接收 #%d 的分块传输 %s（%s 块）",
+                        ui:log(string.format("Receiving from #%d: chunked %s (%s chunks)",
                             sender, tostring(msg.name), tostring(msg.n)), col("lightGray", 1024))
                     end
                     if not r then
@@ -3359,29 +3359,29 @@ function M.run(opts)
                                 dest = util.JOB_DIR .. "/" .. name
                             end
                             if not dest then
-                                ui:log("拒绝保存未知文件：" .. name, col("red", 16384))
+                                ui:log("Refused unknown file: " .. name, col("red", 16384))
                             else
                                 local ok, err = util.writeFile(dest, value)
                                 if ok then
                                     net.send(sender, proto.msg(proto.PUTOK, { xid = msg.xid }),
                                         util.PROTO_PUSH)
                                     if state.validPoolName(name) then
-                                        ui:log(string.format("已从 #%d 收到大结果 %s（%s）",
+                                        ui:log(string.format("Got big result from #%d: %s (%s)",
                                             sender, name, util.bytes(#value)), col("lime", 32))
                                         os.queueEvent("dcpool", name)
                                     else
-                                        ui:log(string.format("已从 #%d 拉取作业 %s（%s）",
+                                        ui:log(string.format("Pulled job from #%d: %s (%s)",
                                             sender, name, util.bytes(#value)), col("lime", 32))
                                     end
                                 else
-                                    ui:log("写入失败：" .. tostring(err), col("red", 16384))
+                                    ui:log("Write failed: " .. tostring(err), col("red", 16384))
                                 end
                             end
                         end
                     end
 
                 elseif msg.t == proto.REFERR then
-                    ui:log(string.format("#%d 拒绝了拉取请求：%s", sender, tostring(msg.err)),
+                    ui:log(string.format("#%d refused the pull: %s", sender, tostring(msg.err)),
                         col("orange", 2))
 
                 else
@@ -3400,7 +3400,7 @@ function M.run(opts)
             local ev = table.pack(os.pullEventRaw())
             if ev[1] == "http_success" or ev[1] == "http_failure" then
                 local ok, err = pcall(CL.onEvent, CL, ev)
-                if not ok then ui:log("处理 HTTP 事件出错：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("HTTP event error: " .. tostring(err), col("red", 16384)) end
             end
         end
     end
@@ -3420,21 +3420,21 @@ function M.run(opts)
         M0.mode = "active"
         M0.tookOver = util.now()
         S.paused = false
-        ui:log(string.format("★ 接管主控（%s）：本机 #%d 现在在岗", why, M0.masterId),
+        ui:log(string.format("* Took over as master (%s): node #%d is active", why, M0.masterId),
             col("lime", 32))
         net.broadcast(proto.msg(proto.TAKEOVER, { id = M0.masterId }), util.PROTO_CTRL)
 
         local restored, err, skipped = state.restore(S, jobs)
         if restored and restored > 0 then
-            ui:log(string.format("已接续 %d 个作业（完成的任务结果直接沿用）", restored),
+            ui:log(string.format("Resumed %d jobs (completed task results reused)", restored),
                 col("lightBlue", 512))
         elseif err then
-            ui:log("接续作业失败：" .. tostring(err), col("orange", 2))
+            ui:log("Resume failed: " .. tostring(err), col("orange", 2))
         elseif skipped then
-            ui:log(string.format("有 %d 个作业无法接续（缺少作业文件）", skipped),
+            ui:log(string.format("%d jobs not resumed (job file missing)", skipped),
                 col("orange", 2))
         else
-            ui:log("没有需要接续的作业。", col("lightGray", 1024))
+            ui:log("No jobs to resume.", col("lightGray", 1024))
         end
         broadcastBeat()
     end
@@ -3455,7 +3455,7 @@ function M.run(opts)
                 if line and line ~= "" then
                     local ok, err = pcall(dispatch, line)
                     if not ok then
-                        ui:log("控制命令失败：" .. tostring(err), col("red", 16384))
+                        ui:log("Control command failed: " .. tostring(err), col("red", 16384))
                     end
                 end
             end
@@ -3472,7 +3472,7 @@ function M.run(opts)
 
                 local silence = util.mono() - M0.lastBeatAt
                 if silence > (S.cfg.takeoverAfter or 15) then
-                    takeover(string.format("已 %.0f 秒没有主控心跳", silence))
+                    takeover(string.format("no master heartbeat for %.0f s", silence))
                 end
             else
                 S:tick()
@@ -3495,7 +3495,7 @@ function M.run(opts)
             for _, s in pairs(M0.reg.senders) do
                 if not s.warned and (util.mono() - s.startedAt) > 8 then
                     s.warned = true
-                    ui:log(string.format("推送 %s → #%d 迟迟没有确认（第 %d/%d 块）",
+                    ui:log(string.format("Push %s -> #%d unacked (chunk %d/%d)",
                         s.name, s.target, math.min(s.next, s.n), s.n), col("orange", 2))
                 end
             end
@@ -3514,28 +3514,28 @@ function M.run(opts)
             local line = ui:prompt("dcnet> ", complete)
             if line and util.trim(line) ~= "" then
                 local ok, err = pcall(dispatch, line)
-                if not ok then ui:log("指令出错：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("Command error: " .. tostring(err), col("red", 16384)) end
             end
         end
     end
 
-    ui:log(string.format("配置：并发 %d，抢尾冗余 %d，任务超时 %s%s（set 改配置 / cfg 看全部）",
+    ui:log(string.format("Config: parallel %d, redundant %d, task timeout %s%s (set / cfg)",
         S.cfg.maxParallel, S.cfg.redundancy, tostring(S.cfg.taskTimeout),
-        S.cfg.adaptiveTimeout and " 秒+自适应" or " 秒"))
+        S.cfg.adaptiveTimeout and " s+adaptive" or " s"))
 
     if S.cfg.standby then
         M0.mode = "standby"
         S.paused = true
-        ui:log(string.format("以待命主控模式启动：#%d 只盯心跳，%.0f 秒收不到就接管",
+        ui:log(string.format("Starting standby: #%d watches heartbeat, takes over after %.0f s",
             M0.masterId, S.cfg.takeoverAfter or 15), col("lightBlue", 512))
     end
 
     if M0.mode == "active" and S.cfg.autoResume and state.hasSnapshot() then
         local n, err, skipped = S:restore()
         if n and n > 0 then
-            ui:log(string.format("已从快照恢复 %d 个未完成作业（断点续算）", n), col("lime", 32))
+            ui:log(string.format("Restored %d unfinished jobs from snapshot", n), col("lime", 32))
         elseif err then
-            ui:log("快照未恢复：" .. tostring(err), col("orange", 2))
+            ui:log("Snapshot not restored: " .. tostring(err), col("orange", 2))
         end
     end
 
@@ -3547,10 +3547,10 @@ function M.run(opts)
         term.setCursorPos(1, 1)
     end
     if not ok then
-        printError("[dcnet] 主控异常终止：" .. tostring(err))
+        printError("[dcnet] Master crashed: " .. tostring(err))
         return false
     end
-    print("[dcnet] 主控已停止。")
+    print("[dcnet] Master stopped.")
     return true
 end
 
@@ -3568,27 +3568,27 @@ M.VERSION = 1
 
 function M.encode(value)
     if not (textutils and textutils.serializeJSON) then
-        return nil, "本机没有 textutils.serializeJSON（CC 版本过旧）"
+        return nil, "textutils.serializeJSON is missing (CC too old)"
     end
     local ok, out = pcall(textutils.serializeJSON, value)
-    if not ok then return nil, "JSON 编码失败: " .. tostring(out) end
+    if not ok then return nil, "JSON encode failed: " .. tostring(out) end
     return out
 end
 
 function M.decode(text)
     if not (textutils and textutils.unserializeJSON) then
-        return nil, "本机没有 textutils.unserializeJSON（CC 版本过旧）"
+        return nil, "textutils.unserializeJSON is missing (CC too old)"
     end
     local ok, out = pcall(textutils.unserializeJSON, text)
-    if not ok then return nil, "JSON 解码失败: " .. tostring(out) end
+    if not ok then return nil, "JSON decode failed: " .. tostring(out) end
     return out
 end
 
 function M.httpReady()
     local ok = (type(http) == "table") and (type(http.post) == "function")
-    if not ok then return false, "本机 http 不可用（服务器可能关了 http_enable）" end
+    if not ok then return false, "http unavailable (http_enable may be off)" end
     if not (textutils and textutils.serializeJSON and textutils.unserializeJSON) then
-        return false, "本机缺少 JSON 支持"
+        return false, "JSON support missing"
     end
     return true
 end
@@ -3638,11 +3638,11 @@ local function nextId(list)
 end
 
 function M.addEndpoint(list, name, url, slots, log)
-    if not name or name == "" then return nil, "端点名不能为空" end
+    if not name or name == "" then return nil, "endpoint name cannot be empty" end
     if not url or not tostring(url):match("^https?://") then
-        return nil, "URL 必须以 http:// 或 https:// 开头"
+        return nil, "URL must start with http:// or https://"
     end
-    if M.find(list, name) then return nil, "端点名已存在: " .. name end
+    if M.find(list, name) then return nil, "endpoint name already exists: " .. name end
     local ep = {
         id = nextId(list), name = name, url = tostring(url),
         slots = math.max(1, math.floor(tonumber(slots) or 1)),
@@ -3661,7 +3661,7 @@ function M.removeEndpoint(list, name)
             return ep
         end
     end
-    return nil, "没有这个端点: " .. tostring(name)
+    return nil, "no such endpoint: " .. tostring(name)
 end
 
 local Cloud = {}
@@ -3724,7 +3724,7 @@ function Cloud:post(ep, bodyStr, headers, method)
         ok, handle, err = pcall(http.post, ep.url, bodyStr, hdrs, true)
     end
     if not ok then return nil, tostring(handle) end
-    if not handle then return nil, tostring(err or "请求未能发出") end
+    if not handle then return nil, tostring(err or "request could not be sent") end
     return handle
 end
 
@@ -3733,7 +3733,7 @@ function Cloud:cool(ep, why)
     local backoff = math.min(300, 10 * (2 ^ math.min(ep.failures - 1, 5)))
     ep.cooldownUntil = util.mono() + backoff
     ep.lastError = why
-    self.log(string.format("云端端点 %s 不可用（%s），%d 秒内不再尝试", ep.name, tostring(why),
+    self.log(string.format("Cloud endpoint %s unavailable (%s), no retry for %d s", ep.name, tostring(why),
         backoff), 16384)
 end
 
@@ -3759,7 +3759,7 @@ function Cloud:pump()
             local body, berr = self:buildBody(job, task)
             if not body then
                 self.sched:externalResult(ep.id, job.id, tid, false, nil,
-                    "云端请求打包失败: " .. tostring(berr), 0)
+                    "cloud request build failed: " .. tostring(berr), 0)
             else
                 local bodyStr = body
                 if type(body) ~= "string" then
@@ -3768,7 +3768,7 @@ function Cloud:pump()
                 end
                 if not bodyStr then
                     self.sched:externalResult(ep.id, job.id, tid, false, nil,
-                        "云端请求编码失败: " .. tostring(berr), 0)
+                        "cloud request encode failed: " .. tostring(berr), 0)
                 elseif #bodyStr > (tonumber(self.cfg.cloudChunk) or 65536) then
 
                     local xid = "cl-" .. tostring(M.randomHex and M.randomHex(6) or os.clock())
@@ -3778,7 +3778,7 @@ function Cloud:pump()
                         i = 0, n = math.ceil(#bodyStr / limit), limit = limit,
                     }
                     if self.cfg.verbose then
-                        self.log(string.format("  云端请求 %s 超过 %d 字节，切成 %d 块上传",
+                        self.log(string.format("  cloud request %s exceeds %d bytes, uploading in %d chunks",
                             util.bytes(#bodyStr), limit, self.chunks[xid].n), 1024)
                     end
                     self:sendNextChunk(xid)
@@ -3787,7 +3787,7 @@ function Cloud:pump()
                     if not handle then
                         self:cool(ep, herr)
                         self.sched:externalResult(ep.id, job.id, tid, false, nil,
-                            "云端不可达: " .. tostring(herr), 0)
+                            "cloud unreachable: " .. tostring(herr), 0)
                     else
                         ep.sent = (ep.sent or 0) + 1
                         self.sent = self.sent + 1
@@ -3813,7 +3813,7 @@ function Cloud:sendNextChunk(xid)
     if not bodyStr then
         self.chunks[xid] = nil
         self.sched:externalResult(c.ep.id, c.job, c.task, false, nil,
-            "云端分块编码失败: " .. tostring(eerr), 0)
+            "cloud chunk encode failed: " .. tostring(eerr), 0)
         return false
     end
     local handle, herr = self:post(c.ep, bodyStr)
@@ -3821,7 +3821,7 @@ function Cloud:sendNextChunk(xid)
         self.chunks[xid] = nil
         self:cool(c.ep, herr)
         self.sched:externalResult(c.ep.id, c.job, c.task, false, nil,
-            "云端分块上传失败: " .. tostring(herr), 0)
+            "cloud chunk upload failed: " .. tostring(herr), 0)
         return false
     end
     c.ep.sent = (c.ep.sent or 0) + 1
@@ -3860,7 +3860,7 @@ function Cloud:onEvent(ev)
         if not decoded then
             req.ep.fail = (req.ep.fail or 0) + 1
             self.sched:externalResult(req.ep.id, req.job, req.task, false, nil,
-                "云端响应不是合法 JSON: " .. tostring(derr), ms)
+                "cloud response is not valid JSON: " .. tostring(derr), ms)
             return
         end
 
@@ -3874,7 +3874,7 @@ function Cloud:onEvent(ev)
                     req.ep.fail = (req.ep.fail or 0) + 1
                     self.failCount = self.failCount + 1
                     self.sched:externalResult(req.ep.id, req.job, req.task, false, nil,
-                        "云端拒绝分块: " .. tostring(decoded.err or "?"), ms)
+                        "cloud rejected chunk: " .. tostring(decoded.err or "?"), ms)
                 else
                     self:sendNextChunk(req.chunkXid)
                 end
@@ -3889,7 +3889,7 @@ function Cloud:onEvent(ev)
             req.ep.fail = (req.ep.fail or 0) + 1
             self.failCount = self.failCount + 1
             self.sched:externalResult(req.ep.id, req.job, req.task, false, nil,
-                tostring(decoded.err or "云端返回失败"), ms)
+                tostring(decoded.err or "cloud returned failure"), ms)
             return
         end
         local data, perr = self:parseResponse(job, task, decoded)
@@ -3897,7 +3897,7 @@ function Cloud:onEvent(ev)
             req.ep.fail = (req.ep.fail or 0) + 1
             self.failCount = self.failCount + 1
             self.sched:externalResult(req.ep.id, req.job, req.task, false, nil,
-                "云端响应解析失败: " .. tostring(perr), ms)
+                "cloud response parse failed: " .. tostring(perr), ms)
             return
         end
         req.ep.ok = (req.ep.ok or 0) + 1
@@ -3920,13 +3920,13 @@ function Cloud:onEvent(ev)
         self:cool(req.ep, a)
 
         self.sched:externalResult(req.ep.id, req.job, req.task, false, nil,
-            "云端请求失败: " .. tostring(a), 0)
+            "cloud request failed: " .. tostring(a), 0)
     end
 end
 
 function Cloud:test(name, onDone)
     local ep = self:find(name)
-    if not ep then return nil, "没有这个端点: " .. tostring(name) end
+    if not ep then return nil, "no such endpoint: " .. tostring(name) end
     if not self.ok then return nil, self.reason end
     local handle, err = self:post(ep, nil, nil, "GET")
     if not handle then
@@ -3943,24 +3943,24 @@ end
 function Cloud:lines()
     local out = {}
     if not self.ok then
-        out[#out + 1] = "云端卸载不可用：" .. tostring(self.reason)
+        out[#out + 1] = "Cloud offload unavailable: " .. tostring(self.reason)
         return out
     end
     if self.cfg.cloud == false then
-        out[#out + 1] = "云端卸载已关闭（set cloud true 打开）"
+        out[#out + 1] = "Cloud offload is off (set cloud true to enable)"
     end
-    out[#out + 1] = string.format("端点 %d 个，在飞请求 %d，累计成功 %d / 失败 %d",
+    out[#out + 1] = string.format("endpoints %d, inflight %d, total ok %d / failed %d",
         #self.endpoints, self:totalInflight(), self.okCount, self.failCount)
     if #self.endpoints == 0 then
-        out[#out + 1] = "  用 cloud add <名字> <url> [并发] 注册一个 HTTP 计算服务"
+        out[#out + 1] = "  cloud add <name> <url> [slots] to register an HTTP service"
     end
     for _, ep in ipairs(self.endpoints) do
-        local state = "就绪"
+        local state = "ready"
         if ep.cooldownUntil and util.mono() < ep.cooldownUntil then
-            state = string.format("冷却中 %ds（%s）",
+            state = string.format("cooling %ds (%s)",
                 math.ceil(ep.cooldownUntil - util.mono()), tostring(ep.lastError or "?"))
         end
-        out[#out + 1] = string.format("  %-10s %-34s 槽位 %d 在飞 %d 成功 %d 失败 %d %s",
+        out[#out + 1] = string.format("  %-10s %-34s slots %d inflight %d ok %d failed %d %s",
             ep.name, util.trunc(ep.url, 34), ep.slots or 1, self:countInflight(ep),
             ep.ok or 0, ep.fail or 0, state)
     end
@@ -4027,7 +4027,7 @@ local K = {
 }
 
 function M.sha256bin(msg)
-    if not M.available then return nil, "本机没有 bit32，无法计算哈希" end
+    if not M.available then return nil, "no bit32, cannot compute hash" end
     msg = tostring(msg or "")
     local h = {
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -4097,12 +4097,12 @@ function M.sha256(msg)
 end
 
 function M.hmacSha256bin(key, msg)
-    if not M.available then return nil, "本机没有 bit32，无法计算 HMAC" end
+    if not M.available then return nil, "no bit32, cannot compute HMAC" end
     key = tostring(key or "")
     msg = tostring(msg or "")
     if #key > 64 then
         local k = M.sha256bin(key)
-        if not k then return nil, "密钥哈希失败" end
+        if not k then return nil, "key hash failed" end
         key = k
     end
     key = key .. string.rep("\0", 64 - #key)
@@ -4113,7 +4113,7 @@ function M.hmacSha256bin(key, msg)
         opad[i] = string.char(B.bxor(b, 0x5c))
     end
     local inner = M.sha256bin(table.concat(ipad) .. msg)
-    if not inner then return nil, "内部哈希失败" end
+    if not inner then return nil, "inner hash failed" end
     return M.sha256bin(table.concat(opad) .. inner)
 end
 
@@ -4189,7 +4189,7 @@ function M.selftest()
     expect("sha256(\"abc\")",
         M.sha256("abc"),
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-    expect("sha256(长串)",
+    expect("sha256(long string)",
         M.sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
         "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
 
@@ -4318,13 +4318,13 @@ function Panel:attach(target)
         self.periph, self.name = target, (target.__name or "fake")
     elseif type(target) == "string" and target ~= "" then
         if not isMonitorType(M.typeOf(target)) then
-            return nil, "不是显示器外设: " .. target
+            return nil, "not a monitor peripheral: " .. target
         end
         local ok, dev = pcall(peripheral.wrap, target)
-        if not ok or not dev then return nil, "无法打开显示器: " .. target end
+        if not ok or not dev then return nil, "cannot open monitor: " .. target end
         self.periph, self.name = dev, target
     else
-        return nil, "没有指定显示器"
+        return nil, "no monitor specified"
     end
     pcall(function() self.periph.setTextScale(self.scale) end)
     local ok2, w, h = pcall(function() return self.periph.getSize() end)
@@ -4344,7 +4344,7 @@ end
 
 function Panel:attachAuto()
     local list = M.findMonitors()
-    if #list == 0 then return nil, "没有检测到显示器" end
+    if #list == 0 then return nil, "no monitor detected" end
     local ok, err = self:attach(list[1].name)
     if not ok then return nil, err end
     return self.name
@@ -4365,11 +4365,11 @@ function M.linesFor(sched, cloud, w, h)
         out[#out + 1] = { text = util.trunc(text, w), colour = colour }
     end
 
-    add(string.format("dcnet 主控 #%d   %s", os.getComputerID(), os.date("%H:%M:%S")),
+    add(string.format("dcnet master #%d   %s", os.getComputerID(), os.date("%H:%M:%S")),
         col("lime", 32))
 
     if w < 20 or h < 4 then
-        add(string.format("节点 %d/%d 作业 %d", sched:onlineCount(), sched:workerCount(),
+        add(string.format("Workers %d/%d jobs %d", sched:onlineCount(), sched:workerCount(),
             sched:runningCount()), col("white", 1))
         return out
     end
@@ -4378,10 +4378,10 @@ function M.linesFor(sched, cloud, w, h)
     for _, j in pairs(sched.jobs) do
         if j.state == "queued" then queued = queued + 1 end
     end
-    add(string.format("节点 %d/%d 在线   并发 %d/%d   队列 %d%s",
+    add(string.format("Workers %d/%d online   parallel %d/%d   queue %d%s",
         sched:onlineCount(), sched:workerCount(), sched:runningCount(),
         math.max(1, sched.cfg.maxParallel or 1), queued,
-        sched.paused and "  [已暂停]" or ""), col("white", 1))
+        sched.paused and "  [paused]" or ""), col("white", 1))
 
     local jobs = sched:runningJobs()
     for i = 1, math.min(#jobs, 4) do
@@ -4390,7 +4390,7 @@ function M.linesFor(sched, cloud, w, h)
         add(string.format("#%d %s %s %3d%%", job.id, util.trunc(job.name, 12),
             util.bar(pct, 12), math.floor(pct * 100)),
             job.state == "running" and col("lightBlue", 512) or col("lightGray", 1024))
-        add(string.format("    %d/%d 完成  失败 %d  用时 %s",
+        add(string.format("    %d/%d done  failed %d  elapsed %s",
             job.counts.done + job.counts.failed, job.total, job.counts.failed,
             util.duration(util.now() - (job.submittedAt or util.now()))),
             col("lightGray", 1024))
@@ -4400,14 +4400,14 @@ function M.linesFor(sched, cloud, w, h)
     for _, wk in ipairs(sched:workerList()) do
         local cell
         if wk.virtual then
-            cell = string.format("%s:%d飞", util.trunc(wk.name or "cloud", 6),
+            cell = string.format("%s:%d run", util.trunc(wk.name or "cloud", 6),
                 cloud and cloud:countInflight(wk) or 0)
         elseif wk.state == "offline" then
-            cell = "#" .. wk.id .. ":离线"
+            cell = "#" .. wk.id .. ":offline"
         elseif wk.state == "busy" then
             cell = string.format("#%d:%d%%", wk.id, math.floor((wk.progress or 0) * 100))
         else
-            cell = "#" .. wk.id .. ":闲"
+            cell = "#" .. wk.id .. ":idle"
         end
         cells[#cells + 1] = cell
     end
@@ -4416,11 +4416,11 @@ function M.linesFor(sched, cloud, w, h)
     end
 
     if cloud and cloud.ok and #cloud.endpoints > 0 then
-        add(string.format("云端 %d 端点，在飞 %d，成功 %d / 失败 %d",
+        add(string.format("Cloud %d endpoints, %d in flight, ok %d / failed %d",
             #cloud.endpoints, cloud:totalInflight(), cloud.okCount, cloud.failCount),
             col("lightGray", 1024))
     end
-    add(string.format("累计任务 %d 失败 %d 重试 %d 冗余 %d",
+    add(string.format("Total tasks %d failed %d retries %d redundant %d",
         sched.stats.done, sched.stats.failed, sched.stats.retries, sched.stats.redundant or 0),
         col("gray", 128))
 
@@ -4459,13 +4459,13 @@ function Panel:redraw(sched, cloud, force)
 
     local ok, lines = pcall(self.lines, self, sched, cloud)
     if not ok then
-        self.log("面板绘制失败：" .. tostring(lines), 16384)
+        self.log("Panel draw failed: " .. tostring(lines), 16384)
         return false
     end
 
     local drawn = M.draw(self.periph, lines, self.h)
     if not drawn then
-        self.log("面板写入显示器失败（尺寸 " .. tostring(self.w) .. "x" .. tostring(self.h) .. "）", 16384)
+        self.log("Panel write to monitor failed (size " .. tostring(self.w) .. "x" .. tostring(self.h) .. ")", 16384)
     end
     return drawn
 end
@@ -4533,13 +4533,13 @@ function M.hasSnapshot()
 end
 
 function M.restore(sched, jobsModule)
-    if not util.exists(M.SNAP) then return 0, "没有快照" end
+    if not util.exists(M.SNAP) then return 0, "no snapshot" end
     local raw, err = util.readFile(M.SNAP)
     if not raw then return 0, err end
 
     local ok, snap = pcall(textutils.unserialize, raw)
     if not ok or type(snap) ~= "table" or snap.version ~= M.SNAP_VERSION then
-        return 0, "快照格式不认识（版本不符或文件损坏）"
+        return 0, "unrecognized snapshot format (version mismatch or corrupt file)"
     end
 
     local restored, skipped = 0, {}
@@ -4548,7 +4548,7 @@ function M.restore(sched, jobsModule)
         if type(sj) == "table" then
             local def, derr = jobsModule.loadSource(sj.source, "@restore-" .. tostring(id))
             if not def then
-                skipped[#skipped + 1] = string.format("#%d %s（源码无法装载：%s）",
+                skipped[#skipped + 1] = string.format("#%d %s (cannot load source: %s)",
                     id, tostring(sj.name), tostring(derr))
             else
                 def.hash = sj.hash or def.hash
@@ -4699,18 +4699,18 @@ end
 function M.poolPut(name, value)
     M.ensurePool()
     local ok, data = pcall(textutils.serialize, value)
-    if not ok then return nil, "序列化失败: " .. tostring(data) end
+    if not ok then return nil, "serialization failed: " .. tostring(data) end
     local wrote, err = util.writeFile(M.poolPath(name), data)
     if not wrote then return nil, err end
     return name, #data
 end
 
 function M.poolGet(name, keep)
-    if not M.validPoolName(name) then return nil, "非法池子文件名" end
+    if not M.validPoolName(name) then return nil, "invalid pool file name" end
     local raw = util.readFile(M.poolPath(name))
-    if not raw then return nil, "池子里没有 " .. tostring(name) end
+    if not raw then return nil, "not in pool: " .. tostring(name) end
     local ok, value = pcall(textutils.unserialize, raw)
-    if not ok or value == nil then return nil, "池子文件解析失败: " .. tostring(name) end
+    if not ok or value == nil then return nil, "cannot parse pool file: " .. tostring(name) end
     if not keep and fs.exists(M.poolPath(name)) then fs.delete(M.poolPath(name)) end
     return value
 end
@@ -4781,12 +4781,12 @@ _G.DC_DEFAULT_JOBS = {
     ["bigdata.lua"] = [[
 return {
     name    = "bigdata",
-    summary = "大负载通道：负载/结果超过阈值时自动改走文件传输",
+    summary = "Big payload channel: payloads/results above the threshold switch to file transfer",
     params  = {
-        { name = "tasks", type = "number", default = 6,     help = "任务数" },
-        { name = "size",  type = "number", default = 24000, help = "每个任务的负载字节数" },
-        { name = "res",   type = "number", default = 12000, help = "每个任务的返回字节数" },
-        { name = "seed",  type = "number", default = 12345, help = "随机种子（保证可复现）" },
+        { name = "tasks", type = "number", default = 6,     help = "task count" },
+        { name = "size",  type = "number", default = 24000, help = "payload bytes per task" },
+        { name = "res",   type = "number", default = 12000, help = "result bytes per task" },
+        { name = "seed",  type = "number", default = 12345, help = "random seed (reproducible)" },
     },
 
     split = function(a)
@@ -4842,9 +4842,9 @@ return {
     end,
 
     format = function(res)
-        return string.format("大负载通道：%d/%d 个任务，负载合计 %s（每个约 %s），异常 %d",
-            res.tasks, res.want, tostring(res.totalBytes) .. " 字节",
-            tostring(res.wantSize) .. " 字节", res.badLen)
+        return string.format("Big payload channel: %d/%d tasks, total payload %s (about %s each), anomalies %d",
+            res.tasks, res.want, tostring(res.totalBytes) .. " bytes",
+            tostring(res.wantSize) .. " bytes", res.badLen)
     end,
 }
 
@@ -4852,12 +4852,12 @@ return {
     ["cloudprimes.lua"] = [[
 return {
     name    = "cloudprimes",
-    summary = "素数统计（有云端端点时优先卸载到云端，失败自动回落本机）",
+    summary = "Prime count (cloud endpoints preferred, falls back to local on failure)",
     params  = {
-        { name = "from",  type = "number", default = 2,      help = "起点（>=2）" },
-        { name = "to",    type = "number", default = 200000, help = "终点" },
-        { name = "chunk", type = "number", default = 25000,  help = "每个任务的整数个数" },
-        { name = "pad",   type = "number", default = 0,      help = "给云端请求塞多少字节填充（测分块上传用）" },
+        { name = "from",  type = "number", default = 2,      help = "start (>=2)" },
+        { name = "to",    type = "number", default = 200000, help = "end" },
+        { name = "chunk", type = "number", default = 25000,  help = "integers per task" },
+        { name = "pad",   type = "number", default = 0,      help = "padding bytes added to cloud requests (chunked upload test)" },
     },
 
     cloud = {
@@ -4872,7 +4872,7 @@ return {
         parse = function(resp, task, args)
             local d = (type(resp) == "table" and resp.data) or resp
             if type(d) ~= "table" or type(d.count) ~= "number" then
-                return nil, "云端响应里没有 count 字段"
+                return nil, "cloud response has no count field"
             end
             return { lo = task.lo, hi = task.hi, count = d.count, last = d.last, via = "cloud" }
         end,
@@ -4931,7 +4931,7 @@ return {
     end,
 
     format = function(res)
-        return string.format("[%d, %d] 内素数个数 = %d（最大 %s）；%d 个任务，其中云端 %d / 本机 %d",
+        return string.format("primes in [%d, %d] = %d (max %s); %d tasks, cloud %d / local %d",
             res.from, res.to, res.primes, tostring(res.largest),
             res.tasks, res.cloud, res.local_)
     end,
@@ -4941,12 +4941,12 @@ return {
     ["hashsearch.lua"] = [[
 return {
     name    = "hashsearch",
-    summary = "并行暴力搜索（演示提前终止型作业）",
+    summary = "Parallel brute-force search (early-termination job demo)",
     params  = {
-        { name = "from",    type = "number", default = 1,       help = "起点" },
-        { name = "to",      type = "number", default = 4000000, help = "终点" },
-        { name = "chunk",   type = "number", default = 25000,   help = "每个任务扫描范围" },
-        { name = "modulus", type = "number", default = 65536,   help = "目标整除因子" },
+        { name = "from",    type = "number", default = 1,       help = "start" },
+        { name = "to",      type = "number", default = 4000000, help = "end" },
+        { name = "chunk",   type = "number", default = 25000,   help = "scan range per task" },
+        { name = "modulus", type = "number", default = 65536,   help = "target divisor" },
     },
 
     split = function(a)
@@ -4999,10 +4999,10 @@ return {
 
     format = function(res)
         if res.hit then
-            return string.format("最小命中 n = %d（hash(\"dc%d\") %% %d == 0），共扫描 %d 个数",
+            return string.format("min hit n = %d (hash(\"dc%d\") %% %d == 0), scanned %d values",
                 res.hit, res.hit, res.modulus, res.scanned)
         end
-        return string.format("[%d, %d] 内没有找到能被 %d 整除的哈希", 0, 0, res.modulus)
+        return string.format("[%d, %d] no hash divisible by %d found", 0, 0, res.modulus)
     end,
 }
 
@@ -5073,11 +5073,11 @@ end
 
 return {
     name    = "ludecomp",
-    summary = "LU 分解解线性方程组（按右端项并行；残差 max|Ax-b| 自检）",
+    summary = "Solve A*x=b by LU factorization (parallel over RHS; residual max|Ax-b| self-check)",
     params  = {
-        { name = "n",    type = "number", default = 24, help = "矩阵阶数" },
-        { name = "cols", type = "number", default = 4,  help = "每个任务解几个右端项" },
-        { name = "seed", type = "number", default = 11, help = "随机种子" },
+        { name = "n",    type = "number", default = 24, help = "matrix order" },
+        { name = "cols", type = "number", default = 4,  help = "right-hand sides per task" },
+        { name = "seed", type = "number", default = 11, help = "random seed" },
     },
 
     split = function(a)
@@ -5113,7 +5113,7 @@ return {
                 sumX = sumX + xv[i]
             end
             count = count + 1
-            ctx.progress((j - task.from + 1) / total, string.format("右端项 %d/%d", j, task.to))
+            ctx.progress((j - task.from + 1) / total, string.format("RHS %d/%d", j, task.to))
             ctx.tick()
             if ctx.canceled() then break end
         end
@@ -5131,7 +5131,7 @@ return {
     end,
 
     format = function(res)
-        return string.format("LU 求解：%d×%d，解了 %d 个右端项，残差 max|Ax-b| = %.3e（应≈0），Σx = %.6f",
+        return string.format("LU solve: %dx%d, solved %d RHS, residual max|Ax-b| = %.3e (should be ~0), sum x = %.6f",
             res.n, res.n, res.solved, res.maxRes, res.sumX)
     end,
 }
@@ -5142,14 +5142,14 @@ local SHADES = " .:-=+*#%@"
 
 return {
     name    = "mandelbrot",
-    summary = "并行渲染曼德博集合（演示数据块型作业）",
+    summary = "Parallel Mandelbrot render (data-block job demo)",
 
     twoLevel = false,
     params  = {
-        { name = "width",   type = "number", default = 48,   help = "图像宽度" },
-        { name = "height",  type = "number", default = 14,   help = "图像高度" },
-        { name = "rows",    type = "number", default = 2,    help = "每个任务渲染的行数" },
-        { name = "maxIter", type = "number", default = 32,   help = "最大迭代次数" },
+        { name = "width",   type = "number", default = 48,   help = "image width" },
+        { name = "height",  type = "number", default = 14,   help = "image height" },
+        { name = "rows",    type = "number", default = 2,    help = "rows rendered per task" },
+        { name = "maxIter", type = "number", default = 32,   help = "max iterations" },
         { name = "xmin",    type = "number", default = -2.1 },
         { name = "xmax",    type = "number", default = 0.7 },
         { name = "ymin",    type = "number", default = -1.1 },
@@ -5196,7 +5196,7 @@ return {
                 row[#row + 1] = SHADES:sub(idx, idx)
             end
             lines[#lines + 1] = table.concat(row)
-            ctx.progress((y - task.y0 + 1) / total, string.format("行 %d", y))
+            ctx.progress((y - task.y0 + 1) / total, string.format("row %d", y))
             ctx.tick()
             if ctx.canceled() then break end
         end
@@ -5244,11 +5244,11 @@ end
 
 return {
     name    = "matmul",
-    summary = "矩阵乘法（按行分块；矩阵按种子在各节点再生，可对答案）",
+    summary = "Matrix multiply (row blocks; matrices regenerated from seed per node, verifiable)",
     params  = {
-        { name = "n",    type = "number", default = 48, help = "矩阵阶数" },
-        { name = "rows", type = "number", default = 6,  help = "每个任务算几行" },
-        { name = "seed", type = "number", default = 7,  help = "随机种子（决定矩阵内容）" },
+        { name = "n",    type = "number", default = 48, help = "matrix order" },
+        { name = "rows", type = "number", default = 6,  help = "rows per task" },
+        { name = "seed", type = "number", default = 7,  help = "random seed (determines matrix)" },
     },
 
     split = function(a)
@@ -5280,7 +5280,7 @@ return {
                 if j == i then trace = trace + acc end
                 if math.abs(acc) > maxAbs then maxAbs = math.abs(acc) end
             end
-            ctx.progress((i - task.from + 1) / total, string.format("行 %d/%d", i, task.n))
+            ctx.progress((i - task.from + 1) / total, string.format("row %d/%d", i, task.n))
             ctx.tick()
             if ctx.canceled() then break end
         end
@@ -5300,7 +5300,7 @@ return {
     end,
 
     format = function(res)
-        return string.format("%d×%d 矩阵乘积：元素和 %.6f，迹 %.6f，最大绝对值 %.4f（共 %d 个元素）",
+        return string.format("%dx%d matrix product: element sum %.6f, trace %.6f, max abs %.4f (%d elements)",
             res.n, res.n, res.sum, res.trace, res.maxAbs, res.count)
     end,
 }
@@ -5327,12 +5327,12 @@ end
 
 return {
     name    = "nbody",
-    summary = "N 体引力：按天体分块算受力（净外力应≈0，可自检）",
+    summary = "N-body gravity: forces per body block (net force should be ~0, self-check)",
     params  = {
-        { name = "bodies", type = "number", default = 64, help = "天体数量" },
-        { name = "step",   type = "number", default = 8,  help = "每个任务算几个天体" },
-        { name = "seed",   type = "number", default = 3,  help = "随机种子（决定初始分布）" },
-        { name = "eps",    type = "number", default = 0.5, help = "软化长度，避免除零" },
+        { name = "bodies", type = "number", default = 64, help = "body count" },
+        { name = "step",   type = "number", default = 8,  help = "bodies per task" },
+        { name = "seed",   type = "number", default = 3,  help = "random seed (determines initial layout)" },
+        { name = "eps",    type = "number", default = 0.5, help = "softening length to avoid divide-by-zero" },
     },
 
     split = function(a)
@@ -5368,7 +5368,7 @@ return {
                     pairs = pairs + 1
                 end
             end
-            ctx.progress((i - task.from + 1) / total, string.format("天体 %d/%d", i, task.n))
+            ctx.progress((i - task.from + 1) / total, string.format("body %d/%d", i, task.n))
             ctx.tick()
             if ctx.canceled() then break end
         end
@@ -5392,7 +5392,7 @@ return {
 
     format = function(res)
         return string.format(
-            "N 体引力：%d 个天体，Σ|F| = %.6f，净外力 = %.3e（应≈0），两两作用 %d 次（应为 %d）",
+            "N-body: %d bodies, sum|F| = %.6f, net force = %.3e (should be ~0), pairwise terms %d (expected %d)",
             res.n, res.sumAbs, res.net, res.pairs, res.wantPairs)
     end,
 }
@@ -5401,11 +5401,11 @@ return {
     ["pi.lua"] = [[
 return {
     name    = "pi",
-    summary = "用蒙特卡洛方法估算 π（演示随机模拟类作业）",
+    summary = "Estimate pi by Monte Carlo (random simulation job demo)",
     params  = {
-        { name = "samples", type = "number", default = 2000000, help = "总样本数" },
-        { name = "chunk",   type = "number", default = 50000,   help = "每个任务的样本数" },
-        { name = "seed",    type = "number", default = 12345,   help = "随机种子" },
+        { name = "samples", type = "number", default = 2000000, help = "total samples" },
+        { name = "chunk",   type = "number", default = 50000,   help = "samples per task" },
+        { name = "seed",    type = "number", default = 12345,   help = "random seed" },
     },
 
     split = function(a)
@@ -5456,7 +5456,7 @@ return {
     end,
 
     format = function(res)
-        return string.format("π ≈ %.6f（样本 %d，圆内 %d，相对误差 %.4f%%）",
+        return string.format("pi ~ %.6f (samples %d, inside %d, relative error %.4f%%)",
             res.pi, res.samples, res.inside,
             res.pi > 0 and math.abs(res.pi - math.pi) / math.pi * 100 or 0)
     end,
@@ -5466,11 +5466,11 @@ return {
     ["primes.lua"] = [[
 return {
     name    = "primes",
-    summary = "统计 [from,to] 区间内的素数个数（可对答案的基准测试）",
+    summary = "Count primes in [from,to] (verifiable benchmark)",
     params  = {
-        { name = "from",  type = "number", default = 2,       help = "起点（>=2）" },
-        { name = "to",    type = "number", default = 2000000, help = "终点" },
-        { name = "chunk", type = "number", default = 25000,   help = "每个任务的整数个数" },
+        { name = "from",  type = "number", default = 2,       help = "start (>=2)" },
+        { name = "to",    type = "number", default = 2000000, help = "end" },
+        { name = "chunk", type = "number", default = 25000,   help = "integers per task" },
     },
 
     split = function(a)
@@ -5528,7 +5528,7 @@ return {
     end,
 
     format = function(res)
-        return string.format("[%d, %d] 内素数个数 = %d（最大素数 %s），由 %d 个任务汇总",
+        return string.format("primes in [%d, %d] = %d (max prime %s), reduced from %d tasks",
             res.from, res.to, res.primes, tostring(res.largest), res.ranges)
     end,
 }
@@ -5537,13 +5537,13 @@ return {
     ["selftest.lua"] = [[
 return {
     name    = "selftest",
-    summary = "集群自检：已知答案 + 可选故障注入（验证调度/汇总/重派）",
+    summary = "Cluster self-check: known answer + optional fault injection (validates dispatch/reduce/retry)",
 
     twoLevel = false,
     params  = {
-        { name = "tasks", type = "number", default = 24,   help = "任务数" },
-        { name = "size",  type = "number", default = 2000, help = "每任务平方和项数" },
-        { name = "fail",  type = "number", default = 0,    help = "故意失败的任务数" },
+        { name = "tasks", type = "number", default = 24,   help = "task count" },
+        { name = "size",  type = "number", default = 2000, help = "terms per task" },
+        { name = "fail",  type = "number", default = 0,    help = "deliberately failed tasks" },
     },
 
     split = function(a)
@@ -5560,7 +5560,7 @@ return {
     map = function(task, ctx)
         if task.fail then
 
-            error("selftest 故意失败（任务 " .. tostring(task.id) .. "）")
+            error("selftest deliberate failure (task " .. tostring(task.id) .. ")")
         end
 
         local sum = 0
@@ -5583,14 +5583,14 @@ return {
         local seen, bad, total = {}, {}, 0
         for _, r in ipairs(results) do
             if type(r) ~= "table" or type(r.id) ~= "number" then
-                bad[#bad + 1] = "收到结构异常的结果"
+                bad[#bad + 1] = "malformed result received"
             else
-                if seen[r.id] then bad[#bad + 1] = "任务 " .. r.id .. " 出现重复" end
+                if seen[r.id] then bad[#bad + 1] = "task " .. r.id .. " duplicated" end
                 seen[r.id] = true
 
                 local expect = r.n * (r.n + 1) * (2 * r.n + 1) / 6
                 if r.sum ~= expect then
-                    bad[#bad + 1] = string.format("任务 %d 校验不符：%s ≠ %s",
+                    bad[#bad + 1] = string.format("task %d check mismatch: %s != %s",
                         r.id, tostring(r.sum), tostring(expect))
                 end
                 total = total + r.sum
@@ -5611,12 +5611,12 @@ return {
     format = function(res)
         local pass = (#res.bad == 0) and (#res.missing == 0) and (res.got == res.want)
         local lines = {
-            string.format("任务 %d 个：预期成功 %d，实际成功 %d；预期失败 %d（与主控日志核对）",
+            string.format("tasks %d: expected success %d, actual success %d; expected failures %d (check main log)",
                 res.tasks, res.want, res.got, res.fail),
-            string.format("平方和闭式解校验：%s", #res.bad == 0 and "全部一致" or (#res.bad .. " 个不一致")),
-            string.format("任务号完整性：%s", #res.missing == 0 and "齐全且无重复"
-                or ("缺少 " .. table.concat(res.missing, ","))),
-            "结论：" .. (pass and "PASS —— 链路正常" or "FAIL —— 看上面的明细与主控日志"),
+            string.format("Sum-of-squares closed-form check: %s", #res.bad == 0 and "all match" or (#res.bad .. " mismatches")),
+            string.format("Task ids: %s", #res.missing == 0 and "complete, no duplicates"
+                or ("missing " .. table.concat(res.missing, ","))),
+            "Result: " .. (pass and "PASS - link OK" or "FAIL - see details above and main log"),
         }
         for i = 1, math.min(#res.bad, 4) do lines[#lines + 1] = "  " .. res.bad[i] end
         return table.concat(lines, "\n")
@@ -5645,10 +5645,10 @@ end
 
 return {
     name    = "tsp",
-    summary = "旅行商暴力搜索（按第二个城市切分，可对最优解）",
+    summary = "TSP brute force (split by second city, optimal tour verifiable)",
     params  = {
-        { name = "cities", type = "number", default = 9, help = "城市数量（9 → 8! 条回路，按第二城切成 8 份）" },
-        { name = "seed",   type = "number", default = 5, help = "随机种子（决定城市坐标）" },
+        { name = "cities", type = "number", default = 9, help = "city count (9 -> 8! tours, split into 8 parts by second city)" },
+        { name = "seed",   type = "number", default = 5, help = "random seed (determines city coordinates)" },
     },
 
     split = function(a)
@@ -5716,8 +5716,8 @@ return {
     format = function(res)
         local tour = {}
         for i, c in ipairs(res.tour or {}) do tour[i] = tostring(c) end
-        return string.format("TSP：%d 个城市，最短回路 %.4f，路线 %s→1（枚举 %d 次，%d 个分支任务）",
-            res.n, res.len, table.concat(tour, "→"), res.steps, res.parts)
+        return string.format("TSP: %d cities, shortest tour %.4f, path %s->1 (%d enumerations, %d branch tasks)",
+            res.n, res.len, table.concat(tour, "->"), res.steps, res.parts)
     end,
 }
 
@@ -5738,20 +5738,20 @@ if not _G.dc_require then
     _G.dc_require = function(name)
         if cache[name] then return cache[name] end
         local short = tostring(name):match("^dc%.(.+)$")
-        if not short then error("模块名非法: " .. tostring(name), 0) end
+        if not short then error("invalid module name: " .. tostring(name), 0) end
         local tried = {}
         for _, pat in ipairs(paths) do
             local path = pat:format(short)
             tried[#tried + 1] = path
             if fs.exists(path) and not fs.isDir(path) then
                 local fn, err = loadfile(path)
-                if not fn then error("加载模块 " .. name .. " 失败: " .. tostring(err), 0) end
+                if not fn then error("failed to load module " .. name .. ": " .. tostring(err), 0) end
                 local mod = fn()
                 cache[name] = mod
                 return mod
             end
         end
-        error("找不到模块 " .. name .. "（已尝试: " .. table.concat(tried, ", ") .. "）", 0)
+        error("module not found: " .. name .. " (tried: " .. table.concat(tried, ", ") .. ")", 0)
     end
 end
 
@@ -5787,7 +5787,7 @@ for _, a in ipairs(argv) do
                 cfg[k] = v
             end
         elseif k then
-            print("[dcnet] 未知参数: " .. k)
+            print("[dcnet] unknown argument: " .. k)
         end
     end
 end
@@ -5798,7 +5798,7 @@ local ok = master.run({
     headless = headless,
 })
 if not ok then
-    printError("[dcnet] 主控启动失败。")
+    printError("[dcnet] master failed to start.")
     return 1
 end
 return 0

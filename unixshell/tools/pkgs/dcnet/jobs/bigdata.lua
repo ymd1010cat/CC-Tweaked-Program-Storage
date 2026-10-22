@@ -11,12 +11,12 @@
 --   res=12000    每个任务返回结果的字节数
 return {
     name    = "bigdata",
-    summary = "大负载通道：负载/结果超过阈值时自动改走文件传输",
+    summary = "Big payload channel: payloads/results above the threshold switch to file transfer",
     params  = {
-        { name = "tasks", type = "number", default = 6,     help = "任务数" },
-        { name = "size",  type = "number", default = 24000, help = "每个任务的负载字节数" },
-        { name = "res",   type = "number", default = 12000, help = "每个任务的返回字节数" },
-        { name = "seed",  type = "number", default = 12345, help = "随机种子（保证可复现）" },
+        { name = "tasks", type = "number", default = 6,     help = "task count" },
+        { name = "size",  type = "number", default = 24000, help = "payload bytes per task" },
+        { name = "res",   type = "number", default = 12000, help = "result bytes per task" },
+        { name = "seed",  type = "number", default = 12345, help = "random seed (reproducible)" },
     },
 
     split = function(a)
@@ -72,8 +72,8 @@ return {
     end,
 
     format = function(res)
-        return string.format("大负载通道：%d/%d 个任务，负载合计 %s（每个约 %s），异常 %d",
-            res.tasks, res.want, tostring(res.totalBytes) .. " 字节",
-            tostring(res.wantSize) .. " 字节", res.badLen)
+        return string.format("Big payload channel: %d/%d tasks, total payload %s (about %s each), anomalies %d",
+            res.tasks, res.want, tostring(res.totalBytes) .. " bytes",
+            tostring(res.wantSize) .. " bytes", res.badLen)
     end,
 }

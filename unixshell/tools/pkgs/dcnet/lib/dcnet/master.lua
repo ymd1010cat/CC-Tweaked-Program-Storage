@@ -43,9 +43,9 @@ function M.run(opts)
     -- 打开所有 modem：一条网段挂一个，就能把互相隔离的多段有线网络桥接起来
     local modems, failedModems = net.openAll()
     if #modems == 0 then
-        printError("[dcnet] 没有检测到调制解调器（modem）")
-        print("[dcnet] 有线网络接法：电脑旁放有线调制解调器，调制解调器上接网络线缆，")
-        print("[dcnet] 所有机器串到同一段线缆上即可；要多网段就给主控挂多个 modem。")
+        printError("[dcnet] No modem detected")
+        print("[dcnet] Wired setup: put a wired modem beside the computer, cable into the modem,")
+        print("[dcnet] chain all machines on one cable; add more modems to bridge more networks.")
         return false
     end
 
@@ -64,10 +64,10 @@ function M.run(opts)
     else
         ui = console.new({ title = "dcnet master" })
     end
-    ui:setStatus("主控启动中…")
-    ui:log(string.format("dcnet 主控 v%s   本机 ID #%d", util.VERSION, os.getComputerID()),
+    ui:setStatus("Master starting...")
+    ui:log(string.format("dcnet master v%s   local ID #%d", util.VERSION, os.getComputerID()),
         col("lime", 32))
-    ui:log(string.format("网络：已打开 %s（%s）", net.describe(modems),
+    ui:log(string.format("Network: opened %s (%s)", net.describe(modems),
         (function()
             local t = {}
             for _, md in ipairs(modems) do t[#t + 1] = md.name end
@@ -79,27 +79,27 @@ function M.run(opts)
     if savedKey and savedKey ~= "" then
         local kok, kerr = net.setKey(savedKey)
         if kok then
-            ui:log("消息签名已启用（密钥指纹 " .. tostring(net.fingerprint()) ..
-                "），未签名/重复消息会被丢弃", col("lime", 32))
+            ui:log("Message signing enabled (key fingerprint " .. tostring(net.fingerprint()) ..
+                "), unsigned/replay messages dropped", col("lime", 32))
         else
-            ui:log("启用消息签名失败：" .. tostring(kerr), col("orange", 2))
+            ui:log("Failed to enable signing: " .. tostring(kerr), col("orange", 2))
         end
     end
     for _, e in ipairs(failedModems or {}) do
-        ui:log("  打开 modem 失败：" .. e, col("orange", 2))
+        ui:log("  Failed to open modem: " .. e, col("orange", 2))
     end
     if #created > 0 then
-        ui:log("已释放示例作业到 " .. util.JOB_DIR .. "：" .. table.concat(created, ", "),
+        ui:log("Installed sample jobs to " .. util.JOB_DIR .. ": " .. table.concat(created, ", "),
             col("lightBlue", 512))
     end
     local avail = jobs.list()
-    ui:log(string.format("可用作业 %d 个：%s", #avail,
+    ui:log(string.format("Available jobs %d: %s", #avail,
         table.concat((function()
             local t = {}
             for _, j in ipairs(avail) do t[#t + 1] = j.name end
             return t
         end)(), " ")))
-    ui:log("输入 help 查看指令。")
+    ui:log("Type help for commands.")
 
     -- ── 调度器 ───────────────────────────────────────────────────────
     -- 配置优先级：默认值 < settings 里的持久化值 < 命令行参数
@@ -113,15 +113,15 @@ function M.run(opts)
             -- 结果落盘，便于主控重启后查阅
             local path = string.format("%s/job-%d-%s.txt", util.OUT_DIR, job.id, job.name)
             local lines = {
-                string.format("# 作业 %d  %s", job.id, job.name),
-                string.format("# 参数: %s", jobs.paramHelp(job.def)),
-                string.format("# 状态: %s  任务 %d 成功 / %d 失败  用时 %s",
+                string.format("# job %d  %s", job.id, job.name),
+                string.format("# params: %s", jobs.paramHelp(job.def)),
+                string.format("# state: %s  tasks %d ok / %d failed  elapsed %s",
                     job.state, job.counts.done, job.counts.failed, util.duration(job.durationMs)),
                 "",
                 job.resultText or tostring(job.error or ""),
             }
             local ok = util.writeFile(path, table.concat(lines, "\n") .. "\n")
-            if ok then ui:log("结果已保存：" .. path, col("lightGray", 1024)) end
+            if ok then ui:log("Result saved: " .. path, col("lightGray", 1024)) end
         end,
     })
 
@@ -147,11 +147,11 @@ function M.run(opts)
     })
     CL:registerWorkers()
     if not CL.ok then
-        ui:log("云端卸载不可用：" .. tostring(CL.reason), col("orange", 2))
+        ui:log("Cloud offload unavailable: " .. tostring(CL.reason), col("orange", 2))
     elseif #CL.endpoints > 0 then
         local names = {}
         for _, ep in ipairs(CL.endpoints) do names[#names + 1] = ep.name end
-        ui:log(string.format("云端端点 %d 个：%s（cloud 查看详情）", #CL.endpoints,
+        ui:log(string.format("Cloud endpoints %d: %s (cloud for details)", #CL.endpoints,
             table.concat(names, ",")), col("lightBlue", 512))
     end
 
@@ -165,11 +165,11 @@ function M.run(opts)
         local ok, which
         if monCfg ~= "" then
             ok, which = PN:attach(monCfg)
-            if not ok then ui:log("挂载显示器失败：" .. tostring(which), col("orange", 2)) end
+            if not ok then ui:log("Failed to attach monitor: " .. tostring(which), col("orange", 2)) end
         else
             ok, which = pcall(PN.attachAuto, PN)
             if ok and which then
-                ui:log("已自动挂载显示器：" .. tostring(which) .. "（mon off 可关闭）",
+                ui:log("Auto-attached monitor: " .. tostring(which) .. " (mon off to disable)",
                     col("lightBlue", 512))
             end
         end
@@ -205,7 +205,7 @@ function M.run(opts)
         local ok, err = net.send(scr.id, proto.msg(proto.DISP, screenFrame(scr)), util.PROTO_CTRL)
         if not ok and now - (scr.lastWarn or 0) > 10 then
             scr.lastWarn = now
-            ui:log(string.format("给网络屏幕 #%d 推送失败：%s", scr.id, tostring(err)),
+            ui:log(string.format("Push to net screen #%d failed: %s", scr.id, tostring(err)),
                 col("orange", 2))
         end
     end
@@ -218,7 +218,7 @@ function M.run(opts)
         local vok, verr = proto.compatible(msg)
         if not vok then
             net.send(sender, proto.msg(proto.SCREENOFF, { why = "ver" }), util.PROTO_CTRL)
-            ui:log(string.format("网络屏幕 #%s 协议版本不兼容：%s", tostring(sender),
+            ui:log(string.format("Net screen #%s protocol incompatible: %s", tostring(sender),
                 tostring(verr)), col("orange", 2))
             return
         end
@@ -235,10 +235,10 @@ function M.run(opts)
             end
             scr = { id = sender, firstSeen = util.now() }
             M0.screens[sender] = scr
-            ui:log(string.format("网络屏幕 #%d 已连接：%s（%dx%d）", sender, name, w, h),
+            ui:log(string.format("Net screen #%d connected: %s (%dx%d)", sender, name, w, h),
                 col("lime", 32))
         elseif scr.w ~= w or scr.h ~= h then
-            ui:log(string.format("网络屏幕 #%d 尺寸变化：%dx%d → %dx%d", sender,
+            ui:log(string.format("Net screen #%d size changed: %dx%d -> %dx%d", sender,
                 scr.w or 0, scr.h or 0, w, h), col("lightBlue", 512))
         end
         scr.name, scr.w, scr.h = name, w, h
@@ -249,7 +249,7 @@ function M.run(opts)
     local function screenBye(sender, msg)
         if M0.screens[sender] then
             M0.screens[sender] = nil
-            ui:log(string.format("网络屏幕 #%d 已退出：%s", sender, tostring(msg.reason or "无")),
+            ui:log(string.format("Net screen #%d left: %s", sender, tostring(msg.reason or "none")),
                 col("lightGray", 1024))
         end
     end
@@ -260,7 +260,7 @@ function M.run(opts)
         for id, scr in pairs(M0.screens) do
             if now - (scr.lastSeen or 0) > SCREEN_TIMEOUT then
                 M0.screens[id] = nil
-                ui:log(string.format("网络屏幕 #%d 已离线（%.0f 秒没有消息）", id,
+                ui:log(string.format("Net screen #%d offline (no msg for %.0f s)", id,
                     now - (scr.lastSeen or now)), col("orange", 2))
             else
                 sendFrame(scr)
@@ -273,16 +273,16 @@ function M.run(opts)
         local ids = {}
         for id in pairs(M0.screens) do ids[#ids + 1] = id end
         table.sort(ids)
-        out[#out + 1] = string.format("网络屏幕：%s（%d/%d 台）",
-            S.cfg.netScreen and "推送中" or "已关闭", #ids, SCREEN_MAX)
+        out[#out + 1] = string.format("Net screens: %s (%d/%d)",
+            S.cfg.netScreen and "pushing" or "off", #ids, SCREEN_MAX)
         for _, id in ipairs(ids) do
             local s = M0.screens[id]
-            out[#out + 1] = string.format("  #%-3d %-16s %3dx%-3d  %7s前  已发 %d 帧",
+            out[#out + 1] = string.format("  #%-3d %-16s %3dx%-3d  %7s ago  %d frames",
                 id, s.name or "?", s.w or 0, s.h or 0,
                 util.duration(util.now() - (s.seenAt or util.now())), s.frames or 0)
         end
         if #ids == 0 then
-            out[#out + 1] = "  （屏幕电脑上运行 screen.lua 就会自动连上）"
+            out[#out + 1] = "  (run screen.lua on the screen computer to connect)"
         end
         return out
     end
@@ -292,30 +292,30 @@ function M.run(opts)
     local function startPush(target, path, what)
         local data, err = util.readFile(path)
         if not data then
-            ui:log("推送失败：" .. tostring(err), col("red", 16384))
+            ui:log("Push failed: " .. tostring(err), col("red", 16384))
             return nil
         end
         local name = util.basename(path)
         local xid, eerr = xfer.enqueue(M0.reg, target, name, what or "worker", data,
             function(state, self)
                 if state ~= "ok" then
-                    ui:log(string.format("推送 %s 到 #%d 失败：%s",
+                    ui:log(string.format("Push %s to #%d failed: %s",
                         self.name, self.target, tostring(self.err)), col("red", 16384))
                 elseif what == "worker" then
-                    ui:log(string.format("已推送 %s 给节点 #%d（%s）",
+                    ui:log(string.format("Pushed %s to worker #%d (%s)",
                         self.name, self.target, util.bytes(#data)), col("lime", 32))
-                    ui:log("  节点仍在跑旧代码，需要 reboot #" .. self.target .. " 才会加载新版本",
+                    ui:log("  Worker still runs old code; reboot #" .. self.target .. " to load the new version",
                         col("lightGray", 1024))
                 else
-                    ui:log(string.format("已把 %s 推给 #%d（%s）",
+                    ui:log(string.format("Pushed %s to #%d (%s)",
                         self.name, self.target, util.bytes(#data)), col("lightGray", 1024))
                 end
             end)
         if not xid then
-            ui:log("推送失败：" .. tostring(eerr), col("red", 16384))
+            ui:log("Push failed: " .. tostring(eerr), col("red", 16384))
             return nil
         end
-        ui:log(string.format("开始推送 %s → #%d（%s）",
+        ui:log(string.format("Pushing %s -> #%d (%s)",
             name, target, util.bytes(#data)), col("lightGray", 1024))
         return xid
     end
@@ -323,47 +323,47 @@ function M.run(opts)
     -- ── 指令 ─────────────────────────────────────────────────────────
     local function cmdHelp()
         local lines = {
-            "  help                    显示本帮助",
-            "  status                  作业总览 + 节点列表",
-            "  workers                 只看节点列表",
-            "  jobs                    列出 /dccomp/jobs 下的作业",
-            "  run <作业> [参数..] [pri=N]",
-            "                          提交作业，例如 run primes to=2000000 pri=5",
-            "  run! <作业> ...         同上但跳过结果缓存（强制重算）",
-            "  queue                   查看作业队列",
-            "  result [作业号]          查看某个作业的结果（缺省=最近完成的）",
-            "  cancel <作业号>          取消作业",
-            "  pause [作业号]           暂停派发（不带作业号=全部）",
-            "  resume [作业号]          恢复派发",
-            "  pri <作业号> <优先级>    调整优先级（高者先抢任务）",
-            "  limit [N]               同时执行几个作业（并发上限）",
-            "  redun [N]               抢尾冗余派发阈值（0=关，抑制慢节点拖尾）",
-            "  set <配置项> <值>        改配置并持久化（cfg 看全部）",
-            "  cfg                     显示当前生效的全部配置",
-            "  net                     显示 modem / 网络情况",
-            "  state [save|clear]      断点续算快照的状态 / 立即写 / 清除",
-            "  cache [clear]           结果缓存列表 / 清空",
-            "  history [N]             最近的作业运行历史",
-            "  top [N]                 节点累计贡献排行（跨会话）",
-            "  cloud                   云端端点列表与状态",
-            "  cloud add <名字> <url> [并发]   注册一个 HTTP 计算服务（持久化）",
-            "  cloud del <名字>        删除端点",
-            "  cloud test <名字>       探活（GET 一次）",
-            "  mon [名字|off]          挂载/关闭本地 monitor 大屏面板（持久化）",
-            "  mon net [on|off|kick ID] 网络屏幕：另一台电脑 + 显示器当大屏",
-            "  setkey <密钥>           启用消息签名（防冒充/防重放，各机器设成一样）",
-            "  key                     查看签名状态、密钥指纹与丢弃统计",
-            "  standby [on|off]        待命主控：在岗主控掉线时自动接管并接续作业",
-            "  repo <主控ID>           查询另一台主控的作业仓库",
-            "  pull <主控ID> <作业名…> 从它那里拉作业（自动补 .lua）",
-            "  pullall <主控ID>        只拉本地没有的（先 repo 看清单）",
-            "  push [节点ID..]          把 " .. util.WORKER_FILE .. " 推给节点（升级用）",
-            "  reboot [节点ID..]        让节点重启电脑（配合 push 加载新代码）",
-            "  kick <节点ID>            让某个节点退出",
-            "  halt                    让所有节点退出",
-            "  save <作业号> [路径]     结果另存为文件",
-            "  clear                   重绘界面",
-            "  quit                    关闭主控（节点会保留，重启主控后自动重连）",
+            "  help                    Show this help",
+            "  status                  Job overview + worker list",
+            "  workers                 Worker list only",
+            "  jobs                    List jobs under /dccomp/jobs",
+            "  run <job> [params..] [pri=N]",
+            "                          Submit a job, e.g. run primes to=2000000 pri=5",
+            "  run! <job> ...          Same but skip result cache (force)",
+            "  queue                   Show job queue",
+            "  result [job id]         Show a job result (default=latest done)",
+            "  cancel <job id>         Cancel a job",
+            "  pause [job id]          Pause dispatch (no id=all)",
+            "  resume [job id]         Resume dispatch",
+            "  pri <job id> <priority> Set priority (higher grabs tasks first)",
+            "  limit [N]               Max jobs in parallel",
+            "  redun [N]               Redundant tail threshold (0=off, tames slow tails)",
+            "  set <key> <value>       Change config and persist (cfg lists all)",
+            "  cfg                     Show all active config",
+            "  net                     Show modem / network status",
+            "  state [save|clear]      Snapshot state / write now / clear",
+            "  cache [clear]           Result cache list / clear",
+            "  history [N]             Recent job run history",
+            "  top [N]                 Worker total contribution ranking",
+            "  cloud                   Cloud endpoint list and status",
+            "  cloud add <name> <url> [parallel] Register an HTTP compute service (persisted)",
+            "  cloud del <name>        Delete endpoint",
+            "  cloud test <name>       Probe (one GET)",
+            "  mon [name|off]          Attach/close local monitor panel (persisted)",
+            "  mon net [on|off|kick ID] Net screen: another computer + monitor as panel",
+            "  setkey <key>            Enable signing (anti-spoof/replay, same everywhere)",
+            "  key                     Show signing state, key fingerprint, drop stats",
+            "  standby [on|off]        Standby master: take over and resume if active dies",
+            "  repo <master id>        Query another master's job repo",
+            "  pull <master id> <job names...> Pull jobs from it (adds .lua)",
+            "  pullall <master id>     Pull only missing ones (repo first)",
+            "  push [worker id..]      Push " .. util.WORKER_FILE .. " to workers (upgrade)",
+            "  reboot [worker id..]    Reboot workers (load new code after push)",
+            "  kick <worker id>        Make one worker exit",
+            "  halt                    Make all workers exit",
+            "  save <job id> [path]    Save result to a file",
+            "  clear                   Redraw the UI",
+            "  quit                    Close master (workers stay, reconnect on restart)",
         }
         for _, l in ipairs(lines) do ui:log(l) end
     end
@@ -371,7 +371,7 @@ function M.run(opts)
     local function cmdJobList()
         local list = jobs.list()
         if #list == 0 then
-            ui:log("（" .. util.JOB_DIR .. " 下没有作业文件）")
+            ui:log("(no job files under " .. util.JOB_DIR .. ")")
             return
         end
         for _, j in ipairs(list) do
@@ -382,7 +382,7 @@ function M.run(opts)
                 for _, p in ipairs(j.params) do
                     parts[#parts + 1] = string.format("%s=%s", p.name, tostring(p.default))
                 end
-                ui:log(string.format("              参数：%s", table.concat(parts, "  ")))
+                ui:log(string.format("              params: %s", table.concat(parts, "  ")))
             end
         end
     end
@@ -390,7 +390,7 @@ function M.run(opts)
     local function cmdRun(toks, nocache)
         local name = toks[1]
         if not name then
-            ui:log("用法：run <作业名> [参数..] [pri=N]（用 jobs 查看可用作业）", col("orange", 2))
+            ui:log("Usage: run <job> [params..] [pri=N] (jobs lists available)", col("orange", 2))
             return
         end
         -- pri=N / prio=N 是调度器选项，不属于作业参数，先摘出来
@@ -401,14 +401,14 @@ function M.run(opts)
         end
         local def, err = jobs.loadName(name)
         if not def then
-            ui:log("加载作业失败：" .. tostring(err), col("red", 16384))
+            ui:log("Load job failed: " .. tostring(err), col("red", 16384))
             return
         end
         local job, err2 = S:addJob(def, rest, { priority = pri, nocache = nocache })
         if not job then
-            ui:log("提交失败：" .. tostring(err2), col("red", 16384))
+            ui:log("Submit failed: " .. tostring(err2), col("red", 16384))
         elseif S:onlineCount() == 0 then
-            ui:log("提示：当前没有节点在线，作业会排队等待节点接入。", col("orange", 2))
+            ui:log("Note: no worker online; job queues until one connects.", col("orange", 2))
         end
     end
 
@@ -424,12 +424,12 @@ function M.run(opts)
         local id = tonumber(toks[1])
         local job = id and S.jobs[id] or lastFinishedJob()
         if not job then
-            ui:log("还没有完成的作业。", col("orange", 2))
+            ui:log("No finished job yet.", col("orange", 2))
             return
         end
-        ui:log(string.format("作业 #%d %s（%s）参数：%s", job.id, job.name,
+        ui:log(string.format("Job #%d %s (%s) params: %s", job.id, job.name,
             job.state, jobs.paramHelp(job.def)), col("lightBlue", 512))
-        ui:log(string.format("任务 %d 成功 / %d 失败，用时 %s",
+        ui:log(string.format("Tasks %d ok / %d failed, elapsed %s",
             job.counts.done, job.counts.failed, util.duration(job.durationMs or 0)))
         for _, line in ipairs(S:failedTaskLines(job.id, 5)) do ui:log(line, col("red", 16384)) end
         if job.resultText then
@@ -437,7 +437,7 @@ function M.run(opts)
         elseif job.error then
             ui:log("  " .. job.error, col("red", 16384))
         else
-            ui:log("  （作业还没有结束）", col("orange", 2))
+            ui:log("  (job has not finished yet)", col("orange", 2))
         end
     end
 
@@ -480,34 +480,34 @@ function M.run(opts)
             cmdResult(toks)
         elseif c == "cancel" then
             local id = tonumber(toks[1])
-            if not id then ui:log("用法：cancel <作业号>", col("orange", 2)) else
+            if not id then ui:log("Usage: cancel <job id>", col("orange", 2)) else
                 local ok, err = S:cancel(id)
-                if not ok then ui:log("取消失败：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("Cancel failed: " .. tostring(err), col("red", 16384)) end
             end
         elseif c == "pause" then
             local id = tonumber(toks[1])
             if id then
                 local ok, err = S:pauseJob(id, true)
-                if not ok then ui:log("暂停失败：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("Pause failed: " .. tostring(err), col("red", 16384)) end
             else
                 S.paused = true
-                ui:log("已暂停全部派发（正在执行的任务不受影响）。", col("orange", 2))
+                ui:log("Paused all dispatch (running tasks unaffected).", col("orange", 2))
             end
         elseif c == "resume" then
             local id = tonumber(toks[1])
             if id then
                 local ok, err = S:pauseJob(id, false)
-                if not ok then ui:log("恢复失败：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("Resume failed: " .. tostring(err), col("red", 16384)) end
             else
                 S.paused = false
-                ui:log("已恢复派发。", col("lime", 32))
+                ui:log("Dispatch resumed.", col("lime", 32))
             end
         elseif c == "pri" then
             local id, pri = tonumber(toks[1]), tonumber(toks[2])
-            if not id or not pri then ui:log("用法：pri <作业号> <优先级>", col("orange", 2))
+            if not id or not pri then ui:log("Usage: pri <job id> <priority>", col("orange", 2))
             else
                 local ok, err = S:setPriority(id, pri)
-                if not ok then ui:log("设置失败：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("Set failed: " .. tostring(err), col("red", 16384)) end
             end
         elseif c == "limit" or c == "redun" then
             local key = (c == "limit") and "maxParallel" or "redundancy"
@@ -516,93 +516,93 @@ function M.run(opts)
                 ui:log(string.format("%s = %s", key, tostring(S.cfg[key])), col("lightBlue", 512))
             else
                 local ok, err = S:setCfg(key, v)
-                if not ok then ui:log("设置失败：" .. tostring(err), col("red", 16384))
+                if not ok then ui:log("Set failed: " .. tostring(err), col("red", 16384))
                 else
                     util.saveCfg(key, S.cfg[key])
-                    ui:log(string.format("%s = %s（已持久化）", key, tostring(S.cfg[key])), col("lime", 32))
+                    ui:log(string.format("%s = %s (persisted)", key, tostring(S.cfg[key])), col("lime", 32))
                     S:pump()
                 end
             end
         elseif c == "set" then
             local key, v = toks[1], toks[2]
             if not key or v == nil then
-                ui:log("用法：set <配置项> <值>（用 cfg 看全部配置项）", col("orange", 2))
+                ui:log("Usage: set <key> <value> (cfg lists all keys)", col("orange", 2))
             else
                 local ok, err = S:setCfg(key, v)
                 if not ok then
-                    ui:log("设置失败：" .. tostring(err), col("red", 16384))
+                    ui:log("Set failed: " .. tostring(err), col("red", 16384))
                 else
                     util.saveCfg(key, S.cfg[key])
-                    ui:log(string.format("%s = %s（已持久化，重启后仍生效）", key, tostring(S.cfg[key])),
+                    ui:log(string.format("%s = %s (persisted, survives reboot)", key, tostring(S.cfg[key])),
                         col("lime", 32))
                 end
             end
         elseif c == "cfg" then
             ui:logLines(util.cfgLines(S.cfg, sched.CFG_META))
         elseif c == "net" then
-            ui:log(string.format("已打开 modem：%s", net.describe(modems)))
+            ui:log(string.format("Opened modems: %s", net.describe(modems)))
             for _, md in ipairs(modems) do
-                ui:log(string.format("  %-8s %s", md.name, md.wireless and "无线" or "有线"))
+                ui:log(string.format("  %-8s %s", md.name, md.wireless and "wireless" or "wired"))
             end
-            ui:log(string.format("在线节点 %d / 登记 %d", S:onlineCount(), S:workerCount()))
+            ui:log(string.format("Online workers %d / registered %d", S:onlineCount(), S:workerCount()))
             local screenCount = 0
             for _ in pairs(M0.screens) do screenCount = screenCount + 1 end
-            ui:log(string.format("网络屏幕 %d 台（mon net 查看 / 开关）", screenCount))
+            ui:log(string.format("Net screens %d (mon net to list / toggle)", screenCount))
             if net.hasKey() then
-                ui:log("消息签名：已启用，密钥指纹 " .. tostring(net.fingerprint()),
+                ui:log("Message signing: enabled, key fingerprint " .. tostring(net.fingerprint()),
                     col("lime", 32))
             else
-                ui:log("消息签名：未启用（setkey <密钥> 可以打开）", col("orange", 2))
+                ui:log("Message signing: off (setkey <key> enables)", col("orange", 2))
             end
             ui:logLines(net.statsLines())
         elseif c == "state" then
             local sub = toks[1]
             if sub == "clear" then
                 state.clearSnapshot()
-                ui:log("已清除快照（下次启动不再续算）。", col("lime", 32))
+                ui:log("Snapshot cleared (no resume on next start).", col("lime", 32))
             elseif sub == "save" then
                 local ok, err = S:saveSnapshot()
-                ui:log(ok and "快照已写入。" or ("快照失败：" .. tostring(err)),
+                ui:log(ok and "Snapshot written." or ("Snapshot failed: " .. tostring(err)),
                     ok and col("lime", 32) or col("red", 16384))
             else
                 local size = util.exists(state.SNAP) and fs.getSize(state.SNAP) or 0
-                ui:log(string.format("快照：%s（%s）", state.SNAP,
-                    size > 0 and util.bytes(size) or "无"))
+                ui:log(string.format("Snapshot: %s (%s)", state.SNAP,
+                    size > 0 and util.bytes(size) or "none"))
                 local pending = 0
                 for _, j in pairs(S.jobs) do
                     if j.state == "queued" or j.state == "running" then pending = pending + 1 end
                 end
-                ui:log(string.format("未完成作业 %d 个；有变化时每 ≥3s 自动写一次，兜底 %ds",
+                ui:log(string.format("Unfinished jobs %d; auto-write every >=3s on change, fallback %ds",
                     pending, S.cfg.snapshotInterval))
-                ui:log("  state save 立即写 / state clear 清除 / set snapshot false 关闭")
+                ui:log("  state save writes now / state clear wipes / set snapshot false off")
             end
         elseif c == "cache" then
             if toks[1] == "clear" then
-                ui:log(string.format("已清除 %d 条结果缓存。", state.cacheClear()), col("lime", 32))
+                ui:log(string.format("Cleared %d result cache entries.", state.cacheClear()), col("lime", 32))
             else
                 local list = state.cacheList()
-                ui:log(string.format("结果缓存 %d 条（%s）：", #list, state.CACHE_DIR))
+                ui:log(string.format("Result cache %d entries (%s):", #list, state.CACHE_DIR))
                 for i = 1, math.min(#list, 8) do
                     local e = list[i].entry
-                    ui:log(string.format("  %s  %-10s %s前", list[i].key, tostring(e and e.job or "?"),
+                    ui:log(string.format("  %s  %-10s %s ago", list[i].key, tostring(e and e.job or "?"),
                         util.duration(util.now() - ((e and e.at) or util.now()))))
                 end
-                ui:log("  cache clear 清空 / run! 跳过缓存 / set cache false 关闭")
+                ui:log("  cache clear wipes / run! skips cache / set cache false off")
             end
         elseif c == "repo" then
             local id = tonumber((tostring(toks[1] or ""):gsub("^#", "")))
             if not id then
-                ui:log("用法：repo <主控ID>（列出对方有哪些作业）", col("orange", 2))
+                ui:log("Usage: repo <master id> (lists its jobs)", col("orange", 2))
             else
                 net.send(id, proto.msg(proto.REPO, {}), util.PROTO_CTRL)
-                ui:log("已向 #" .. id .. " 查询作业仓库…", col("lightBlue", 512))
+                ui:log("Querying job repo of #" .. id .. "...", col("lightBlue", 512))
             end
         elseif c == "pull" or c == "pullall" then
             local id = tonumber((tostring(toks[1] or ""):gsub("^#", "")))
             local names = {}
             if c == "pullall" then
                 if not id or not M0.lastRepo or M0.lastRepo.target ~= id then
-                    ui:log("用法：先 repo <主控ID> 看清单，再 pullall <主控ID>", col("orange", 2))
+                    ui:log("Usage: repo <master id> first, then pullall <master id>", col("orange", 2))
                     id = nil
                 else
                     for _, j in ipairs(M0.lastRepo.jobs) do
@@ -610,7 +610,7 @@ function M.run(opts)
                         if not util.exists(util.JOB_DIR .. "/" .. name) then names[#names + 1] = name end
                     end
                     if #names == 0 then
-                        ui:log("对方的作业本地都有了。", col("lime", 32))
+                        ui:log("All its jobs already exist locally.", col("lime", 32))
                         id = nil
                     end
                 end
@@ -622,7 +622,7 @@ function M.run(opts)
                 end
             end
             if id and #names == 0 then
-                ui:log("用法：pull <主控ID> <作业名…>（自动补 .lua）", col("orange", 2))
+                ui:log("Usage: pull <master id> <job names...> (adds .lua)", col("orange", 2))
                 id = nil
             end
             for _, name in ipairs(names) do
@@ -630,74 +630,74 @@ function M.run(opts)
                 net.send(id, proto.msg(proto.FETCH, {
                     xid = net.newXid("job"), what = "job", name = name,
                 }), util.PROTO_PUSH)
-                ui:log("请求拉取作业 " .. name .. " …", col("lightBlue", 512))
+                ui:log("Requesting job " .. name .. " ...", col("lightBlue", 512))
             end
         elseif c == "standby" then
             local sub = tostring(toks[1] or "")
             if sub == "on" or sub == "true" then
                 util.saveCfg("standby", true)
                 S.cfg.standby = true
-                ui:log("已设为待命主控（下次启动生效）：只盯心跳，在岗主控掉线就接管",
+                ui:log("Set as standby master (next start): watch heartbeat, take over if active dies",
                     col("lime", 32))
             elseif sub == "off" or sub == "false" then
                 util.saveCfg("standby", false)
                 S.cfg.standby = false
-                ui:log("已取消待命设置（下次启动直接当在岗主控）", col("lime", 32))
+                ui:log("Standby cleared (next start runs as active master)", col("lime", 32))
             else
-                ui:log(string.format("高可用：本机 #%d 当前是 %s 模式%s",
-                    M0.masterId, M0.mode == "standby" and "待命" or "在岗",
-                    M0.activeMaster and ("，最近看到在岗主控 #" .. tostring(M0.activeMaster)) or ""))
-                ui:log(string.format("  心跳间隔 %ss，接管阈值 %ss（set beatInterval / takeoverAfter 可调）",
+                ui:log(string.format("HA: node #%d is in %s mode%s",
+                    M0.masterId, M0.mode == "standby" and "standby" or "active",
+                    M0.activeMaster and (", last saw active master #" .. tostring(M0.activeMaster)) or ""))
+                ui:log(string.format("  Heartbeat %ss, takeover after %ss (set beatInterval / takeoverAfter)",
                     tostring(S.cfg.beatInterval), tostring(S.cfg.takeoverAfter)))
-                ui:log("  standby on|off：本机默认以待命模式启动（会持久化）")
+                ui:log("  standby on|off: start in standby by default (persisted)")
                 if M0.mode == "standby" then
-                    ui:log(string.format("  已静默 %.1f 秒", util.mono() - M0.lastBeatAt))
+                    ui:log(string.format("  Silent for %.1f s", util.mono() - M0.lastBeatAt))
                 elseif M0.tookOver and M0.tookOver > 0 then
-                    ui:log("  本机是接管上来的（原主控掉线）", col("orange", 2))
+                    ui:log("  This master took over (original went offline)", col("orange", 2))
                 end
             end
         elseif c == "setkey" then
             local k = toks[1]
             if not k then
-                ui:log("用法：setkey <共享密钥>（至少 8 位；各机器设成同一个才会互相接受）",
+                ui:log("Usage: setkey <shared key> (min 8 chars; same key on all)",
                     col("orange", 2))
-                ui:log("  setkey off 关闭签名；节点上用 CC 自带的 set dcnet.key <密钥>",
+                ui:log("  setkey off disables signing; on workers use set dcnet.key <key>",
                     col("lightGray", 1024))
             elseif k == "off" or k == "none" then
                 net.setKey(nil)
                 settings.set("dcnet.key", "")
                 settings.save()
-                ui:log("已关闭消息签名（同网段任何人都能冒充主控/节点）", col("orange", 2))
+                ui:log("Signing off (anyone on the subnet can impersonate master/worker)", col("orange", 2))
             else
                 local ok2, kerr = net.setKey(k)
                 if not ok2 then
-                    ui:log("设置失败：" .. tostring(kerr), col("red", 16384))
+                    ui:log("Set failed: " .. tostring(kerr), col("red", 16384))
                 else
                     settings.set("dcnet.key", k)
                     settings.save()
-                    ui:log("已启用消息签名，密钥指纹 " .. tostring(net.fingerprint()),
+                    ui:log("Signing enabled, key fingerprint " .. tostring(net.fingerprint()),
                         col("lime", 32))
-                    ui:log("  其它机器要用同一个密钥（主控 setkey / 节点 set dcnet.key），" ..
-                        "核对指纹一致即可", col("lightGray", 1024))
+                    ui:log("  Other machines need the same key (master setkey / worker set dcnet.key)," ..
+                        "just match the fingerprint", col("lightGray", 1024))
                 end
             end
         elseif c == "key" then
             if net.hasKey() then
-                ui:log("消息签名：已启用，密钥指纹 " .. tostring(net.fingerprint()),
+                ui:log("Message signing: enabled, key fingerprint " .. tostring(net.fingerprint()),
                     col("lime", 32))
             else
-                ui:log("消息签名：未启用（同网段任何程序都能冒充主控或节点）", col("orange", 2))
-                ui:log("  用 setkey <共享密钥> 打开；自己单机玩可以不开", col("lightGray", 1024))
+                ui:log("Signing off (any program on the subnet can impersonate)", col("orange", 2))
+                ui:log("  Use setkey <shared key> to enable; optional on one machine", col("lightGray", 1024))
             end
             ui:logLines(net.statsLines())
-            if M0.dropped then ui:log("  本机总计丢弃 " .. M0.dropped .. " 条消息") end
+            if M0.dropped then ui:log("  Dropped " .. M0.dropped .. " messages in total") end
         elseif c == "mon" then
             local sub = toks[1]
             if sub == "off" then
                 local old = PN:detach()
                 util.saveCfg("monitor", "off")
                 S.cfg.monitor = "off"
-                ui:log("已关闭本地大屏面板" .. (old and ("（" .. tostring(old) .. "）") or ""),
+                ui:log("Local panel closed" .. (old and (" (" .. tostring(old) .. ")") or ""),
                     col("lime", 32))
             elseif sub == "net" then
                 local action = toks[2]
@@ -710,99 +710,99 @@ function M.run(opts)
                                 util.PROTO_CTRL)
                         end
                         M0.screens = {}
-                        ui:log("已关闭网络屏幕推送（屏幕端会显示「主控已关闭」）",
+                        ui:log("Net screen push off (screens show 'master closed')",
                             col("orange", 2))
                     else
-                        ui:log("已开启网络屏幕推送（屏幕电脑上运行 screen.lua 即可）",
+                        ui:log("Net screen push on (run screen.lua on the screen computer)",
                             col("lime", 32))
                     end
                 elseif action == "kick" then
                     local id = tonumber((tostring(toks[3] or ""):gsub("^#", "")))
                     if not id then
-                        ui:log("用法：mon net kick <屏幕ID>（mon net 看列表）", col("orange", 2))
+                        ui:log("Usage: mon net kick <screen id> (mon net lists them)", col("orange", 2))
                     elseif not M0.screens[id] then
-                        ui:log("没有这块网络屏幕：#" .. id, col("orange", 2))
+                        ui:log("No such net screen: #" .. id, col("orange", 2))
                     else
                         M0.screens[id] = nil
                         net.send(id, proto.msg(proto.SCREENOFF, { why = "kick" }), util.PROTO_CTRL)
-                        ui:log("已断开网络屏幕 #" .. id .. "（它下次心跳会再连上来）",
+                        ui:log("Net screen #" .. id .. " kicked (reconnects on next heartbeat)",
                             col("lime", 32))
                     end
                 else
                     ui:logLines(screenLines())
-                    ui:log("  mon net on|off 开关 / mon net kick <ID> 断开一台",
+                    ui:log("  mon net on|off toggles / mon net kick <ID> drops one",
                         col("lightGray", 1024))
                 end
             elseif sub then
                 local ok, err = PN:attach(sub)
                 if not ok then
-                    ui:log("挂载失败：" .. tostring(err), col("red", 16384))
+                    ui:log("Attach failed: " .. tostring(err), col("red", 16384))
                 else
                     util.saveCfg("monitor", sub)
                     S.cfg.monitor = sub
                     PN:redraw(S, CL, true)
-                    ui:log("已挂载显示器 " .. tostring(PN.name) ..
-                        string.format("（%dx%d）", PN.w, PN.h), col("lime", 32))
+                    ui:log("Attached monitor " .. tostring(PN.name) ..
+                        string.format(" (%dx%d)", PN.w, PN.h), col("lime", 32))
                 end
             else
                 if PN:attached() then
-                    ui:log(string.format("大屏：%s（%dx%d，缩放 %.2f）",
+                    ui:log(string.format("Panel: %s (%dx%d, scale %.2f)",
                         tostring(PN.name), PN.w, PN.h, PN.scale), col("lightBlue", 512))
                 else
-                    ui:log("当前没有挂载本地显示器。")
+                    ui:log("No local monitor attached.")
                 end
                 local list = panel.findMonitors()
                 if #list == 0 then
-                    ui:log("  没有检测到 monitor 外设（贴到主控侧面，或用 screen.lua 当网络屏幕）")
+                    ui:log("  No monitor peripheral (attach to master, or use screen.lua)")
                 else
                     for _, m in ipairs(list) do
-                        ui:log("  可用显示器：" .. m.name .. (m.net and "（有线网络）" or "") ..
-                            "（mon " .. m.name .. " 挂载）")
+                        ui:log("  Monitors: " .. m.name .. (m.net and " (wired network)" or "") ..
+                            " (attach: mon " .. m.name .. ")")
                     end
                 end
                 ui:logLines(screenLines())
-                ui:log("  mon <名字> 挂本地显示器 / mon off 关本地 / mon net 网络屏幕")
+                ui:log("  mon <name> attach local / mon off close local / mon net net screens")
             end
         elseif c == "cloud" then
             local sub = toks[1]
             if sub == "add" then
                 local name, url, slots = toks[2], toks[3], toks[4]
                 if not name or not url then
-                    ui:log("用法：cloud add <名字> <url> [并发数]", col("orange", 2))
+                    ui:log("Usage: cloud add <name> <url> [parallel]", col("orange", 2))
                 else
                     local ep, err = cloud.addEndpoint(CL.endpoints, name, url, slots)
                     if not ep then
-                        ui:log("添加失败：" .. tostring(err), col("red", 16384))
+                        ui:log("Add failed: " .. tostring(err), col("red", 16384))
                     else
                         CL:registerWorkers()
-                        ui:log(string.format("已注册云端端点 %s → %s（%d 并发，已持久化）",
+                        ui:log(string.format("Registered cloud endpoint %s -> %s (%d parallel, persisted)",
                             ep.name, ep.url, ep.slots), col("lime", 32))
                     end
                 end
             elseif sub == "del" then
                 local ep, err = cloud.removeEndpoint(CL.endpoints, toks[2])
                 if not ep then
-                    ui:log("删除失败：" .. tostring(err), col("red", 16384))
+                    ui:log("Delete failed: " .. tostring(err), col("red", 16384))
                 else
                     S.workers[ep.id] = nil
-                    ui:log("已删除端点 " .. tostring(ep.name), col("lime", 32))
+                    ui:log("Deleted endpoint " .. tostring(ep.name), col("lime", 32))
                 end
             elseif sub == "test" then
                 local name = toks[2]
                 if not name then
-                    ui:log("用法：cloud test <名字>", col("orange", 2))
+                    ui:log("Usage: cloud test <name>", col("orange", 2))
                 else
                     local sent, terr = CL:test(name, function(ok2, data, e)
                         if ok2 then
                             local info = type(data) == "table" and data.status or data
-                            ui:log(string.format("端点 %s 探活成功：%s", name,
+                            ui:log(string.format("Endpoint %s probe ok: %s", name,
                                 util.trunc(tostring(info), 60)), col("lime", 32))
                         else
-                            ui:log(string.format("端点 %s 探活失败：%s", name, tostring(e)),
+                            ui:log(string.format("Endpoint %s probe failed: %s", name, tostring(e)),
                                 col("red", 16384))
                         end
                     end)
-                    if not sent then ui:log("探活没发出去：" .. tostring(terr), col("red", 16384)) end
+                    if not sent then ui:log("Probe not sent: " .. tostring(terr), col("red", 16384)) end
                 end
             else
                 ui:logLines(CL:lines())
@@ -812,24 +812,24 @@ function M.run(opts)
         elseif c == "history" then
             local n = tonumber(toks[1]) or 10
             local list, total = state.history(n)
-            ui:log(string.format("运行历史（最近 %d / 共 %d 条）：", #list, total))
+            ui:log(string.format("Run history (latest %d / total %d):", #list, total))
             for _, e in ipairs(list) do
-                ui:log(string.format("  #%-3d %-12s %-4s 成功%d 失败%d  %s  %s", e.id, tostring(e.name),
-                    e.state == "done" and "完成" or "失败", e.done or 0, e.failed or 0,
+                ui:log(string.format("  #%-3d %-12s %-4s ok%d fail%d  %s  %s", e.id, tostring(e.name),
+                    e.state == "done" and "done" or "failed", e.done or 0, e.failed or 0,
                     util.duration(e.ms or 0), util.trunc(tostring(e.summary or ""), 36)))
             end
         elseif c == "push" then
             local list = targetWorkers(toks)
-            if #list == 0 then ui:log("没有可推送的节点。", col("orange", 2)) else
+            if #list == 0 then ui:log("No workers to push to.", col("orange", 2)) else
                 for _, w in ipairs(list) do startPush(w.id, util.WORKER_FILE, "worker") end
-                ui:log(string.format("开始向 %d 个节点推送 %s…", #list, util.WORKER_FILE))
+                ui:log(string.format("Begin push to %d workers: %s...", #list, util.WORKER_FILE))
             end
         elseif c == "kick" then
             local id = tonumber((toks[1] or ""):gsub("^#", ""))
-            if not id then ui:log("用法：kick <节点ID>", col("orange", 2))
+            if not id then ui:log("Usage: kick <worker id>", col("orange", 2))
             else
                 net.send(id, proto.msg(proto.HALT, {}), util.PROTO_CTRL)
-                ui:log("已通知节点 #" .. id .. " 退出。", col("orange", 2))
+                ui:log("Told worker #" .. id .. " to exit.", col("orange", 2))
             end
         elseif c == "halt" then
             local list = targetWorkers(toks)
@@ -837,35 +837,35 @@ function M.run(opts)
                 net.send(w.id, proto.msg(proto.HALT, {}), util.PROTO_CTRL)
             end
             M0.halted = true
-            ui:log(string.format("已通知 %d 个节点退出。", #list), col("orange", 2))
+            ui:log(string.format("Told %d workers to exit.", #list), col("orange", 2))
         elseif c == "reboot" then
             -- 配合 push 使用：节点重启后，startup 文件里的 shell.run 会拉起新代码
             local list = targetWorkers(toks)
-            if #list == 0 then ui:log("没有可重启的节点。", col("orange", 2)) else
+            if #list == 0 then ui:log("No workers to reboot.", col("orange", 2)) else
                 for _, w in ipairs(list) do
                     net.send(w.id, proto.msg(proto.HALT, { reboot = true }), util.PROTO_CTRL)
                 end
-                ui:log(string.format("已通知 %d 个节点重启。", #list), col("orange", 2))
-                ui:log("  注意：节点电脑必须有 /startup.lua 之类的开机自启，才能自动回到集群。",
+                ui:log(string.format("Told %d workers to reboot.", #list), col("orange", 2))
+                ui:log("  Note: workers need /startup.lua autorun to rejoin the cluster.",
                     col("lightGray", 1024))
             end
         elseif c == "save" then
             local id = tonumber(toks[1])
             local job = id and S.jobs[id] or lastFinishedJob()
             if not job or not job.resultText then
-                ui:log("没有可保存的结果。", col("orange", 2))
+                ui:log("No result to save.", col("orange", 2))
             else
                 local path = toks[2] or string.format("%s/job-%d-%s.txt", util.OUT_DIR, job.id, job.name)
                 local ok = util.writeFile(path, job.resultText .. "\n")
-                ui:log(ok and ("已保存：" .. path) or "保存失败", ok and col("lime", 32) or col("red", 16384))
+                ui:log(ok and ("Saved: " .. path) or "Save failed", ok and col("lime", 32) or col("red", 16384))
             end
         elseif c == "clear" then
             ui:rebuild()
         elseif c == "quit" or c == "exit" then
-            ui:log("主控退出。节点会继续等待，重新运行 master.lua 后会自动重连。", col("orange", 2))
+            ui:log("Master exiting. Workers keep waiting and reconnect on restart.", col("orange", 2))
             M0.quit = true
         else
-            ui:log("未知指令：" .. c .. "（输入 help 查看帮助）", col("orange", 2))
+            ui:log("Unknown command: " .. c .. " (type help)", col("orange", 2))
         end
     end
 
@@ -901,7 +901,7 @@ function M.run(opts)
             if msg and proto.valid(msg) then
                 local vok, why = net.verify(sender, msg)
                 if not vok then
-                    ui:log(string.format("丢弃 #%s 的消息：%s", tostring(sender), tostring(why)),
+                    ui:log(string.format("Dropped #%s message: %s", tostring(sender), tostring(why)),
                         col("orange", 2))
                     M0.dropped = (M0.dropped or 0) + 1
                 elseif msg.t == proto.BEAT then
@@ -911,19 +911,19 @@ function M.run(opts)
                     if M0.mode == "active" and M0.activeMaster and M0.activeMaster < M0.masterId then
                         M0.mode = "standby"
                         S.paused = true
-                        ui:log(string.format("主控 #%d 在岗（ID 更小），本机退回待命模式",
+                        ui:log(string.format("Master #%d active (lower ID), this node goes standby",
                             M0.activeMaster), col("orange", 2))
                     end
                 elseif msg.t == proto.TAKEOVER then
                     local who = tonumber(msg.id) or sender
                     M0.activeMaster = who
                     if M0.mode == "standby" then
-                        ui:log(string.format("主控 #%d 已接管，本机继续待命", who),
+                        ui:log(string.format("Master #%d took over, staying standby", who),
                             col("lightGray", 1024))
                     elseif who ~= M0.masterId and who < M0.masterId then
                         M0.mode = "standby"
                         S.paused = true
-                        ui:log(string.format("#%d 宣布接管（ID 更小），本机退回待命", who),
+                        ui:log(string.format("#%d announced takeover (lower ID), going standby", who),
                             col("orange", 2))
                     end
                 elseif msg.t == proto.SCREEN or msg.t == proto.SCREENBYE then
@@ -935,7 +935,7 @@ function M.run(opts)
                 elseif M0.mode == "standby" and msg.t ~= proto.REPO then
                     -- 待命期间不回应节点、不派任务（避免和真正的主控抢活）
                     -- 例外：作业仓库查询是只读的，顺手回一下没坏处（落到下面的分支）
-                    ui:log(string.format("待命模式：忽略 #%s 的 %s", tostring(sender),
+                    ui:log(string.format("Standby: ignoring #%s %s", tostring(sender),
                         tostring(msg.t)), col("gray", 128))
                 elseif msg.t == proto.REPO then
                     -- 别人问我们有哪些作业（作业仓库）
@@ -949,25 +949,25 @@ function M.run(opts)
                         }
                     end
                     net.send(sender, proto.msg(proto.REPOINFO, { jobs = list }), util.PROTO_CTRL)
-                    ui:log(string.format("#%d 查询了作业仓库，已回复 %d 个作业", sender, #list),
+                    ui:log(string.format("#%d queried job repo, replied %d jobs", sender, #list),
                         col("lightGray", 1024))
 
                 elseif msg.t == proto.REPOINFO then
                     local list = msg.jobs or {}
                     M0.lastRepo = { target = sender, jobs = list, at = util.now() }
-                    ui:log(string.format("#%d 的作业仓库（%d 个）：", sender, #list), col("lightBlue", 512))
+                    ui:log(string.format("Job repo of #%d (%d):", sender, #list), col("lightBlue", 512))
                     for _, j in ipairs(list) do
                         local name = tostring(j.name or "?")
                         local have = util.exists(util.JOB_DIR .. "/" .. name)
                         ui:log(string.format("  %-18s %8s  %s%s", name, util.bytes(j.size or 0),
-                            util.trunc(tostring(j.summary or ""), 28), have and "  [已有]" or ""))
+                            util.trunc(tostring(j.summary or ""), 28), have and "  [have]" or ""))
                     end
-                    ui:log("  pull <主控ID> <作业名…> 拉取 / pullall <主控ID> 只拉本地没有的")
+                    ui:log("  pull <master id> <job names...> / pullall <master id> missing only")
 
                 else
                     local ok, err = pcall(S.onMessage, S, sender, msg)
                     if not ok then
-                        ui:log("处理消息出错：" .. tostring(err), col("red", 16384))
+                        ui:log("Message error: " .. tostring(err), col("red", 16384))
                     end
                 end
             end
@@ -981,7 +981,7 @@ function M.run(opts)
             if msg and proto.valid(msg) then
                 local vok, why = net.verify(sender, msg)
                 if not vok then
-                    ui:log(string.format("丢弃 #%s 的传输消息：%s", tostring(sender), tostring(why)),
+                    ui:log(string.format("Dropped transfer from #%s: %s", tostring(sender), tostring(why)),
                         col("orange", 2))
                 elseif msg.t == proto.FETCH then
                     local what = tostring(msg.what or "worker")
@@ -990,14 +990,14 @@ function M.run(opts)
                         local name = tostring(msg.name or "")
                         local path = util.JOB_DIR .. "/" .. name
                         if not name:match("^[%w_%-_%.]+%.lua$") or name:find("%.%.") then
-                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "非法作业名" }),
+                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "invalid job name" }),
                                 util.PROTO_PUSH)
-                            ui:log("拒绝分发非法作业名：" .. name, col("red", 16384))
+                            ui:log("Refused invalid job name: " .. name, col("red", 16384))
                         elseif not util.exists(path) then
-                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "没有这个作业" }),
+                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "no such job" }),
                                 util.PROTO_PUSH)
                         else
-                            ui:log(string.format("节点 #%d 请求拉取作业 %s…", sender, name),
+                            ui:log(string.format("Worker #%d requests job %s...", sender, name),
                                 col("lightBlue", 512))
                             startPush(sender, path, "job")
                         end
@@ -1006,10 +1006,10 @@ function M.run(opts)
                         -- 大负载任务：节点按需来取（池子里的 task-*.dat）
                         local name = tostring(msg.name or "")
                         if not state.validPoolName(name) or not name:match("^task%-") then
-                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "非法负载名" }),
+                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "invalid payload name" }),
                                 util.PROTO_PUSH)
                         elseif not util.exists(state.poolPath(name)) then
-                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "负载不存在" }),
+                            net.send(sender, proto.msg(proto.REFERR, { xid = msg.xid, err = "payload not found" }),
                                 util.PROTO_PUSH)
                         else
                             startPush(sender, state.poolPath(name), "taskdata")
@@ -1017,11 +1017,11 @@ function M.run(opts)
 
                     elseif not util.exists(util.WORKER_FILE) then
                         net.send(sender, proto.msg(proto.REFERR, {
-                            xid = msg.xid, err = "主控上没有 " .. util.WORKER_FILE,
+                            xid = msg.xid, err = "master has no " .. util.WORKER_FILE,
                         }), util.PROTO_PUSH)
-                        ui:log("  × " .. util.WORKER_FILE .. " 不存在，无法分发", col("red", 16384))
+                        ui:log("  x " .. util.WORKER_FILE .. " missing, cannot distribute", col("red", 16384))
                     else
-                        ui:log(string.format("节点 #%d 请求拉取 %s…", sender, what),
+                        ui:log(string.format("Worker #%d requests %s...", sender, what),
                             col("lightBlue", 512))
                         startPush(sender, util.WORKER_FILE, "worker")
                     end
@@ -1032,7 +1032,7 @@ function M.run(opts)
                     if not r and msg.t == proto.PUT then
                         r = xfer.newReceiver(msg.xid, msg.name, msg.n)
                         recvs[msg.xid] = r
-                        ui:log(string.format("开始接收 #%d 的分块传输 %s（%s 块）",
+                        ui:log(string.format("Receiving from #%d: chunked %s (%s chunks)",
                             sender, tostring(msg.name), tostring(msg.n)), col("lightGray", 1024))
                     end
                     if not r then
@@ -1056,29 +1056,29 @@ function M.run(opts)
                                 dest = util.JOB_DIR .. "/" .. name
                             end
                             if not dest then
-                                ui:log("拒绝保存未知文件：" .. name, col("red", 16384))
+                                ui:log("Refused unknown file: " .. name, col("red", 16384))
                             else
                                 local ok, err = util.writeFile(dest, value)
                                 if ok then
                                     net.send(sender, proto.msg(proto.PUTOK, { xid = msg.xid }),
                                         util.PROTO_PUSH)
                                     if state.validPoolName(name) then
-                                        ui:log(string.format("已从 #%d 收到大结果 %s（%s）",
+                                        ui:log(string.format("Got big result from #%d: %s (%s)",
                                             sender, name, util.bytes(#value)), col("lime", 32))
                                         os.queueEvent("dcpool", name)   -- 通知等待大结果的作业
                                     else
-                                        ui:log(string.format("已从 #%d 拉取作业 %s（%s）",
+                                        ui:log(string.format("Pulled job from #%d: %s (%s)",
                                             sender, name, util.bytes(#value)), col("lime", 32))
                                     end
                                 else
-                                    ui:log("写入失败：" .. tostring(err), col("red", 16384))
+                                    ui:log("Write failed: " .. tostring(err), col("red", 16384))
                                 end
                             end
                         end
                     end
 
                 elseif msg.t == proto.REFERR then
-                    ui:log(string.format("#%d 拒绝了拉取请求：%s", sender, tostring(msg.err)),
+                    ui:log(string.format("#%d refused the pull: %s", sender, tostring(msg.err)),
                         col("orange", 2))
 
                 else
@@ -1097,7 +1097,7 @@ function M.run(opts)
             local ev = table.pack(os.pullEventRaw())
             if ev[1] == "http_success" or ev[1] == "http_failure" then
                 local ok, err = pcall(CL.onEvent, CL, ev)
-                if not ok then ui:log("处理 HTTP 事件出错：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("HTTP event error: " .. tostring(err), col("red", 16384)) end
             end
         end
     end
@@ -1118,21 +1118,21 @@ function M.run(opts)
         M0.mode = "active"
         M0.tookOver = util.now()
         S.paused = false
-        ui:log(string.format("★ 接管主控（%s）：本机 #%d 现在在岗", why, M0.masterId),
+        ui:log(string.format("* Took over as master (%s): node #%d is active", why, M0.masterId),
             col("lime", 32))
         net.broadcast(proto.msg(proto.TAKEOVER, { id = M0.masterId }), util.PROTO_CTRL)
         -- 从快照接续：已算完的任务带着结果回来，没算完的重新排队
         local restored, err, skipped = state.restore(S, jobs)
         if restored and restored > 0 then
-            ui:log(string.format("已接续 %d 个作业（完成的任务结果直接沿用）", restored),
+            ui:log(string.format("Resumed %d jobs (completed task results reused)", restored),
                 col("lightBlue", 512))
         elseif err then
-            ui:log("接续作业失败：" .. tostring(err), col("orange", 2))
+            ui:log("Resume failed: " .. tostring(err), col("orange", 2))
         elseif skipped then
-            ui:log(string.format("有 %d 个作业无法接续（缺少作业文件）", skipped),
+            ui:log(string.format("%d jobs not resumed (job file missing)", skipped),
                 col("orange", 2))
         else
-            ui:log("没有需要接续的作业。", col("lightGray", 1024))
+            ui:log("No jobs to resume.", col("lightGray", 1024))
         end
         broadcastBeat()
     end
@@ -1156,7 +1156,7 @@ function M.run(opts)
                 if line and line ~= "" then
                     local ok, err = pcall(dispatch, line)
                     if not ok then
-                        ui:log("控制命令失败：" .. tostring(err), col("red", 16384))
+                        ui:log("Control command failed: " .. tostring(err), col("red", 16384))
                     end
                 end
             end
@@ -1173,7 +1173,7 @@ function M.run(opts)
                 -- 待命：只盯着心跳，超时就接管
                 local silence = util.mono() - M0.lastBeatAt
                 if silence > (S.cfg.takeoverAfter or 15) then
-                    takeover(string.format("已 %.0f 秒没有主控心跳", silence))
+                    takeover(string.format("no master heartbeat for %.0f s", silence))
                 end
             else
                 S:tick()
@@ -1197,7 +1197,7 @@ function M.run(opts)
             for _, s in pairs(M0.reg.senders) do
                 if not s.warned and (util.mono() - s.startedAt) > 8 then
                     s.warned = true
-                    ui:log(string.format("推送 %s → #%d 迟迟没有确认（第 %d/%d 块）",
+                    ui:log(string.format("Push %s -> #%d unacked (chunk %d/%d)",
                         s.name, s.target, math.min(s.next, s.n), s.n), col("orange", 2))
                 end
             end
@@ -1216,21 +1216,21 @@ function M.run(opts)
             local line = ui:prompt("dcnet> ", complete)
             if line and util.trim(line) ~= "" then
                 local ok, err = pcall(dispatch, line)
-                if not ok then ui:log("指令出错：" .. tostring(err), col("red", 16384)) end
+                if not ok then ui:log("Command error: " .. tostring(err), col("red", 16384)) end
             end
         end
     end
 
     -- ── 启动 ─────────────────────────────────────────────────────────
-    ui:log(string.format("配置：并发 %d，抢尾冗余 %d，任务超时 %s%s（set 改配置 / cfg 看全部）",
+    ui:log(string.format("Config: parallel %d, redundant %d, task timeout %s%s (set / cfg)",
         S.cfg.maxParallel, S.cfg.redundancy, tostring(S.cfg.taskTimeout),
-        S.cfg.adaptiveTimeout and " 秒+自适应" or " 秒"))
+        S.cfg.adaptiveTimeout and " s+adaptive" or " s"))
 
     -- 待命主控：不接活，只盯在岗主控的心跳，超时就接管并接续作业状态
     if S.cfg.standby then
         M0.mode = "standby"
         S.paused = true
-        ui:log(string.format("以待命主控模式启动：#%d 只盯心跳，%.0f 秒收不到就接管",
+        ui:log(string.format("Starting standby: #%d watches heartbeat, takes over after %.0f s",
             M0.masterId, S.cfg.takeoverAfter or 15), col("lightBlue", 512))
     end
 
@@ -1238,9 +1238,9 @@ function M.run(opts)
     if M0.mode == "active" and S.cfg.autoResume and state.hasSnapshot() then
         local n, err, skipped = S:restore()
         if n and n > 0 then
-            ui:log(string.format("已从快照恢复 %d 个未完成作业（断点续算）", n), col("lime", 32))
+            ui:log(string.format("Restored %d unfinished jobs from snapshot", n), col("lime", 32))
         elseif err then
-            ui:log("快照未恢复：" .. tostring(err), col("orange", 2))
+            ui:log("Snapshot not restored: " .. tostring(err), col("orange", 2))
         end
     end
 
@@ -1252,10 +1252,10 @@ function M.run(opts)
         term.setCursorPos(1, 1)
     end
     if not ok then
-        printError("[dcnet] 主控异常终止：" .. tostring(err))
+        printError("[dcnet] Master crashed: " .. tostring(err))
         return false
     end
-    print("[dcnet] 主控已停止。")
+    print("[dcnet] Master stopped.")
     return true
 end
 

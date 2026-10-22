@@ -22,14 +22,14 @@
 
 return {
     name    = "selftest",
-    summary = "集群自检：已知答案 + 可选故障注入（验证调度/汇总/重派）",
+    summary = "Cluster self-check: known answer + optional fault injection (validates dispatch/reduce/retry)",
     -- 这个作业的 reduce 会拿"预期任务总数"核对，不满足结合律，
     -- 所以明确拒绝两级汇总（两级汇总要求 reduce 只做累加类运算）。
     twoLevel = false,
     params  = {
-        { name = "tasks", type = "number", default = 24,   help = "任务数" },
-        { name = "size",  type = "number", default = 2000, help = "每任务平方和项数" },
-        { name = "fail",  type = "number", default = 0,    help = "故意失败的任务数" },
+        { name = "tasks", type = "number", default = 24,   help = "task count" },
+        { name = "size",  type = "number", default = 2000, help = "terms per task" },
+        { name = "fail",  type = "number", default = 0,    help = "deliberately failed tasks" },
     },
 
     split = function(a)
@@ -46,7 +46,7 @@ return {
     map = function(task, ctx)
         if task.fail then
             -- 故意报错：用来验证"报错 → 重试 → 记失败 → 作业仍能汇总"这条路径
-            error("selftest 故意失败（任务 " .. tostring(task.id) .. "）")
+            error("selftest deliberate failure (task " .. tostring(task.id) .. ")")
         end
 
         local sum = 0
@@ -69,14 +69,14 @@ return {
         local seen, bad, total = {}, {}, 0
         for _, r in ipairs(results) do
             if type(r) ~= "table" or type(r.id) ~= "number" then
-                bad[#bad + 1] = "收到结构异常的结果"
+                bad[#bad + 1] = "malformed result received"
             else
-                if seen[r.id] then bad[#bad + 1] = "任务 " .. r.id .. " 出现重复" end
+                if seen[r.id] then bad[#bad + 1] = "task " .. r.id .. " duplicated" end
                 seen[r.id] = true
                 -- 闭式解：1^2 + 2^2 + ... + n^2 = n(n+1)(2n+1)/6
                 local expect = r.n * (r.n + 1) * (2 * r.n + 1) / 6
                 if r.sum ~= expect then
-                    bad[#bad + 1] = string.format("任务 %d 校验不符：%s ≠ %s",
+                    bad[#bad + 1] = string.format("task %d check mismatch: %s != %s",
                         r.id, tostring(r.sum), tostring(expect))
                 end
                 total = total + r.sum
@@ -97,12 +97,12 @@ return {
     format = function(res)
         local pass = (#res.bad == 0) and (#res.missing == 0) and (res.got == res.want)
         local lines = {
-            string.format("任务 %d 个：预期成功 %d，实际成功 %d；预期失败 %d（与主控日志核对）",
+            string.format("tasks %d: expected success %d, actual success %d; expected failures %d (check main log)",
                 res.tasks, res.want, res.got, res.fail),
-            string.format("平方和闭式解校验：%s", #res.bad == 0 and "全部一致" or (#res.bad .. " 个不一致")),
-            string.format("任务号完整性：%s", #res.missing == 0 and "齐全且无重复"
-                or ("缺少 " .. table.concat(res.missing, ","))),
-            "结论：" .. (pass and "PASS —— 链路正常" or "FAIL —— 看上面的明细与主控日志"),
+            string.format("Sum-of-squares closed-form check: %s", #res.bad == 0 and "all match" or (#res.bad .. " mismatches")),
+            string.format("Task ids: %s", #res.missing == 0 and "complete, no duplicates"
+                or ("missing " .. table.concat(res.missing, ","))),
+            "Result: " .. (pass and "PASS - link OK" or "FAIL - see details above and main log"),
         }
         for i = 1, math.min(#res.bad, 4) do lines[#lines + 1] = "  " .. res.bad[i] end
         return table.concat(lines, "\n")

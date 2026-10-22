@@ -50,12 +50,12 @@ function M.run(opts)
     -- ── 网络 ─────────────────────────────────────────────────────────
     local modems, failed = net.openAll()
     if #modems == 0 then
-        printError("[dcnet] 网络屏幕：没有检测到调制解调器（modem）")
-        print("[dcnet] 屏幕电脑也要接在有线网络（或同一无线网络）里。")
+        printError("[dcnet] Network screen: no modem detected")
+        print("[dcnet] Screen computer must be on the wired (or same wireless) network.")
         return false
     end
     for _, e in ipairs(failed or {}) do
-        print("[dcnet] 网络屏幕：打开 modem 失败：" .. tostring(e))
+        print("[dcnet] Network screen: failed to open modem: " .. tostring(e))
     end
 
     local key = opts.key
@@ -66,18 +66,18 @@ function M.run(opts)
     if key ~= "" then
         local ok, err = net.setKey(key)
         if not ok then
-            print("[dcnet] 网络屏幕：启用消息签名失败：" .. tostring(err))
+            print("[dcnet] Network screen: failed to enable message signing: " .. tostring(err))
         else
-            print("[dcnet] 网络屏幕：消息签名已启用（指纹 " ..
-                tostring(net.fingerprint()) .. "）")
+            print("[dcnet] Network screen: message signing enabled (fingerprint " ..
+                tostring(net.fingerprint()) .. ")")
         end
     end
 
     -- ── 显示器 ───────────────────────────────────────────────────────
     local monitors = panel.findMonitors()
     if #monitors == 0 then
-        printError("[dcnet] 网络屏幕：这台电脑上没有显示器（monitor）")
-        print("[dcnet] 把显示器贴在电脑侧面，或用 screen.lua <外设名> 指定。")
+        printError("[dcnet] Network screen: no monitor on this computer")
+        print("[dcnet] Attach a monitor to this computer, or pass screen.lua <name>.")
         return false
     end
     local want = tostring(opts.monitor or "")
@@ -88,12 +88,12 @@ function M.run(opts)
     if not pick then
         local names = {}
         for _, m in ipairs(monitors) do names[#names + 1] = m.name end
-        printError("[dcnet] 网络屏幕：找不到显示器 " .. want ..
-            "；可用：" .. table.concat(names, ", "))
+        printError("[dcnet] Network screen: monitor not found " .. want ..
+            "; available: " .. table.concat(names, ", "))
         return false
     end
     if not pick.periph then
-        printError("[dcnet] 网络屏幕：无法打开显示器 " .. pick.name)
+        printError("[dcnet] Network screen: cannot open monitor " .. pick.name)
         return false
     end
 
@@ -123,33 +123,33 @@ function M.run(opts)
 
     local function statusLines()
         local out = {}
-        out[#out + 1] = { text = string.format("dcnet 网络屏幕 #%d", os.getComputerID()),
+        out[#out + 1] = { text = string.format("dcnet network screen #%d", os.getComputerID()),
             colour = col("lime", 32) }
-        out[#out + 1] = { text = string.format("显示器 %s  %dx%d", monName, w, h),
+        out[#out + 1] = { text = string.format("Monitor %s  %dx%d", monName, w, h),
             colour = col("lightGray", 1024) }
         if masterId and util.mono() - masterSeen <= timeout then
-            out[#out + 1] = { text = string.format("已连接主控 #%d", masterId),
+            out[#out + 1] = { text = string.format("Connected to master #%d", masterId),
                 colour = col("lime", 32) }
-            out[#out + 1] = { text = string.format("已收到 %d 帧面板", frames),
+            out[#out + 1] = { text = string.format("Received %d panel frames", frames),
                 colour = col("white", 1) }
         elseif offWhy == "off" then
-            out[#out + 1] = { text = "主控已关闭网络屏幕推送", colour = col("orange", 2) }
-            out[#out + 1] = { text = "在主控上执行 mon net on 重新开启",
+            out[#out + 1] = { text = "Master disabled network screen push", colour = col("orange", 2) }
+            out[#out + 1] = { text = "Run mon net on at the master to re-enable",
                 colour = col("lightGray", 1024) }
         elseif offWhy == "full" then
-            out[#out + 1] = { text = "主控的网络屏幕数量已满", colour = col("orange", 2) }
-            out[#out + 1] = { text = "在主控上 mon net 看列表 / 踢掉不用的屏幕",
+            out[#out + 1] = { text = "Master's network screen slots are full", colour = col("orange", 2) }
+            out[#out + 1] = { text = "Run mon net at master to list or kick screens",
                 colour = col("lightGray", 1024) }
         elseif offWhy == "ver" then
-            out[#out + 1] = { text = "协议版本不兼容", colour = col("red", 16384) }
-            out[#out + 1] = { text = "请把 screen.lua 更新到与主控相同的版本",
+            out[#out + 1] = { text = "Protocol version incompatible", colour = col("red", 16384) }
+            out[#out + 1] = { text = "Update screen.lua to match the master version",
                 colour = col("lightGray", 1024) }
         elseif offWhy == "kick" then
-            out[#out + 1] = { text = "已被主控断开", colour = col("orange", 2) }
-            out[#out + 1] = { text = "下次心跳会自动重连", colour = col("lightGray", 1024) }
+            out[#out + 1] = { text = "Disconnected by master", colour = col("orange", 2) }
+            out[#out + 1] = { text = "Will reconnect on next heartbeat", colour = col("lightGray", 1024) }
         else
-            out[#out + 1] = { text = "正在寻找主控…", colour = col("yellow", 256) }
-            out[#out + 1] = { text = "在主控上输入 mon 查看网络屏幕",
+            out[#out + 1] = { text = "Looking for master...", colour = col("yellow", 256) }
+            out[#out + 1] = { text = "Type mon at the master to view network screens",
                 colour = col("lightGray", 1024) }
         end
         out[#out + 1] = { text = os.date("%H:%M:%S"), colour = col("gray", 128) }
@@ -164,7 +164,7 @@ function M.run(opts)
     end
 
     panel.draw(dev, statusLines(), h)
-    print(string.format("[dcnet] 网络屏幕 %s 已启动：显示器 %s（%dx%d），等待主控…",
+    print(string.format("[dcnet] Network screen %s started: monitor %s (%dx%d), waiting for master...",
         name, monName, w, h))
 
     -- ── 主循环 ───────────────────────────────────────────────────────
@@ -193,7 +193,7 @@ function M.run(opts)
             if not vok then
                 if now - lastBad > 10 then
                     lastBad = now
-                    print("[dcnet] 网络屏幕：丢弃一条消息（" .. tostring(why) .. "）")
+                    print("[dcnet] Network screen: dropped a message (" .. tostring(why) .. ")")
                 end
             elseif msg.t == proto.DISP and type(msg.lines) == "string" then
                 local parsed, lines = pcall(textutils.unserialize, msg.lines)

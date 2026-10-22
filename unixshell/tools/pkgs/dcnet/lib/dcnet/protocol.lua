@@ -73,7 +73,7 @@ end
 function M.compatible(m)
     local v = tonumber(m and m.ver) or 0
     if v ~= M.VERSION then
-        return false, string.format("协议版本不匹配（对端 %d，本机 %d）", v, M.VERSION)
+        return false, string.format("protocol version mismatch (peer %d, local %d)", v, M.VERSION)
     end
     return true
 end

@@ -19,12 +19,12 @@
 
 return {
     name    = "cloudprimes",
-    summary = "素数统计（有云端端点时优先卸载到云端，失败自动回落本机）",
+    summary = "Prime count (cloud endpoints preferred, falls back to local on failure)",
     params  = {
-        { name = "from",  type = "number", default = 2,      help = "起点（>=2）" },
-        { name = "to",    type = "number", default = 200000, help = "终点" },
-        { name = "chunk", type = "number", default = 25000,  help = "每个任务的整数个数" },
-        { name = "pad",   type = "number", default = 0,      help = "给云端请求塞多少字节填充（测分块上传用）" },
+        { name = "from",  type = "number", default = 2,      help = "start (>=2)" },
+        { name = "to",    type = "number", default = 200000, help = "end" },
+        { name = "chunk", type = "number", default = 25000,  help = "integers per task" },
+        { name = "pad",   type = "number", default = 0,      help = "padding bytes added to cloud requests (chunked upload test)" },
     },
 
     -- 云端卸载：这两段在**主控**上运行，云端只需要会 HTTP + JSON
@@ -40,7 +40,7 @@ return {
         parse = function(resp, task, args)
             local d = (type(resp) == "table" and resp.data) or resp
             if type(d) ~= "table" or type(d.count) ~= "number" then
-                return nil, "云端响应里没有 count 字段"
+                return nil, "cloud response has no count field"
             end
             return { lo = task.lo, hi = task.hi, count = d.count, last = d.last, via = "cloud" }
         end,
@@ -101,7 +101,7 @@ return {
     end,
 
     format = function(res)
-        return string.format("[%d, %d] 内素数个数 = %d（最大 %s）；%d 个任务，其中云端 %d / 本机 %d",
+        return string.format("primes in [%d, %d] = %d (max %s); %d tasks, cloud %d / local %d",
             res.from, res.to, res.primes, tostring(res.largest),
             res.tasks, res.cloud, res.local_)
     end,

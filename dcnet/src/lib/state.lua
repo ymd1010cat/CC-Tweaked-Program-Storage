@@ -74,13 +74,13 @@ end
 --- 读取快照并重建到调度器里（由主控在启动时调用）。
 -- 返回恢复的作业数；第二个返回值是出错信息（如果有）。
 function M.restore(sched, jobsModule)
-    if not util.exists(M.SNAP) then return 0, "没有快照" end
+    if not util.exists(M.SNAP) then return 0, "no snapshot" end
     local raw, err = util.readFile(M.SNAP)
     if not raw then return 0, err end
 
     local ok, snap = pcall(textutils.unserialize, raw)
     if not ok or type(snap) ~= "table" or snap.version ~= M.SNAP_VERSION then
-        return 0, "快照格式不认识（版本不符或文件损坏）"
+        return 0, "unrecognized snapshot format (version mismatch or corrupt file)"
     end
 
     local restored, skipped = 0, {}
@@ -89,7 +89,7 @@ function M.restore(sched, jobsModule)
         if type(sj) == "table" then
             local def, derr = jobsModule.loadSource(sj.source, "@restore-" .. tostring(id))
             if not def then
-                skipped[#skipped + 1] = string.format("#%d %s（源码无法装载：%s）",
+                skipped[#skipped + 1] = string.format("#%d %s (cannot load source: %s)",
                     id, tostring(sj.name), tostring(derr))
             else
                 def.hash = sj.hash or def.hash
@@ -254,7 +254,7 @@ end
 function M.poolPut(name, value)
     M.ensurePool()
     local ok, data = pcall(textutils.serialize, value)
-    if not ok then return nil, "序列化失败: " .. tostring(data) end
+    if not ok then return nil, "serialization failed: " .. tostring(data) end
     local wrote, err = util.writeFile(M.poolPath(name), data)
     if not wrote then return nil, err end
     return name, #data
@@ -262,11 +262,11 @@ end
 
 --- 从池子读一个值；读完默认删掉
 function M.poolGet(name, keep)
-    if not M.validPoolName(name) then return nil, "非法池子文件名" end
+    if not M.validPoolName(name) then return nil, "invalid pool file name" end
     local raw = util.readFile(M.poolPath(name))
-    if not raw then return nil, "池子里没有 " .. tostring(name) end
+    if not raw then return nil, "not in pool: " .. tostring(name) end
     local ok, value = pcall(textutils.unserialize, raw)
-    if not ok or value == nil then return nil, "池子文件解析失败: " .. tostring(name) end
+    if not ok or value == nil then return nil, "cannot parse pool file: " .. tostring(name) end
     if not keep and fs.exists(M.poolPath(name)) then fs.delete(M.poolPath(name)) end
     return value
 end

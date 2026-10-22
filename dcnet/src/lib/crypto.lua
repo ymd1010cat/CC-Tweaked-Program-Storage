@@ -52,7 +52,7 @@ local K = {
 
 --- SHA-256，返回 32 字节二进制摘要
 function M.sha256bin(msg)
-    if not M.available then return nil, "本机没有 bit32，无法计算哈希" end
+    if not M.available then return nil, "no bit32, cannot compute hash" end
     msg = tostring(msg or "")
     local h = {
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -125,12 +125,12 @@ end
 
 --- HMAC-SHA256，返回 32 字节二进制
 function M.hmacSha256bin(key, msg)
-    if not M.available then return nil, "本机没有 bit32，无法计算 HMAC" end
+    if not M.available then return nil, "no bit32, cannot compute HMAC" end
     key = tostring(key or "")
     msg = tostring(msg or "")
     if #key > 64 then
         local k = M.sha256bin(key)
-        if not k then return nil, "密钥哈希失败" end
+        if not k then return nil, "key hash failed" end
         key = k
     end
     key = key .. string.rep("\0", 64 - #key)
@@ -141,7 +141,7 @@ function M.hmacSha256bin(key, msg)
         opad[i] = string.char(B.bxor(b, 0x5c))
     end
     local inner = M.sha256bin(table.concat(ipad) .. msg)
-    if not inner then return nil, "内部哈希失败" end
+    if not inner then return nil, "inner hash failed" end
     return M.sha256bin(table.concat(opad) .. inner)
 end
 
@@ -225,7 +225,7 @@ function M.selftest()
     expect("sha256(\"abc\")",
         M.sha256("abc"),
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-    expect("sha256(长串)",
+    expect("sha256(long string)",
         M.sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
         "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
     -- RFC 4231 Test Case 1

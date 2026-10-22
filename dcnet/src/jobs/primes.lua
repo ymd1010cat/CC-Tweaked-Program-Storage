@@ -15,11 +15,11 @@
 
 return {
     name    = "primes",
-    summary = "统计 [from,to] 区间内的素数个数（可对答案的基准测试）",
+    summary = "Count primes in [from,to] (verifiable benchmark)",
     params  = {
-        { name = "from",  type = "number", default = 2,       help = "起点（>=2）" },
-        { name = "to",    type = "number", default = 2000000, help = "终点" },
-        { name = "chunk", type = "number", default = 25000,   help = "每个任务的整数个数" },
+        { name = "from",  type = "number", default = 2,       help = "start (>=2)" },
+        { name = "to",    type = "number", default = 2000000, help = "end" },
+        { name = "chunk", type = "number", default = 25000,   help = "integers per task" },
     },
 
     split = function(a)
@@ -77,7 +77,7 @@ return {
     end,
 
     format = function(res)
-        return string.format("[%d, %d] 内素数个数 = %d（最大素数 %s），由 %d 个任务汇总",
+        return string.format("primes in [%d, %d] = %d (max prime %s), reduced from %d tasks",
             res.from, res.to, res.primes, tostring(res.largest), res.ranges)
     end,
 }

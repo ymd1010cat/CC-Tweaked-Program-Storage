@@ -28,20 +28,20 @@ if not _G.dc_require then
     _G.dc_require = function(name)
         if cache[name] then return cache[name] end
         local short = tostring(name):match("^dc%.(.+)$")
-        if not short then error("模块名非法: " .. tostring(name), 0) end
+        if not short then error("invalid module name: " .. tostring(name), 0) end
         local tried = {}
         for _, pat in ipairs(paths) do
             local path = pat:format(short)
             tried[#tried + 1] = path
             if fs.exists(path) and not fs.isDir(path) then
                 local fn, err = loadfile(path)
-                if not fn then error("加载模块 " .. name .. " 失败: " .. tostring(err), 0) end
+                if not fn then error("failed to load module " .. name .. ": " .. tostring(err), 0) end
                 local mod = fn()
                 cache[name] = mod
                 return mod
             end
         end
-        error("找不到模块 " .. name .. "（已尝试: " .. table.concat(tried, ", ") .. "）", 0)
+        error("module not found: " .. name .. " (tried: " .. table.concat(tried, ", ") .. ")", 0)
     end
 end
 
@@ -66,7 +66,7 @@ end
 
 local ok = screen.run(opts)
 if not ok then
-    printError("[dcnet] 网络屏幕启动失败。")
+    printError("[dcnet] screen failed to start.")
     return 1
 end
 return 0

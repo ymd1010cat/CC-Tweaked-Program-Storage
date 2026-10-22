@@ -32,12 +32,12 @@ end
 
 return {
     name    = "nbody",
-    summary = "N 体引力：按天体分块算受力（净外力应≈0，可自检）",
+    summary = "N-body gravity: forces per body block (net force should be ~0, self-check)",
     params  = {
-        { name = "bodies", type = "number", default = 64, help = "天体数量" },
-        { name = "step",   type = "number", default = 8,  help = "每个任务算几个天体" },
-        { name = "seed",   type = "number", default = 3,  help = "随机种子（决定初始分布）" },
-        { name = "eps",    type = "number", default = 0.5, help = "软化长度，避免除零" },
+        { name = "bodies", type = "number", default = 64, help = "body count" },
+        { name = "step",   type = "number", default = 8,  help = "bodies per task" },
+        { name = "seed",   type = "number", default = 3,  help = "random seed (determines initial layout)" },
+        { name = "eps",    type = "number", default = 0.5, help = "softening length to avoid divide-by-zero" },
     },
 
     split = function(a)
@@ -73,7 +73,7 @@ return {
                     pairs = pairs + 1
                 end
             end
-            ctx.progress((i - task.from + 1) / total, string.format("天体 %d/%d", i, task.n))
+            ctx.progress((i - task.from + 1) / total, string.format("body %d/%d", i, task.n))
             ctx.tick()
             if ctx.canceled() then break end
         end
@@ -98,7 +98,7 @@ return {
 
     format = function(res)
         return string.format(
-            "N 体引力：%d 个天体，Σ|F| = %.6f，净外力 = %.3e（应≈0），两两作用 %d 次（应为 %d）",
+            "N-body: %d bodies, sum|F| = %.6f, net force = %.3e (should be ~0), pairwise terms %d (expected %d)",
             res.n, res.sumAbs, res.net, res.pairs, res.wantPairs)
     end,
 }

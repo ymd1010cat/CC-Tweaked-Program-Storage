@@ -30,10 +30,10 @@ end
 
 return {
     name    = "tsp",
-    summary = "旅行商暴力搜索（按第二个城市切分，可对最优解）",
+    summary = "TSP brute force (split by second city, optimal tour verifiable)",
     params  = {
-        { name = "cities", type = "number", default = 9, help = "城市数量（9 → 8! 条回路，按第二城切成 8 份）" },
-        { name = "seed",   type = "number", default = 5, help = "随机种子（决定城市坐标）" },
+        { name = "cities", type = "number", default = 9, help = "city count (9 -> 8! tours, split into 8 parts by second city)" },
+        { name = "seed",   type = "number", default = 5, help = "random seed (determines city coordinates)" },
     },
 
     split = function(a)
@@ -102,7 +102,7 @@ return {
     format = function(res)
         local tour = {}
         for i, c in ipairs(res.tour or {}) do tour[i] = tostring(c) end
-        return string.format("TSP：%d 个城市，最短回路 %.4f，路线 %s→1（枚举 %d 次，%d 个分支任务）",
-            res.n, res.len, table.concat(tour, "→"), res.steps, res.parts)
+        return string.format("TSP: %d cities, shortest tour %.4f, path %s->1 (%d enumerations, %d branch tasks)",
+            res.n, res.len, table.concat(tour, "->"), res.steps, res.parts)
     end,
 }

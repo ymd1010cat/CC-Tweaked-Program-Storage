@@ -42,7 +42,7 @@ end
 
 --- 登记一次发送（不阻塞）。返回 xid / nil, err
 function M.enqueue(reg, target, name, what, data, onDone)
-    if type(data) ~= "string" or #data == 0 then return nil, "内容为空" end
+    if type(data) ~= "string" or #data == 0 then return nil, "empty content" end
     local s = M.newSender({ target = target, name = name, what = what, data = data,
         onDone = onDone })
     reg.senders[s.xid] = s
@@ -73,12 +73,12 @@ function M.waitFor(reg, xid, timeout)
         if st then
             reg.results[xid] = nil
             if st == "ok" then return true end
-            return nil, "传输失败"
+            return nil, "transfer failed"
         end
         if util.mono() > deadline then
             reg.senders[xid] = nil
             reg.results[xid] = nil
-            return nil, "传输超时"
+            return nil, "transfer timeout"
         end
         os.startTimer(0.2)
         os.pullEvent()
@@ -153,7 +153,7 @@ function M.senderPoll(s, send)
             if now - s.sentAt < M.ACK_TIMEOUT then return s.state end
             s.tries = s.tries + 1
             if s.tries > M.MAX_TRIES then
-                s.state, s.err = "fail", "分块确认超时"
+                s.state, s.err = "fail", "chunk ack timeout"
                 if s.onDone then s.onDone(s.state, s) end
                 return s.state
             end
@@ -180,7 +180,7 @@ function M.senderPoll(s, send)
     if now - s.sentAt > M.ACK_TIMEOUT then
         s.tries = s.tries + 1
         if s.tries > M.MAX_TRIES then
-            s.state, s.err = "fail", "结束确认超时"
+            s.state, s.err = "fail", "final ack timeout"
             if s.onDone then s.onDone(s.state, s) end
             return s.state
         end
@@ -217,11 +217,11 @@ end
 
 function M.senderSummary(s)
     if s.state == "ok" then
-        return string.format("%s 已送达 #%d（%d 块，%s）", s.name, s.target, s.n, util.duration((util.mono() - s.startedAt) * 1000))
+        return string.format("%s delivered to #%d (%d chunks, %s)", s.name, s.target, s.n, util.duration((util.mono() - s.startedAt) * 1000))
     elseif s.state == "fail" then
-        return string.format("%s → #%d 失败：%s", s.name, s.target, tostring(s.err))
+        return string.format("%s -> #%d failed: %s", s.name, s.target, tostring(s.err))
     end
-    return string.format("%s → #%d 传输中 %d/%d", s.name, s.target, math.min(s.next - 1, s.n), s.n)
+    return string.format("%s -> #%d transferring %d/%d", s.name, s.target, math.min(s.next - 1, s.n), s.n)
 end
 
 -- ── 接收端 ──────────────────────────────────────────────────────────────

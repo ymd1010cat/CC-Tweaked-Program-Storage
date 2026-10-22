@@ -83,11 +83,11 @@ end
 
 return {
     name    = "ludecomp",
-    summary = "LU 分解解线性方程组（按右端项并行；残差 max|Ax-b| 自检）",
+    summary = "Solve A*x=b by LU factorization (parallel over RHS; residual max|Ax-b| self-check)",
     params  = {
-        { name = "n",    type = "number", default = 24, help = "矩阵阶数" },
-        { name = "cols", type = "number", default = 4,  help = "每个任务解几个右端项" },
-        { name = "seed", type = "number", default = 11, help = "随机种子" },
+        { name = "n",    type = "number", default = 24, help = "matrix order" },
+        { name = "cols", type = "number", default = 4,  help = "right-hand sides per task" },
+        { name = "seed", type = "number", default = 11, help = "random seed" },
     },
 
     split = function(a)
@@ -123,7 +123,7 @@ return {
                 sumX = sumX + xv[i]
             end
             count = count + 1
-            ctx.progress((j - task.from + 1) / total, string.format("右端项 %d/%d", j, task.to))
+            ctx.progress((j - task.from + 1) / total, string.format("RHS %d/%d", j, task.to))
             ctx.tick()
             if ctx.canceled() then break end
         end
@@ -142,7 +142,7 @@ return {
     end,
 
     format = function(res)
-        return string.format("LU 求解：%d×%d，解了 %d 个右端项，残差 max|Ax-b| = %.3e（应≈0），Σx = %.6f",
+        return string.format("LU solve: %dx%d, solved %d RHS, residual max|Ax-b| = %.3e (should be ~0), sum x = %.6f",
             res.n, res.n, res.solved, res.maxRes, res.sumX)
     end,
 }

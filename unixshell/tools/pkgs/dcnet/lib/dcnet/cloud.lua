@@ -32,27 +32,27 @@ M.VERSION = 1
 
 function M.encode(value)
     if not (textutils and textutils.serializeJSON) then
-        return nil, "本机没有 textutils.serializeJSON（CC 版本过旧）"
+        return nil, "textutils.serializeJSON is missing (CC too old)"
     end
     local ok, out = pcall(textutils.serializeJSON, value)
-    if not ok then return nil, "JSON 编码失败: " .. tostring(out) end
+    if not ok then return nil, "JSON encode failed: " .. tostring(out) end
     return out
 end
 
 function M.decode(text)
     if not (textutils and textutils.unserializeJSON) then
-        return nil, "本机没有 textutils.unserializeJSON（CC 版本过旧）"
+        return nil, "textutils.unserializeJSON is missing (CC too old)"
     end
     local ok, out = pcall(textutils.unserializeJSON, text)
-    if not ok then return nil, "JSON 解码失败: " .. tostring(out) end
+    if not ok then return nil, "JSON decode failed: " .. tostring(out) end
     return out
 end
 
 function M.httpReady()
     local ok = (type(http) == "table") and (type(http.post) == "function")
-    if not ok then return false, "本机 http 不可用（服务器可能关了 http_enable）" end
+    if not ok then return false, "http unavailable (http_enable may be off)" end
     if not (textutils and textutils.serializeJSON and textutils.unserializeJSON) then
-        return false, "本机缺少 JSON 支持"
+        return false, "JSON support missing"
     end
     return true
 end
@@ -105,11 +105,11 @@ local function nextId(list)
 end
 
 function M.addEndpoint(list, name, url, slots, log)
-    if not name or name == "" then return nil, "端点名不能为空" end
+    if not name or name == "" then return nil, "endpoint name cannot be empty" end
     if not url or not tostring(url):match("^https?://") then
-        return nil, "URL 必须以 http:// 或 https:// 开头"
+        return nil, "URL must start with http:// or https://"
     end
-    if M.find(list, name) then return nil, "端点名已存在: " .. name end
+    if M.find(list, name) then return nil, "endpoint name already exists: " .. name end
     local ep = {
         id = nextId(list), name = name, url = tostring(url),
         slots = math.max(1, math.floor(tonumber(slots) or 1)),
@@ -128,7 +128,7 @@ function M.removeEndpoint(list, name)
             return ep
         end
     end
-    return nil, "没有这个端点: " .. tostring(name)
+    return nil, "no such endpoint: " .. tostring(name)
 end
 
 -- ── 云端实例 ────────────────────────────────────────────────────────────
@@ -198,7 +198,7 @@ function Cloud:post(ep, bodyStr, headers, method)
         ok, handle, err = pcall(http.post, ep.url, bodyStr, hdrs, true)
     end
     if not ok then return nil, tostring(handle) end
-    if not handle then return nil, tostring(err or "请求未能发出") end
+    if not handle then return nil, tostring(err or "request could not be sent") end
     return handle
 end
 
@@ -208,7 +208,7 @@ function Cloud:cool(ep, why)
     local backoff = math.min(300, 10 * (2 ^ math.min(ep.failures - 1, 5)))
     ep.cooldownUntil = util.mono() + backoff
     ep.lastError = why
-    self.log(string.format("云端端点 %s 不可用（%s），%d 秒内不再尝试", ep.name, tostring(why),
+    self.log(string.format("Cloud endpoint %s unavailable (%s), no retry for %d s", ep.name, tostring(why),
         backoff), 16384)
 end
 
@@ -235,7 +235,7 @@ function Cloud:pump()
             local body, berr = self:buildBody(job, task)
             if not body then
                 self.sched:externalResult(ep.id, job.id, tid, false, nil,
-                    "云端请求打包失败: " .. tostring(berr), 0)
+                    "cloud request build failed: " .. tostring(berr), 0)
             else
                 local bodyStr = body
                 if type(body) ~= "string" then
@@ -244,7 +244,7 @@ function Cloud:pump()
                 end
                 if not bodyStr then
                     self.sched:externalResult(ep.id, job.id, tid, false, nil,
-                        "云端请求编码失败: " .. tostring(berr), 0)
+                        "cloud request encode failed: " .. tostring(berr), 0)
                 elseif #bodyStr > (tonumber(self.cfg.cloudChunk) or 65536) then
                     -- 大请求：切成 N 块逐块 POST，最后一块带 commit，服务器拼装后再执行。
                     -- HTTP 单请求有大小上限（http_max_upload），分块是唯一通用解法。
@@ -255,7 +255,7 @@ function Cloud:pump()
                         i = 0, n = math.ceil(#bodyStr / limit), limit = limit,
                     }
                     if self.cfg.verbose then
-                        self.log(string.format("  云端请求 %s 超过 %d 字节，切成 %d 块上传",
+                        self.log(string.format("  cloud request %s exceeds %d bytes, uploading in %d chunks",
                             util.bytes(#bodyStr), limit, self.chunks[xid].n), 1024)
                     end
                     self:sendNextChunk(xid)
@@ -264,7 +264,7 @@ function Cloud:pump()
                     if not handle then
                         self:cool(ep, herr)
                         self.sched:externalResult(ep.id, job.id, tid, false, nil,
-                            "云端不可达: " .. tostring(herr), 0)
+                            "cloud unreachable: " .. tostring(herr), 0)
                     else
                         ep.sent = (ep.sent or 0) + 1
                         self.sent = self.sent + 1
@@ -291,7 +291,7 @@ function Cloud:sendNextChunk(xid)
     if not bodyStr then
         self.chunks[xid] = nil
         self.sched:externalResult(c.ep.id, c.job, c.task, false, nil,
-            "云端分块编码失败: " .. tostring(eerr), 0)
+            "cloud chunk encode failed: " .. tostring(eerr), 0)
         return false
     end
     local handle, herr = self:post(c.ep, bodyStr)
@@ -299,7 +299,7 @@ function Cloud:sendNextChunk(xid)
         self.chunks[xid] = nil
         self:cool(c.ep, herr)
         self.sched:externalResult(c.ep.id, c.job, c.task, false, nil,
-            "云端分块上传失败: " .. tostring(herr), 0)
+            "cloud chunk upload failed: " .. tostring(herr), 0)
         return false
     end
     c.ep.sent = (c.ep.sent or 0) + 1
@@ -339,7 +339,7 @@ function Cloud:onEvent(ev)
         if not decoded then
             req.ep.fail = (req.ep.fail or 0) + 1
             self.sched:externalResult(req.ep.id, req.job, req.task, false, nil,
-                "云端响应不是合法 JSON: " .. tostring(derr), ms)
+                "cloud response is not valid JSON: " .. tostring(derr), ms)
             return
         end
         -- 分块上传：还没到最后一块就继续发下一块；最后一块的响应才是任务结果
@@ -353,7 +353,7 @@ function Cloud:onEvent(ev)
                     req.ep.fail = (req.ep.fail or 0) + 1
                     self.failCount = self.failCount + 1
                     self.sched:externalResult(req.ep.id, req.job, req.task, false, nil,
-                        "云端拒绝分块: " .. tostring(decoded.err or "?"), ms)
+                        "cloud rejected chunk: " .. tostring(decoded.err or "?"), ms)
                 else
                     self:sendNextChunk(req.chunkXid)
                 end
@@ -368,7 +368,7 @@ function Cloud:onEvent(ev)
             req.ep.fail = (req.ep.fail or 0) + 1
             self.failCount = self.failCount + 1
             self.sched:externalResult(req.ep.id, req.job, req.task, false, nil,
-                tostring(decoded.err or "云端返回失败"), ms)
+                tostring(decoded.err or "cloud returned failure"), ms)
             return
         end
         local data, perr = self:parseResponse(job, task, decoded)
@@ -376,7 +376,7 @@ function Cloud:onEvent(ev)
             req.ep.fail = (req.ep.fail or 0) + 1
             self.failCount = self.failCount + 1
             self.sched:externalResult(req.ep.id, req.job, req.task, false, nil,
-                "云端响应解析失败: " .. tostring(perr), ms)
+                "cloud response parse failed: " .. tostring(perr), ms)
             return
         end
         req.ep.ok = (req.ep.ok or 0) + 1
@@ -399,14 +399,14 @@ function Cloud:onEvent(ev)
         self:cool(req.ep, a)
         -- 任务打回队列：本机节点会接手（自动回落）
         self.sched:externalResult(req.ep.id, req.job, req.task, false, nil,
-            "云端请求失败: " .. tostring(a), 0)
+            "cloud request failed: " .. tostring(a), 0)
     end
 end
 
 --- 探活：GET 一次（服务端应实现 GET /health 之类）
 function Cloud:test(name, onDone)
     local ep = self:find(name)
-    if not ep then return nil, "没有这个端点: " .. tostring(name) end
+    if not ep then return nil, "no such endpoint: " .. tostring(name) end
     if not self.ok then return nil, self.reason end
     local handle, err = self:post(ep, nil, nil, "GET")
     if not handle then
@@ -424,24 +424,24 @@ end
 function Cloud:lines()
     local out = {}
     if not self.ok then
-        out[#out + 1] = "云端卸载不可用：" .. tostring(self.reason)
+        out[#out + 1] = "Cloud offload unavailable: " .. tostring(self.reason)
         return out
     end
     if self.cfg.cloud == false then
-        out[#out + 1] = "云端卸载已关闭（set cloud true 打开）"
+        out[#out + 1] = "Cloud offload is off (set cloud true to enable)"
     end
-    out[#out + 1] = string.format("端点 %d 个，在飞请求 %d，累计成功 %d / 失败 %d",
+    out[#out + 1] = string.format("endpoints %d, inflight %d, total ok %d / failed %d",
         #self.endpoints, self:totalInflight(), self.okCount, self.failCount)
     if #self.endpoints == 0 then
-        out[#out + 1] = "  用 cloud add <名字> <url> [并发] 注册一个 HTTP 计算服务"
+        out[#out + 1] = "  cloud add <name> <url> [slots] to register an HTTP service"
     end
     for _, ep in ipairs(self.endpoints) do
-        local state = "就绪"
+        local state = "ready"
         if ep.cooldownUntil and util.mono() < ep.cooldownUntil then
-            state = string.format("冷却中 %ds（%s）",
+            state = string.format("cooling %ds (%s)",
                 math.ceil(ep.cooldownUntil - util.mono()), tostring(ep.lastError or "?"))
         end
-        out[#out + 1] = string.format("  %-10s %-34s 槽位 %d 在飞 %d 成功 %d 失败 %d %s",
+        out[#out + 1] = string.format("  %-10s %-34s slots %d inflight %d ok %d failed %d %s",
             ep.name, util.trunc(ep.url, 34), ep.slots or 1, self:countInflight(ep),
             ep.ok or 0, ep.fail or 0, state)
     end

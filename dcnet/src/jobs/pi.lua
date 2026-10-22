@@ -15,11 +15,11 @@
 
 return {
     name    = "pi",
-    summary = "用蒙特卡洛方法估算 π（演示随机模拟类作业）",
+    summary = "Estimate pi by Monte Carlo (random simulation job demo)",
     params  = {
-        { name = "samples", type = "number", default = 2000000, help = "总样本数" },
-        { name = "chunk",   type = "number", default = 50000,   help = "每个任务的样本数" },
-        { name = "seed",    type = "number", default = 12345,   help = "随机种子" },
+        { name = "samples", type = "number", default = 2000000, help = "total samples" },
+        { name = "chunk",   type = "number", default = 50000,   help = "samples per task" },
+        { name = "seed",    type = "number", default = 12345,   help = "random seed" },
     },
 
     split = function(a)
@@ -70,7 +70,7 @@ return {
     end,
 
     format = function(res)
-        return string.format("π ≈ %.6f（样本 %d，圆内 %d，相对误差 %.4f%%）",
+        return string.format("pi ~ %.6f (samples %d, inside %d, relative error %.4f%%)",
             res.pi, res.samples, res.inside,
             res.pi > 0 and math.abs(res.pi - math.pi) / math.pi * 100 or 0)
     end,

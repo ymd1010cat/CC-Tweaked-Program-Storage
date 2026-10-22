@@ -31,11 +31,11 @@ end
 
 return {
     name    = "matmul",
-    summary = "矩阵乘法（按行分块；矩阵按种子在各节点再生，可对答案）",
+    summary = "Matrix multiply (row blocks; matrices regenerated from seed per node, verifiable)",
     params  = {
-        { name = "n",    type = "number", default = 48, help = "矩阵阶数" },
-        { name = "rows", type = "number", default = 6,  help = "每个任务算几行" },
-        { name = "seed", type = "number", default = 7,  help = "随机种子（决定矩阵内容）" },
+        { name = "n",    type = "number", default = 48, help = "matrix order" },
+        { name = "rows", type = "number", default = 6,  help = "rows per task" },
+        { name = "seed", type = "number", default = 7,  help = "random seed (determines matrix)" },
     },
 
     split = function(a)
@@ -67,7 +67,7 @@ return {
                 if j == i then trace = trace + acc end
                 if math.abs(acc) > maxAbs then maxAbs = math.abs(acc) end
             end
-            ctx.progress((i - task.from + 1) / total, string.format("行 %d/%d", i, task.n))
+            ctx.progress((i - task.from + 1) / total, string.format("row %d/%d", i, task.n))
             ctx.tick()
             if ctx.canceled() then break end
         end
@@ -88,7 +88,7 @@ return {
     end,
 
     format = function(res)
-        return string.format("%d×%d 矩阵乘积：元素和 %.6f，迹 %.6f，最大绝对值 %.4f（共 %d 个元素）",
+        return string.format("%dx%d matrix product: element sum %.6f, trace %.6f, max abs %.4f (%d elements)",
             res.n, res.n, res.sum, res.trace, res.maxAbs, res.count)
     end,
 }

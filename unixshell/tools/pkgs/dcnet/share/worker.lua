@@ -13,7 +13,7 @@ local function __dc_load(name)
     local cached = __dc_cache[name]
     if cached ~= nil then return cached end
     local fn = __dc_modules[name]
-    if not fn then error("dcnet: 找不到模块 " .. tostring(name), 0) end
+    if not fn then error("dcnet: module not found: " .. tostring(name), 0) end
     local mod = fn()
     if mod == nil then mod = true end
     __dc_cache[name] = mod
@@ -143,7 +143,7 @@ function M.fit(s, cols)
     if cols <= 0 then return "" end
     if M.textWidth(s) <= cols then return s end
 
-    local ell = "…"
+    local ell = "..."
     local limit = math.max(0, cols - M.textWidth(ell))
     local out, w, i, n = {}, 0, 1, #s
     while i <= n do
@@ -205,9 +205,9 @@ function M.ensureDir(path)
 end
 
 function M.readFile(path)
-    if not fs.exists(path) or fs.isDir(path) then return nil, "文件不存在: " .. tostring(path) end
+    if not fs.exists(path) or fs.isDir(path) then return nil, "file not found: " .. tostring(path) end
     local h = fs.open(path, "r")
-    if not h then return nil, "无法打开: " .. tostring(path) end
+    if not h then return nil, "cannot open: " .. tostring(path) end
     local data = h.readAll()
     h.close()
     return data
@@ -217,7 +217,7 @@ function M.writeFile(path, data)
     local dir = path:match("^(.*)/[^/]*$")
     if dir and dir ~= "" then M.ensureDir(dir) end
     local h = fs.open(path, "w")
-    if not h then return false, "无法写入: " .. tostring(path) end
+    if not h then return false, "cannot write: " .. tostring(path) end
     h.write(data)
     h.close()
     return true
@@ -281,7 +281,7 @@ function M.saveCfg(key, value)
         settings.set(M.CFG_PREFIX .. key, value)
         return true
     end
-    return false, "本机没有 settings API"
+    return false, "settings API not available"
 end
 
 function M.cfgLines(cfg, meta)
@@ -309,9 +309,9 @@ end
 
 function M.runChunk(src, chunkname, env)
     local fn, err = M.loadChunk(src, chunkname, env)
-    if not fn then return nil, "编译失败: " .. tostring(err) end
+    if not fn then return nil, "compile failed: " .. tostring(err) end
     local ok, res = pcall(fn)
-    if not ok then return nil, "运行失败: " .. tostring(res) end
+    if not ok then return nil, "run failed: " .. tostring(res) end
     return res
 end
 
@@ -351,14 +351,14 @@ function M.parseArgs(tokens, params)
             out[p.name] = p.default
         else
             local v, err = M.coerce(raw, p.type)
-            if err then return nil, string.format("参数 %s 无效: %s", p.name, err) end
+            if err then return nil, string.format("invalid argument %s: %s", p.name, err) end
             out[p.name] = v
         end
         named[p.name] = nil
     end
     for k, v in pairs(named) do unknown[#unknown + 1] = k .. "=" .. tostring(v) end
     if #unknown > 0 then
-        return nil, "未知参数: " .. table.concat(unknown, ", ")
+        return nil, "unknown argument: " .. table.concat(unknown, ", ")
     end
     return out
 end
@@ -366,12 +366,12 @@ end
 function M.coerce(raw, kind)
     if kind == "number" then
         local n = tonumber(raw)
-        if not n then return nil, "不是数字" end
+        if not n then return nil, "not a number" end
         return n
     elseif kind == "boolean" then
         if raw == true or raw == "true" or raw == "1" or raw == "yes" then return true end
         if raw == false or raw == "false" or raw == "0" or raw == "no" then return false end
-        return nil, "不是布尔值"
+        return nil, "not a boolean"
     elseif kind == "string" or kind == nil then
         return tostring(raw)
     end
@@ -436,7 +436,7 @@ end
 function M.compatible(m)
     local v = tonumber(m and m.ver) or 0
     if v ~= M.VERSION then
-        return false, string.format("协议版本不匹配（对端 %d，本机 %d）", v, M.VERSION)
+        return false, string.format("protocol version mismatch (peer %d, local %d)", v, M.VERSION)
     end
     return true
 end
@@ -455,7 +455,7 @@ local function select_netlib()
     local ok, rpv = pcall(require, "rpvnet")
     if not ok or type(rpv) ~= "table" then
         if want == "rpv" then
-            error("dcnet: transport=rpv 但 lib/rpvnet.lua 不可用: " .. tostring(rpv), 0)
+            error("dcnet: transport=rpv but lib/rpvnet.lua unavailable: " .. tostring(rpv), 0)
         end
         return rednet, "rednet"
     end
@@ -499,10 +499,10 @@ function M.setKey(key)
         return true
     end
     if not M.signingSupported() then
-        return nil, "本机没有 bit32，无法启用消息签名"
+        return nil, "no bit32, cannot enable message signing"
     end
     if #key < 8 then
-        return nil, "密钥太短（至少 8 个字符）"
+        return nil, "key too short (at least 8 characters)"
     end
     M.key = tostring(key)
     if not M.sid then
@@ -573,34 +573,34 @@ end
 
 function M.verify(sender, msg)
     if not M.hasKey() then return true end
-    if type(msg) ~= "table" then return false, "消息格式非法" end
+    if type(msg) ~= "table" then return false, "invalid message format" end
     if not (msg.sid and msg.seq and msg.ts and msg.sig) then
         M.stats.unsigned = M.stats.unsigned + 1
-        M.lastBad = string.format("#%s 发来未签名的消息（type=%s）", tostring(sender), tostring(msg.t))
-        return false, "未签名"
+        M.lastBad = string.format("#%s sent unsigned message (type=%s)", tostring(sender), tostring(msg.t))
+        return false, "unsigned"
     end
 
     local now = os.epoch and os.epoch("utc") or (os.time() * 1000)
     if type(msg.ts) ~= "number" or math.abs(now - msg.ts) > M.SEQ_SKEW * 1000 then
         M.stats.stale = M.stats.stale + 1
-        M.lastBad = string.format("#%s 的消息时间戳偏差过大", tostring(sender))
-        return false, "时间戳无效"
+        M.lastBad = string.format("#%s message timestamp skew too large", tostring(sender))
+        return false, "invalid timestamp"
     end
 
     local bare = M._bare(msg)
     local want = crypto.hmacSha256(M.key, crypto.canonical(bare))
     if not want or not crypto.equal(want, tostring(msg.sig)) then
         M.stats.badSig = M.stats.badSig + 1
-        M.lastBad = string.format("#%s 的消息签名不对（type=%s）", tostring(sender), tostring(msg.t))
-        return false, "签名错误"
+        M.lastBad = string.format("#%s bad message signature (type=%s)", tostring(sender), tostring(msg.t))
+        return false, "bad signature"
     end
 
     local rec = M.seenSids[msg.sid]
     if rec and tonumber(msg.seq) and tonumber(msg.seq) <= rec.seq then
         M.stats.replay = M.stats.replay + 1
-        M.lastBad = string.format("#%s 重复/回退的消息被丢弃（seq %s ≤ %s）",
+        M.lastBad = string.format("#%s duplicate/regressed message dropped (seq %s <= %s)",
             tostring(sender), tostring(msg.seq), tostring(rec.seq))
-        return false, "重复消息"
+        return false, "duplicate message"
     end
     M.seenSids[msg.sid] = { seq = tonumber(msg.seq) or 0, at = util.mono() }
 
@@ -617,11 +617,11 @@ end
 
 function M.statsLines()
     local s = M.stats
-    local out = { string.format("签名：已签 %d　放行 %d　丢弃 %d", s.signed, s.fresh,
+    local out = { string.format("signature: signed %d  accepted %d  dropped %d", s.signed, s.fresh,
         s.badSig + s.replay + s.stale + s.unsigned) }
-    out[#out + 1] = string.format("  未签名 %d　签名错误 %d　重复 %d　时间戳无效 %d",
+    out[#out + 1] = string.format("  unsigned %d  bad signature %d  duplicate %d  stale %d",
         s.unsigned, s.badSig, s.replay, s.stale)
-    if M.lastBad then out[#out + 1] = "  最近一次拒绝：" .. M.lastBad end
+    if M.lastBad then out[#out + 1] = "  last rejection: " .. M.lastBad end
     return out
 end
 
@@ -657,7 +657,7 @@ end
 function M.open()
     local modems = M.findModems()
     if #modems == 0 then
-        return nil, "没有检测到调制解调器（modem）"
+        return nil, "no modem detected"
     end
 
     for _, md in ipairs(modems) do
@@ -669,7 +669,7 @@ function M.open()
 
         if err then M.lastError = tostring(err) end
     end
-    return nil, "无法打开任何调制解调器" .. (M.lastError and (": " .. M.lastError) or "")
+    return nil, "cannot open any modem" .. (M.lastError and (": " .. M.lastError) or "")
 end
 
 function M.openAll()
@@ -694,18 +694,18 @@ function M.describe(list)
     for _, md in ipairs(list or {}) do
         if md.wireless then wireless = wireless + 1 else wired = wired + 1 end
     end
-    if wired + wireless == 0 then return "无" end
-    return string.format("%d 有线 / %d 无线", wired, wireless)
+    if wired + wireless == 0 then return "none" end
+    return string.format("%d wired / %d wireless", wired, wireless)
 end
 
 function M.send(target, msg, proto)
-    if type(target) ~= "number" then return false, "目标 ID 非法" end
+    if type(target) ~= "number" then return false, "invalid target ID" end
 
-    if target <= 0 then return false, "目标不是网络节点" end
+    if target <= 0 then return false, "target is not a network node" end
     if type(msg) == "table" then M.sign(msg) end
     local ok, res = pcall(netlib.send, target, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
+    if res == false then return false, "network not open (" .. tostring(TRANSPORT) .. ")" end
     return true
 end
 
@@ -713,7 +713,7 @@ function M.broadcast(msg, proto)
     if type(msg) == "table" then M.sign(msg) end
     local ok, res = pcall(netlib.broadcast, msg, proto or util.PROTO_CTRL)
     if not ok then return false, tostring(res) end
-    if res == false then return false, "网络未打开（" .. tostring(TRANSPORT) .. "）" end
+    if res == false then return false, "network not open (" .. tostring(TRANSPORT) .. ")" end
     return true
 end
 
@@ -890,7 +890,7 @@ function M.newRegistry()
 end
 
 function M.enqueue(reg, target, name, what, data, onDone)
-    if type(data) ~= "string" or #data == 0 then return nil, "内容为空" end
+    if type(data) ~= "string" or #data == 0 then return nil, "empty content" end
     local s = M.newSender({ target = target, name = name, what = what, data = data,
         onDone = onDone })
     reg.senders[s.xid] = s
@@ -918,12 +918,12 @@ function M.waitFor(reg, xid, timeout)
         if st then
             reg.results[xid] = nil
             if st == "ok" then return true end
-            return nil, "传输失败"
+            return nil, "transfer failed"
         end
         if util.mono() > deadline then
             reg.senders[xid] = nil
             reg.results[xid] = nil
-            return nil, "传输超时"
+            return nil, "transfer timeout"
         end
         os.startTimer(0.2)
         os.pullEvent()
@@ -991,7 +991,7 @@ function M.senderPoll(s, send)
             if now - s.sentAt < M.ACK_TIMEOUT then return s.state end
             s.tries = s.tries + 1
             if s.tries > M.MAX_TRIES then
-                s.state, s.err = "fail", "分块确认超时"
+                s.state, s.err = "fail", "chunk ack timeout"
                 if s.onDone then s.onDone(s.state, s) end
                 return s.state
             end
@@ -1017,7 +1017,7 @@ function M.senderPoll(s, send)
     if now - s.sentAt > M.ACK_TIMEOUT then
         s.tries = s.tries + 1
         if s.tries > M.MAX_TRIES then
-            s.state, s.err = "fail", "结束确认超时"
+            s.state, s.err = "fail", "final ack timeout"
             if s.onDone then s.onDone(s.state, s) end
             return s.state
         end
@@ -1053,11 +1053,11 @@ end
 
 function M.senderSummary(s)
     if s.state == "ok" then
-        return string.format("%s 已送达 #%d（%d 块，%s）", s.name, s.target, s.n, util.duration((util.mono() - s.startedAt) * 1000))
+        return string.format("%s delivered to #%d (%d chunks, %s)", s.name, s.target, s.n, util.duration((util.mono() - s.startedAt) * 1000))
     elseif s.state == "fail" then
-        return string.format("%s → #%d 失败：%s", s.name, s.target, tostring(s.err))
+        return string.format("%s -> #%d failed: %s", s.name, s.target, tostring(s.err))
     end
-    return string.format("%s → #%d 传输中 %d/%d", s.name, s.target, math.min(s.next - 1, s.n), s.n)
+    return string.format("%s -> #%d transferring %d/%d", s.name, s.target, math.min(s.next - 1, s.n), s.n)
 end
 
 function M.newReceiver(xid, name, n)
@@ -1112,68 +1112,68 @@ local util = dc_require("dc.util")
 local M = {}
 
 function M.validate(def)
-    if type(def) ~= "table" then return nil, "作业必须 return 一个 table" end
-    if type(def.name) ~= "string" or def.name == "" then return nil, "缺少 name 字段" end
+    if type(def) ~= "table" then return nil, "job must return a table" end
+    if type(def.name) ~= "string" or def.name == "" then return nil, "missing name field" end
     if type(def.map) ~= "function" and type(def.cloud) ~= "table" then
-        return nil, "缺少 map 函数（或用于云端卸载的 cloud 定义）"
+        return nil, "missing map function (or cloud definition for cloud offload)"
     end
-    if def.map ~= nil and type(def.map) ~= "function" then return nil, "map 必须是函数" end
+    if def.map ~= nil and type(def.map) ~= "function" then return nil, "map must be a function" end
     if def.cloud ~= nil then
-        if type(def.cloud) ~= "table" then return nil, "cloud 必须是 table" end
-        if type(def.cloud.build) ~= "function" then return nil, "cloud.build 必须是函数" end
-        if type(def.cloud.parse) ~= "function" then return nil, "cloud.parse 必须是函数" end
+        if type(def.cloud) ~= "table" then return nil, "cloud must be a table" end
+        if type(def.cloud.build) ~= "function" then return nil, "cloud.build must be a function" end
+        if type(def.cloud.parse) ~= "function" then return nil, "cloud.parse must be a function" end
         if def.cloud.endpoint ~= nil and type(def.cloud.endpoint) ~= "string" then
-            return nil, "cloud.endpoint 必须是字符串"
+            return nil, "cloud.endpoint must be a string"
         end
     end
-    if def.split ~= nil and type(def.split) ~= "function" then return nil, "split 必须是函数" end
-    if def.reduce ~= nil and type(def.reduce) ~= "function" then return nil, "reduce 必须是函数" end
-    if def.format ~= nil and type(def.format) ~= "function" then return nil, "format 必须是函数" end
-    if def.params ~= nil and type(def.params) ~= "table" then return nil, "params 必须是数组" end
+    if def.split ~= nil and type(def.split) ~= "function" then return nil, "split must be a function" end
+    if def.reduce ~= nil and type(def.reduce) ~= "function" then return nil, "reduce must be a function" end
+    if def.format ~= nil and type(def.format) ~= "function" then return nil, "format must be a function" end
+    if def.params ~= nil and type(def.params) ~= "table" then return nil, "params must be an array" end
     return true
 end
 
 function M.buildCloudRequest(def, task, args)
     if not (def and def.cloud and def.cloud.build) then
-        return nil, "作业没有定义 cloud.build"
+        return nil, "job does not define cloud.build"
     end
     local ok, body = pcall(def.cloud.build, task, args)
     if not ok then return nil, tostring(body) end
-    if body == nil then return nil, "cloud.build 返回了 nil" end
+    if body == nil then return nil, "cloud.build returned nil" end
     return body
 end
 
 function M.parseCloudResponse(def, decoded, task, args)
     if not (def and def.cloud and def.cloud.parse) then
-        return nil, "作业没有定义 cloud.parse"
+        return nil, "job does not define cloud.parse"
     end
     local ok, data = pcall(def.cloud.parse, decoded, task, args)
     if not ok then return nil, tostring(data) end
-    if data == nil then return nil, "cloud.parse 返回了 nil" end
+    if data == nil then return nil, "cloud.parse returned nil" end
     return data
 end
 
 function M.runReduce(src, payload, args, ctx)
     if type(payload) ~= "table" or type(payload.__reduce) ~= "table" then
-        return nil, "reduce 任务负载格式不对（缺少 __reduce）"
+        return nil, "bad reduce task payload (missing __reduce)"
     end
     local env = setmetatable({}, { __index = _G })
     env.ctx = ctx
     local fn, err = util.loadChunk(src, "=dcjob", env)
-    if not fn then return nil, "作业源码编译失败: " .. tostring(err) end
+    if not fn then return nil, "job source compile failed: " .. tostring(err) end
     local ok, def = pcall(fn)
-    if not ok then return nil, "作业初始化失败: " .. tostring(def) end
+    if not ok then return nil, "job init failed: " .. tostring(def) end
     local vok, verr = M.validate(def)
     if not vok then return nil, verr end
     if type(def.reduce) ~= "function" then
-        return nil, "该作业没有 reduce，不能做两级汇总"
+        return nil, "job has no reduce, cannot do two-level reduce"
     end
 
     local rok, res = pcall(def.reduce, payload.__reduce, args)
     if not rok then return nil, tostring(res) end
-    if res == nil then return nil, "reduce 返回了 nil" end
+    if res == nil then return nil, "reduce returned nil" end
     local sok = pcall(textutils.serialize, res)
-    if not sok then return nil, "reduce 返回值无法序列化" end
+    if not sok then return nil, "reduce result is not serializable" end
     return res
 end
 
@@ -1198,7 +1198,7 @@ end
 
 function M.safeName(name)
     if type(name) ~= "string" or not name:match("^[%w_%-]+$") then
-        return nil, "作业名只能包含字母、数字、下划线和短横线"
+        return nil, "job name may only contain letters, digits, underscore and dash"
     end
     return name
 end
@@ -1218,7 +1218,7 @@ function M.list()
             out[#out + 1] = {
                 name    = name,
                 ok      = def ~= nil,
-                summary = def and (def.summary or "") or ("加载失败: " .. tostring(err)),
+                summary = def and (def.summary or "") or ("load failed: " .. tostring(err)),
                 params  = def and def.params or nil,
             }
         end
@@ -1256,9 +1256,9 @@ end
 function M.split(def, args)
     if not def.split then return { args } end
     local ok, tasks = pcall(def.split, args)
-    if not ok then return nil, "split 执行失败: " .. tostring(tasks) end
+    if not ok then return nil, "split failed: " .. tostring(tasks) end
     if type(tasks) ~= "table" or #tasks == 0 then
-        return nil, "split 必须返回非空的任务数组"
+        return nil, "split must return a non-empty task array"
     end
     return tasks
 end
@@ -1266,7 +1266,7 @@ end
 function M.reduce(def, results, args)
     if not def.reduce then return results end
     local ok, res = pcall(def.reduce, results, args)
-    if not ok then return nil, "reduce 执行失败: " .. tostring(res) end
+    if not ok then return nil, "reduce failed: " .. tostring(res) end
     return res
 end
 
@@ -1274,7 +1274,7 @@ function M.format(def, res, args)
     if def.format then
         local ok, text = pcall(def.format, res, args)
         if ok and text ~= nil then return tostring(text) end
-        if not ok then return "format 执行失败: " .. tostring(text) end
+        if not ok then return "format failed: " .. tostring(text) end
     end
     local ok, text = pcall(textutils.serialize, res)
     if ok then return text end
@@ -1285,24 +1285,24 @@ function M.runMap(src, payload, ctx)
     local env = setmetatable({}, { __index = _G })
     env.ctx = ctx
     local fn, err = util.loadChunk(src, "=dcjob", env)
-    if not fn then return nil, "作业源码编译失败: " .. tostring(err) end
+    if not fn then return nil, "job source compile failed: " .. tostring(err) end
     local ok, def = pcall(fn)
-    if not ok then return nil, "作业初始化失败: " .. tostring(def) end
+    if not ok then return nil, "job init failed: " .. tostring(def) end
     local vok, verr = M.validate(def)
     if not vok then return nil, verr end
     if type(def.map) ~= "function" then
-        return nil, "该作业没有本地 map（只能交给云端执行）"
+        return nil, "job has no local map (cloud only)"
     end
 
     local callOk, res = pcall(def.map, payload, ctx)
     if not callOk then return nil, tostring(res) end
 
     if res == nil then
-        return nil, "map 返回了 nil（要表达\"没找到\"请返回显式结构，例如 { hit = false }）"
+        return nil, "map returned nil (return an explicit structure for \"not found\", e.g. { hit = false })"
     end
 
     local sok = pcall(textutils.serialize, res)
-    if not sok then return nil, "map 返回值无法序列化（可能包含函数或协程）" end
+    if not sok then return nil, "map result is not serializable (may contain functions or coroutines)" end
     return res
 end
 
@@ -1333,9 +1333,9 @@ M.DEFAULTS = {
     rebootAfter  = 0,
 }
 M.CFG_META = {
-    maxRestarts  = "异常后最多自动重启次数",
-    restartDelay = "自动重启间隔（秒）",
-    rebootAfter  = "失联多久重启电脑（0=关）",
+    maxRestarts  = "max auto restarts after error",
+    restartDelay = "auto restart interval (s)",
+    rebootAfter  = "reboot after master lost (s, 0=off)",
 }
 
 local function runOnce(opts)
@@ -1345,14 +1345,14 @@ local function runOnce(opts)
     local function fileLog(text)
         util.appendLog(LOG, util.logLine(text))
     end
-    fileLog("节点启动 v" .. util.VERSION)
+    fileLog("Worker starting v" .. util.VERSION)
 
     local modems, failedModems = net.openAll()
     if #modems == 0 then
-        printError("[dcnet] 没有检测到调制解调器（modem）")
-        print("[dcnet] 请在有线调制解调器上接好网络线缆，并用 peripheral.getNames() 确认。")
-        fileLog("没有检测到调制解调器")
-        return false, "没有检测到调制解调器"
+        printError("[dcnet] No modem detected")
+        print("[dcnet] Attach a network cable to a wired modem and check peripheral.getNames().")
+        fileLog("no modem detected")
+        return false, "no modem detected"
     end
 
     local ui
@@ -1361,8 +1361,8 @@ local function runOnce(opts)
     else
         ui = console.new({ title = "dcnet worker", hasPrompt = false })
     end
-    ui:log(string.format("dcnet 运算节点 v%s", util.VERSION), col("lime", 32))
-    ui:log(string.format("网络：已打开 %s（%s）  本机 ID #%d",
+    ui:log(string.format("dcnet worker v%s", util.VERSION), col("lime", 32))
+    ui:log(string.format("Network: opened %s (%s)  ID #%d",
         net.describe(modems),
         (function()
             local t = {}
@@ -1371,7 +1371,7 @@ local function runOnce(opts)
         end)(),
         os.getComputerID()))
     for _, e in ipairs(failedModems or {}) do
-        ui:log("  打开 modem 失败：" .. e, col("orange", 2))
+        ui:log("  Failed to open modem: " .. e, col("orange", 2))
     end
 
     local S = {
@@ -1416,26 +1416,26 @@ local function runOnce(opts)
     end
 
     if not S.master then
-        ui:log("正在寻找主控…")
+        ui:log("Looking for master...")
         if not discover() then
-            ui:log("没有找到主控。", col("red", 16384))
-            ui:log("请确认：① 主控程序已在同一条有线网络上运行；② 网络线缆接好。")
-            ui:log("也可以用 worker <主控ID> 直接指定。")
-            fileLog("找不到主控")
-            return false, "找不到主控"
+            ui:log("No master found.", col("red", 16384))
+            ui:log("Check that: 1) master runs on the same wired network; 2) cables are connected.")
+            ui:log("You can also pass worker <masterID> explicitly.")
+            fileLog("master not found")
+            return false, "master not found"
         end
     end
-    ui:log("已找到主控 #" .. tostring(S.master))
-    fileLog("已找到主控 #" .. tostring(S.master))
+    ui:log("Found master #" .. tostring(S.master))
+    fileLog("Found master #" .. tostring(S.master))
     hello()
 
     local function statusText()
-        local st = ({ connecting = "握手", idle = "空闲", busy = "运算" })[S.state] or S.state
+        local st = ({ connecting = "handshake", idle = "idle", busy = "computing" })[S.state] or S.state
         local cur = ""
         if S.state == "busy" then
             cur = string.format("  %s %d%%", util.trunc(S.curLabel, 18), math.floor((S.progress or 0) * 100))
         end
-        return string.format("节点 #%d %s | 主控 #%s | %s%s | 完成 %d 失败 %d",
+        return string.format("Worker #%d %s | Master #%s | %s%s | done %d failed %d",
             S.id, util.trunc(S.name, 10), tostring(S.master or "?"), st, cur, S.done, S.fail)
     end
 
@@ -1468,7 +1468,7 @@ local function runOnce(opts)
                 return state.poolGet(name)
             end
         end
-        return nil, "等待负载超时"
+        return nil, "timed out waiting for payload"
     end
 
     local function runTask(msg)
@@ -1480,9 +1480,9 @@ local function runOnce(opts)
                 S.curLabel = nil
                 net.send(S.master, proto.msg(proto.RESULT, {
                     job = msg.job, task = msg.task, ok = false,
-                    err = "取任务负载失败: " .. tostring(ferr), ms = 0,
+                    err = "task payload fetch failed: " .. tostring(ferr), ms = 0,
                 }), util.PROTO_CTRL)
-                ui:log(string.format("任务 %d.%d 取负载失败：%s",
+                ui:log(string.format("Task %d.%d payload fetch failed: %s",
                     msg.job or 0, msg.task or 0, tostring(ferr)), col("red", 16384))
                 return
             end
@@ -1501,9 +1501,9 @@ local function runOnce(opts)
             S.curLabel = nil
             net.send(S.master, proto.msg(proto.RESULT, {
                 job = msg.job, task = msg.task, ok = false,
-                err = "作业源码校验失败（哈希不符）", ms = 0,
+                err = "job source verification failed (hash mismatch)", ms = 0,
             }), util.PROTO_CTRL)
-            ui:log(string.format("任务 %d.%d 的源码哈希不符，拒绝执行",
+            ui:log(string.format("Task %d.%d hash mismatch, refusing to run",
                 msg.job or 0, msg.task or 0), col("red", 16384))
             S.cache[msg.hash] = nil
             return
@@ -1512,16 +1512,16 @@ local function runOnce(opts)
             S.state = "idle"
             net.send(S.master, proto.msg(proto.RESULT, {
                 job = msg.job, task = msg.task, ok = false,
-                err = "本地没有该作业源码（哈希 " .. tostring(msg.hash) .. "）", ms = 0,
+                err = "job source not found locally (hash " .. tostring(msg.hash) .. ")", ms = 0,
             }), util.PROTO_CTRL)
-            ui:log(string.format("任务 %d.%d 缺少作业源码", msg.job or 0, msg.task or 0), col("red", 16384))
+            ui:log(string.format("Task %d.%d missing job source", msg.job or 0, msg.task or 0), col("red", 16384))
             return
         end
         if msg.src and not S.cache[msg.hash] then
             S.cache[msg.hash] = msg.src
             S.cacheOrder[#S.cacheOrder + 1] = msg.hash
             trimCache()
-            ui:log(string.format("已接收作业源码 %s（%s）", tostring(msg.name), util.bytes(#msg.src)))
+            ui:log(string.format("Received job source %s (%s)", tostring(msg.name), util.bytes(#msg.src)))
         end
         S.have = msg.hash
 
@@ -1575,14 +1575,14 @@ local function runOnce(opts)
         S.task = nil
 
         if cur.cancelled then
-            ui:log(string.format("任务 %d.%d 已取消（%.1fs）", msg.job or 0, msg.task or 0, ms / 1000),
+            ui:log(string.format("Task %d.%d cancelled (%.1fs)", msg.job or 0, msg.task or 0, ms / 1000),
                 col("orange", 2))
         elseif res == nil and err then
             S.fail = S.fail + 1
             net.send(S.master, proto.msg(proto.RESULT, {
                 job = msg.job, task = msg.task, ok = false, err = err, ms = ms,
             }), util.PROTO_CTRL)
-            ui:log(string.format("任务 %d.%d 失败：%s", msg.job or 0, msg.task or 0, tostring(err)),
+            ui:log(string.format("Task %d.%d failed: %s", msg.job or 0, msg.task or 0, tostring(err)),
                 col("red", 16384))
         else
             S.done = S.done + 1
@@ -1600,11 +1600,11 @@ local function runOnce(opts)
                             local okPush, perr = xfer.waitFor(M0.reg, xid, 60)
                             if okPush then
                                 dataRef = name
-                                ui:log(string.format("任务 %d.%d 结果 %s，走文件通道推给主控",
+                                ui:log(string.format("Task %d.%d result %s, sent via file channel",
                                     msg.job or 0, msg.task or 0, util.bytes(#encoded)),
                                     col("lightGray", 1024))
                             else
-                                ui:log("结果推送失败，改回内联：" .. tostring(perr), col("orange", 2))
+                                ui:log("Result push failed, using inline: " .. tostring(perr), col("orange", 2))
                             end
                         end
                     end
@@ -1614,7 +1614,7 @@ local function runOnce(opts)
                 job = msg.job, task = msg.task, ok = true,
                 data = dataRef and nil or res, dataRef = dataRef, ms = ms,
             }), util.PROTO_CTRL)
-            ui:log(string.format("任务 %d.%d 完成（%s）", msg.job or 0, msg.task or 0, util.duration(ms)),
+            ui:log(string.format("Task %d.%d done (%s)", msg.job or 0, msg.task or 0, util.duration(ms)),
                 col("lime", 32))
         end
 
@@ -1629,7 +1629,7 @@ local function runOnce(opts)
             if msg and proto.valid(msg) then
                 local vok, why = net.verify(sender, msg)
                 if not vok then
-                    ui:log(string.format("丢弃 #%s 的消息：%s", tostring(sender), tostring(why)),
+                    ui:log(string.format("Dropped message from #%s: %s", tostring(sender), tostring(why)),
                         col("orange", 2))
                     S.dropped = (S.dropped or 0) + 1
                 else
@@ -1639,8 +1639,8 @@ local function runOnce(opts)
                 if msg.t == proto.WELCOME and fromMaster then
                     local vok, verr = proto.compatible(msg)
                     if not vok then
-                        ui:log("主控协议版本不兼容：" .. tostring(verr), col("red", 16384))
-                        ui:log("请把本节点与主控升级到同一版本后重试。", col("red", 16384))
+                        ui:log("Master protocol version incompatible: " .. tostring(verr), col("red", 16384))
+                        ui:log("Upgrade worker and master to the same version.", col("red", 16384))
                         S.running = false
                         return
                     end
@@ -1656,7 +1656,7 @@ local function runOnce(opts)
                     end
                     if S.state == "connecting" then
                         S.state = "idle"
-                        ui:log("已在主控登记，等待任务。", col("lime", 32))
+                        ui:log("Registered with master, waiting for tasks.", col("lime", 32))
                         refresh()
                     end
 
@@ -1679,13 +1679,13 @@ local function runOnce(opts)
                         reason = msg.reboot and "reboot" or "halt",
                     }), util.PROTO_CTRL)
                     if msg.reboot then
-                        ui:log("收到主控的重启指令，正在重启电脑…", col("orange", 2))
-                        ui:log("（重启后由 /startup.lua 自动拉起新版本的 worker.lua）",
+                        ui:log("Reboot command from master, rebooting...", col("orange", 2))
+                        ui:log("(/startup.lua starts the new worker.lua on reboot)",
                             col("lightGray", 1024))
                         os.sleep(0.6)
                         os.reboot()
                     end
-                    ui:log("收到主控的 halt 指令，节点退出。", col("orange", 2))
+                    ui:log("Halt command from master, worker exiting.", col("orange", 2))
                     return
 
                 elseif msg.t == proto.PING and fromMaster then
@@ -1697,7 +1697,7 @@ local function runOnce(opts)
                     if who and who ~= S.master then
                         S.master = who
                         S.lastMasterMsg = util.now()
-                        ui:log("发现主控 #" .. tostring(who) .. "，重新登记…", col("lime", 32))
+                        ui:log("Found master #" .. tostring(who) .. ", re-registering...", col("lime", 32))
                         hello()
                     end
                 end
@@ -1752,20 +1752,20 @@ local function runOnce(opts)
                                         util.PROTO_PUSH)
                                     os.queueEvent("dcpool", name)
                                 else
-                                    ui:log("负载写入失败：" .. tostring(err), col("red", 16384))
+                                    ui:log("Payload write failed: " .. tostring(err), col("red", 16384))
                                 end
                             elseif name == "worker.lua" and #value <= 512 * 1024 then
                                 local ok, err = util.writeFile(util.WORKER_FILE, value)
                                 if ok then
                                     net.send(sender, proto.msg(proto.PUTOK, { xid = msg.xid }),
                                         util.PROTO_PUSH)
-                                    ui:log(string.format("已收到新版本（%s），用主控的 reboot 指令重启后生效",
+                                    ui:log(string.format("New version received (%s); reboot to apply",
                                         util.bytes(#value)), col("lime", 32))
                                 else
-                                    ui:log("写入失败：" .. tostring(err), col("red", 16384))
+                                    ui:log("Write failed: " .. tostring(err), col("red", 16384))
                                 end
                             else
-                                ui:log("拒绝写入未知文件：" .. name, col("red", 16384))
+                                ui:log("Refusing unknown file: " .. name, col("red", 16384))
                             end
 
                         elseif xfer.recvExpired(r) then
@@ -1793,10 +1793,10 @@ local function runOnce(opts)
             local reHello = (S.cfg.reHelloAfter or 8) * 1000
             local reDiscover = (S.cfg.rediscoverAfter or 25) * 1000
             if silent > reDiscover then
-                ui:log("与主控失联，重新搜索…", col("orange", 2))
+                ui:log("Lost master, searching again...", col("orange", 2))
                 S.master = nil
                 if discover() then
-                    ui:log("重新找到主控 #" .. tostring(S.master))
+                    ui:log("Master found again #" .. tostring(S.master))
                     hello()
                     S.lastMasterMsg = util.now()
                 else
@@ -1811,9 +1811,9 @@ local function runOnce(opts)
             local rebootAfter = tonumber(opts.rebootAfter) or 0
             if rebootAfter > 0 and S.master == nil
                 and (nowMs - (S.lastMasterMsg or nowMs)) > rebootAfter * 1000 then
-                ui:log(string.format("已经 %d 秒找不到主控，按看门狗设置重启电脑…", rebootAfter),
+                ui:log(string.format("No master for %d s, rebooting per watchdog...", rebootAfter),
                     col("orange", 2))
-                fileLog("看门狗：联系不上主控，重启电脑")
+                fileLog("watchdog: master unreachable, rebooting")
                 sleep(0.5)
                 os.reboot()
             end
@@ -1832,29 +1832,29 @@ local function runOnce(opts)
     end
 
     refresh()
-    ui:log(string.format("节点名：%s（用 label set <名字> 可以改名）", S.name))
+    ui:log(string.format("Worker name: %s (use label set <name> to rename)", S.name))
 
     local savedKey = rawget(_G, "DCNET_KEY") or settings.get("dcnet.key")
     if savedKey and savedKey ~= "" then
         local kok, kerr = net.setKey(savedKey)
         if kok then
-            ui:log("消息签名已启用（密钥指纹 " .. tostring(net.fingerprint()) .. "）",
+            ui:log("Message signing enabled (key fingerprint " .. tostring(net.fingerprint()) .. ")",
                 col("lime", 32))
         else
-            ui:log("启用消息签名失败：" .. tostring(kerr), col("orange", 2))
+            ui:log("Failed to enable message signing: " .. tostring(kerr), col("orange", 2))
         end
     end
-    ui:log("按 Ctrl+T 可以终止节点。")
+    ui:log("Press Ctrl+T to stop the worker.")
 
     local ok, err = pcall(parallel.waitForAny, netLoop, workLoop, beatLoop, pushLoop)
     if not opts.headless then term.redirect(term.native()) end
     if not ok then
-        printError("[dcnet] 节点异常终止: " .. tostring(err))
-        fileLog("节点异常终止：" .. tostring(err))
+        printError("[dcnet] Worker crashed: " .. tostring(err))
+        fileLog("worker crashed: " .. tostring(err))
         return false, tostring(err)
     end
-    print("[dcnet] 节点已停止。")
-    fileLog("节点正常停止")
+    print("[dcnet] Worker stopped.")
+    fileLog("worker stopped normally")
     return true
 end
 
@@ -1874,14 +1874,14 @@ function M.run(opts)
 
         restarts = restarts + 1
         util.appendLog(util.ROOT .. "/logs/node-" .. os.getComputerID() .. ".log",
-            util.logLine(string.format("第 %d 次异常：%s", restarts, tostring(err))))
+            util.logLine(string.format("Restart %d after error: %s", restarts, tostring(err))))
 
         if restarts > maxRestarts then
-            printError(string.format("[dcnet] 节点连续异常 %d 次，停止自动重启：%s",
+            printError(string.format("[dcnet] Worker failed %d times in a row, no auto-restart: %s",
                 restarts, tostring(err)))
             return false, err
         end
-        print(string.format("[dcnet] 节点异常（%s），%d 秒后自动重启（第 %d/%d 次）",
+        print(string.format("[dcnet] Worker error (%s), auto-restart in %d s (%d/%d)",
             tostring(err), delay, restarts, maxRestarts))
         sleep(delay)
     end
@@ -1935,7 +1935,7 @@ local K = {
 }
 
 function M.sha256bin(msg)
-    if not M.available then return nil, "本机没有 bit32，无法计算哈希" end
+    if not M.available then return nil, "no bit32, cannot compute hash" end
     msg = tostring(msg or "")
     local h = {
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -2005,12 +2005,12 @@ function M.sha256(msg)
 end
 
 function M.hmacSha256bin(key, msg)
-    if not M.available then return nil, "本机没有 bit32，无法计算 HMAC" end
+    if not M.available then return nil, "no bit32, cannot compute HMAC" end
     key = tostring(key or "")
     msg = tostring(msg or "")
     if #key > 64 then
         local k = M.sha256bin(key)
-        if not k then return nil, "密钥哈希失败" end
+        if not k then return nil, "key hash failed" end
         key = k
     end
     key = key .. string.rep("\0", 64 - #key)
@@ -2021,7 +2021,7 @@ function M.hmacSha256bin(key, msg)
         opad[i] = string.char(B.bxor(b, 0x5c))
     end
     local inner = M.sha256bin(table.concat(ipad) .. msg)
-    if not inner then return nil, "内部哈希失败" end
+    if not inner then return nil, "inner hash failed" end
     return M.sha256bin(table.concat(opad) .. inner)
 end
 
@@ -2097,7 +2097,7 @@ function M.selftest()
     expect("sha256(\"abc\")",
         M.sha256("abc"),
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-    expect("sha256(长串)",
+    expect("sha256(long string)",
         M.sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
         "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
 
@@ -2174,13 +2174,13 @@ function M.hasSnapshot()
 end
 
 function M.restore(sched, jobsModule)
-    if not util.exists(M.SNAP) then return 0, "没有快照" end
+    if not util.exists(M.SNAP) then return 0, "no snapshot" end
     local raw, err = util.readFile(M.SNAP)
     if not raw then return 0, err end
 
     local ok, snap = pcall(textutils.unserialize, raw)
     if not ok or type(snap) ~= "table" or snap.version ~= M.SNAP_VERSION then
-        return 0, "快照格式不认识（版本不符或文件损坏）"
+        return 0, "unrecognized snapshot format (version mismatch or corrupt file)"
     end
 
     local restored, skipped = 0, {}
@@ -2189,7 +2189,7 @@ function M.restore(sched, jobsModule)
         if type(sj) == "table" then
             local def, derr = jobsModule.loadSource(sj.source, "@restore-" .. tostring(id))
             if not def then
-                skipped[#skipped + 1] = string.format("#%d %s（源码无法装载：%s）",
+                skipped[#skipped + 1] = string.format("#%d %s (cannot load source: %s)",
                     id, tostring(sj.name), tostring(derr))
             else
                 def.hash = sj.hash or def.hash
@@ -2340,18 +2340,18 @@ end
 function M.poolPut(name, value)
     M.ensurePool()
     local ok, data = pcall(textutils.serialize, value)
-    if not ok then return nil, "序列化失败: " .. tostring(data) end
+    if not ok then return nil, "serialization failed: " .. tostring(data) end
     local wrote, err = util.writeFile(M.poolPath(name), data)
     if not wrote then return nil, err end
     return name, #data
 end
 
 function M.poolGet(name, keep)
-    if not M.validPoolName(name) then return nil, "非法池子文件名" end
+    if not M.validPoolName(name) then return nil, "invalid pool file name" end
     local raw = util.readFile(M.poolPath(name))
-    if not raw then return nil, "池子里没有 " .. tostring(name) end
+    if not raw then return nil, "not in pool: " .. tostring(name) end
     local ok, value = pcall(textutils.unserialize, raw)
-    if not ok or value == nil then return nil, "池子文件解析失败: " .. tostring(name) end
+    if not ok or value == nil then return nil, "cannot parse pool file: " .. tostring(name) end
     if not keep and fs.exists(M.poolPath(name)) then fs.delete(M.poolPath(name)) end
     return value
 end
@@ -2432,20 +2432,20 @@ if not _G.dc_require then
     _G.dc_require = function(name)
         if cache[name] then return cache[name] end
         local short = tostring(name):match("^dc%.(.+)$")
-        if not short then error("模块名非法: " .. tostring(name), 0) end
+        if not short then error("invalid module name: " .. tostring(name), 0) end
         local tried = {}
         for _, pat in ipairs(paths) do
             local path = pat:format(short)
             tried[#tried + 1] = path
             if fs.exists(path) and not fs.isDir(path) then
                 local fn, err = loadfile(path)
-                if not fn then error("加载模块 " .. name .. " 失败: " .. tostring(err), 0) end
+                if not fn then error("failed to load module " .. name .. ": " .. tostring(err), 0) end
                 local mod = fn()
                 cache[name] = mod
                 return mod
             end
         end
-        error("找不到模块 " .. name .. "（已尝试: " .. table.concat(tried, ", ") .. "）", 0)
+        error("module not found: " .. name .. " (tried: " .. table.concat(tried, ", ") .. ")", 0)
     end
 end
 
@@ -2476,7 +2476,7 @@ end
 
 local ok = worker.run(opts)
 if not ok then
-    printError("[dcnet] 节点启动失败。")
+    printError("[dcnet] worker failed to start.")
     return 1
 end
 return 0

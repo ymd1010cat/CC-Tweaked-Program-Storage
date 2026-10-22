@@ -38,8 +38,8 @@ function Sched:log(text, colour)
 end
 
 local STATE_TEXT = {
-    queued = "排队", running = "执行中", done = "完成",
-    failed = "失败", cancelled = "取消",
+    queued = "queued", running = "running", done = "done",
+    failed = "failed", cancelled = "cancelled",
 }
 
 --- 调度器的可调项与默认值（主控会先用 settings 里的持久化值覆盖，再用命令行覆盖）
@@ -77,36 +77,36 @@ M.DEFAULTS = {
 }
 
 M.CFG_META = {
-    workerTimeout   = "节点失联判定（秒）",
-    taskTimeout     = "任务初始超时（秒）",
-    taskTimeoutMin  = "自适应超时下限（秒）",
-    taskTimeoutMax  = "自适应超时上限（秒）",
-    adaptiveTimeout = "按历史耗时自适应超时",
-    maxTries        = "单任务最多派发次数",
-    pollInterval    = "节点空闲轮询间隔（秒）",
-    maxParallel     = "同时执行的作业数",
-    redundancy      = "抢尾冗余派发阈值（0=关）",
-    verbose         = "打印每次任务派发",
-    snapshot        = "把未完成作业写快照（断点续算）",
-    snapshotInterval = "兜底快照间隔（秒）",
-    autoResume      = "启动时自动接上未完成作业",
-    cache           = "使用结果缓存",
-    cloud           = "启用云端卸载（HTTP 计算服务）",
-    cloudFirst      = "优先用云端（关闭=本机空闲时不用云端）",
-    cloudChunk      = "云端请求超过多少字节就分块上传",
-    twoLevelReduce  = "结果多时并行 reduce（两级汇总）",
-    reduceThreshold = "超过多少条结果启用两级汇总",
-    reduceGroupSize = "每个 reduce 任务处理多少条结果",
-    standby         = "本机作为待命主控启动",
-    beatInterval    = "在岗主控心跳间隔（秒）",
-    takeoverAfter   = "收不到心跳多久后接管（秒）",
-    reHelloAfter    = "节点重发 hello 的静默阈值（秒）",
-    rediscoverAfter = "节点重新搜索主控的静默阈值（秒）",
-    monitor         = "大屏显示器名（空=自动找）",
-    monitorScale    = "大屏字号缩放",
-    netScreen       = "向网络屏幕推送面板（屏幕节点）",
-    fileChannel     = "大负载走文件通道",
-    inlineLimit     = "超过多少字节改走文件通道",
+    workerTimeout   = "worker offline timeout (s)",
+    taskTimeout     = "initial task timeout (s)",
+    taskTimeoutMin  = "adaptive timeout min (s)",
+    taskTimeoutMax  = "adaptive timeout max (s)",
+    adaptiveTimeout = "adaptive timeout from task history",
+    maxTries        = "max dispatches per task",
+    pollInterval    = "idle worker poll interval (s)",
+    maxParallel     = "parallel jobs",
+    redundancy      = "straggler redundancy threshold (0=off)",
+    verbose         = "log every task dispatch",
+    snapshot        = "snapshot unfinished jobs",
+    snapshotInterval = "fallback snapshot interval (s)",
+    autoResume      = "auto resume unfinished jobs on start",
+    cache           = "use result cache",
+    cloud           = "enable cloud offload (HTTP compute)",
+    cloudFirst      = "prefer cloud (off=only when busy)",
+    cloudChunk      = "cloud request chunk size (bytes)",
+    twoLevelReduce  = "parallel reduce when many results",
+    reduceThreshold = "results needed for two-level reduce",
+    reduceGroupSize = "results per reduce task",
+    standby         = "start as standby master",
+    beatInterval    = "serving master heartbeat (s)",
+    takeoverAfter   = "takeover after missed heartbeats (s)",
+    reHelloAfter    = "worker re-hello silence (s)",
+    rediscoverAfter = "worker rediscover silence (s)",
+    monitor         = "monitor name (empty=auto)",
+    monitorScale    = "monitor text scale",
+    netScreen       = "push panel to network screens",
+    fileChannel     = "large payloads via file channel",
+    inlineLimit     = "file channel threshold (bytes)",
 }
 
 --- opts: { log = function(text, colour), onFinished = function(job), cfg = {...} }
@@ -135,7 +135,7 @@ end
 
 --- 保存快照（断点续算）
 function Sched:saveSnapshot()
-    if not self.cfg.snapshot then return false, "快照已关闭" end
+    if not self.cfg.snapshot then return false, "snapshot disabled" end
     local ok, err = state.snapshot(self)
     if ok then
         self.dirty, self.lastSnap = false, util.mono()
@@ -171,14 +171,14 @@ function Sched:topLines(limit)
         return a.id < b.id
     end)
 
-    local out = { string.format("%-7s %-12s %8s %8s %10s", "节点", "名称", "累计完成", "累计失败", "最近在线") }
+    local out = { string.format("%-7s %-12s %8s %8s %10s", "worker", "name", "done", "failed", "last seen") }
     for i = 1, math.min(#rows, limit or 10) do
         local r = rows[i]
         out[#out + 1] = string.format("%-7s %-12s %8d %8d %10s", "#" .. r.id,
             util.trunc(r.name or "-", 12), r.done, r.fail,
-            r.lastSeen and util.duration(util.now() - r.lastSeen) .. "前" or "-")
+            r.lastSeen and util.duration(util.now() - r.lastSeen) .. " ago" or "-")
     end
-    if #rows == 0 then out[#out + 1] = "（还没有节点贡献记录）" end
+    if #rows == 0 then out[#out + 1] = "(no worker contribution records)" end
     return out
 end
 
@@ -186,7 +186,7 @@ end
 function Sched:restore()
     local n, err, skipped = state.restore(self, jobs)
     for _, s in ipairs(skipped or {}) do
-        self:log("  无法恢复 " .. s, colour("red", 16384))
+        self:log("  cannot restore " .. s, colour("red", 16384))
     end
     if n > 0 then self:pump() end
     return n, err
@@ -194,11 +194,11 @@ end
 
 --- 修改运行时配置（用于主控的 set / limit 指令）
 function Sched:setCfg(key, value)
-    if self.cfg[key] == nil then return nil, "未知配置项: " .. tostring(key) end
+    if self.cfg[key] == nil then return nil, "unknown config: " .. tostring(key) end
     local old = self.cfg[key]
     if type(old) == "number" then
         local n = tonumber(value)
-        if not n then return nil, "需要数字" end
+        if not n then return nil, "number required" end
         self.cfg[key] = n
     elseif type(old) == "boolean" then
         if value == true or value == "true" or value == "on" or value == "1" then
@@ -206,7 +206,7 @@ function Sched:setCfg(key, value)
         elseif value == false or value == "false" or value == "off" or value == "0" then
             self.cfg[key] = false
         else
-            return nil, "需要 true/false"
+            return nil, "expected true/false"
         end
     else
         self.cfg[key] = tostring(value)
@@ -253,7 +253,7 @@ end
 function Sched:workerLines()
     local out = {
         string.format("%-7s %-12s %-6s %6s %6s %9s %8s  %s",
-            "节点", "名称", "状态", "完成", "失败", "累计耗时", "均速", "当前"),
+            "worker", "name", "state", "done", "failed", "elapsed", "avg/s", "current"),
     }
     for _, w in ipairs(self:workerList()) do
         local speed = "-"
@@ -264,16 +264,16 @@ function Sched:workerLines()
         if w.state == "busy" and w.job and w.task then
             cur = string.format("#%d.%d %d%%", w.job, w.task, math.floor((w.progress or 0) * 100))
         elseif w.state == "offline" then
-            cur = "离线 " .. util.duration(util.now() - (w.lastSeen or 0))
+            cur = "offline " .. util.duration(util.now() - (w.lastSeen or 0))
         end
         out[#out + 1] = string.format("%-7s %-12s %-6s %6d %6d %9s %8s  %s",
-            w.virtual and "云端" or ("#" .. w.id),
+            w.virtual and "cloud" or ("#" .. w.id),
             util.trunc(w.name or "-", 12),
-            w.virtual and "云端" or (w.state == "busy" and "忙碌" or (w.state == "offline" and "离线" or "空闲")),
+            w.virtual and "cloud" or (w.state == "busy" and "busy" or (w.state == "offline" and "offline" or "idle")),
             w.done, w.fail,
             util.duration(w.totalMs), speed, cur)
     end
-    if #out == 1 then out[#out + 1] = "（还没有节点连接）" end
+    if #out == 1 then out[#out + 1] = "(no workers connected)" end
     return out
 end
 
@@ -323,7 +323,7 @@ function Sched:addJob(def, tokens, opts)
             job.counts.done, job.counts.pending = job.total, 0
             self.jobs[id] = job
             self.jobOrder[#self.jobOrder + 1] = id
-            self:log(string.format("作业 #%d %s 命中结果缓存（%s 前算过），直接出结果",
+            self:log(string.format("Job #%d %s result cache hit (computed %s ago), returning result",
                 id, job.name, util.duration(util.now() - (hit.at or util.now()))), colour("lime", 32))
             for _, line in ipairs(util.split(job.resultText, "\n")) do
                 self:log("  " .. line, colour("white", 1))
@@ -336,10 +336,10 @@ function Sched:addJob(def, tokens, opts)
     self.jobs[id] = job
     self.jobOrder[#self.jobOrder + 1] = id
     self.dirty = true
-    self:log(string.format("作业 #%d %s 已提交：%d 个任务  %s",
+    self:log(string.format("Job #%d %s submitted: %d tasks  %s",
         id, job.name, job.total, jobs.paramHelp(def)), colour("lime", 32))
     if #(job.source or "") > 8000 then
-        self:log(string.format("  注意：作业源码 %s 偏大，每个任务下发时会附带源码，建议拆小",
+        self:log(string.format("  note: job source %s is large; sent with every task, consider splitting",
             util.bytes(#job.source)), colour("orange", 2))
     end
     self:pump()
@@ -360,7 +360,7 @@ function Sched:pump()
             job.startedAt = util.mono()
             self.running[id] = true
             running = running + 1
-            self:log(string.format("作业 #%d %s 开始执行（%d 个任务，优先级 %d）",
+            self:log(string.format("Job #%d %s started (%d tasks, priority %d)",
                 id, job.name, job.total, job.priority or 0), colour("lightBlue", 512))
             if running >= limit then return end
         end
@@ -496,12 +496,12 @@ function Sched:dispatch(job, tid, workerId, isDup)
                 t.payloadBytes = #encoded
                 useFile = true
                 if self.cfg.verbose then
-                    self:log(string.format("  任务 %d.%d 负载 %s，改走文件通道（%s）",
+                    self:log(string.format("  task %d.%d payload %s via file channel (%s)",
                         job.id, tid, util.bytes(size), name), colour("lightGray", 1024))
                 end
             end
             if not wrote then
-                self:log("负载落盘失败，退回内联：" .. tostring(wsize), colour("orange", 2))
+                self:log("payload write failed, inline fallback: " .. tostring(wsize), colour("orange", 2))
             end
         end
     end
@@ -524,8 +524,8 @@ function Sched:dispatch(job, tid, workerId, isDup)
     net.send(workerId, msg, util.PROTO_CTRL)
     self.dirty = true
     if self.cfg.verbose or t.tries > 1 or isDup then
-        self:log(string.format("  → 任务 %d.%d 派发给 #%d（第 %d 次%s）",
-            job.id, tid, workerId, t.tries, isDup and "，冗余" or ""), colour("yellow", 256))
+        self:log(string.format("  -> task %d.%d dispatched to #%d (try %d%s)",
+            job.id, tid, workerId, t.tries, isDup and ", redundant" or ""), colour("yellow", 256))
     end
     return msg
 end
@@ -608,14 +608,14 @@ function Sched:requeue(jobId, tid, why)
         self.stats.failed = self.stats.failed + 1
         local w = oldWorker and self.workers[oldWorker]
         if w then w.fail = w.fail + 1 end
-        self:log(string.format("  x 任务 %d.%d 失败：%s（已派发 %d 次）",
+        self:log(string.format("  x task %d.%d failed: %s (dispatched %d times)",
             jobId, tid, why, t.tries), colour("red", 16384))
     else
         t.state, t.worker = "pending", nil
         job.queue[#job.queue + 1] = tid
         job.counts.pending = job.counts.pending + 1
         self.stats.retries = self.stats.retries + 1
-        self:log(string.format("  ~ 任务 %d.%d 重新入队：%s", jobId, tid, why),
+        self:log(string.format("  ~ task %d.%d requeued: %s", jobId, tid, why),
             colour("orange", 2))
     end
     self.dirty = true
@@ -671,7 +671,7 @@ function Sched:maybeTwoLevel(job)
         job.order[i] = i
         job.queue[i] = i
     end
-    self:log(string.format("作业 #%d 进入两级汇总：%d 条结果分成 %d 组并行 reduce",
+    self:log(string.format("Job #%d two-level reduce: %d results split into %d groups",
         job.id, #results, #groups), colour("lightBlue", 512))
     self.dirty = true
     return true
@@ -684,7 +684,7 @@ function Sched:finalize(job)
 
     if job.counts.done == 0 then
         job.state = "failed"
-        job.error = "所有任务都失败了"
+        job.error = "all tasks failed"
     else
         local results = {}
         for _, tid in ipairs(job.order) do
@@ -707,7 +707,7 @@ function Sched:finalize(job)
         end
     end
 
-    self:log(string.format("作业 #%d %s 结束：成功 %d / 失败 %d，用时 %s",
+    self:log(string.format("Job #%d %s finished: done %d / failed %d, elapsed %s",
         job.id, job.name, job.counts.done, job.counts.failed, util.duration(job.durationMs)),
         job.state == "done" and colour("lime", 32) or colour("red", 16384))
     if job.state == "done" and job.resultText then
@@ -730,9 +730,9 @@ end
 
 function Sched:cancel(jobId)
     local job = self.jobs[jobId]
-    if not job then return nil, "没有这个作业" end
+    if not job then return nil, "no such job" end
     if job.state ~= "queued" and job.state ~= "running" then
-        return nil, "作业已经结束"
+        return nil, "job already finished"
     end
     job.state = "cancelled"
     job.finishedAt = util.now()
@@ -745,11 +745,11 @@ function Sched:cancel(jobId)
             if w then w.task, w.job, w.state = nil, nil, "idle" end
         end
         if t.state ~= "done" then
-            t.state, t.err = "failed", "已取消"
+            t.state, t.err = "failed", "cancelled"
         end
     end
     job.counts = { pending = 0, running = 0, done = 0, failed = #job.order }
-    self:log(string.format("作业 #%d %s 已取消", jobId, job.name), colour("orange", 2))
+    self:log(string.format("Job #%d %s cancelled", jobId, job.name), colour("orange", 2))
     self:pump()
     return true
 end
@@ -772,9 +772,9 @@ function Sched:onMessage(sender, msg)
     if msg.t == proto.HELLO then
         local vok, verr = proto.compatible(msg)
         if not vok then
-            self:log(string.format("节点 #%d 协议版本不兼容：%s", sender, tostring(verr)),
+            self:log(string.format("Worker #%d protocol version incompatible: %s", sender, tostring(verr)),
                 colour("red", 16384))
-            self:log("  请把该节点升级到与主控同一版本（主控执行 push，或重新拷贝 worker.lua）",
+            self:log("  upgrade this worker to the master version (run push on the master, or copy worker.lua again)",
                 colour("red", 16384))
             return true
         end
@@ -783,9 +783,9 @@ function Sched:onMessage(sender, msg)
         w.wireless = msg.wireless
         w.have     = msg.have
         if w.state == "offline" then w.state = "idle" end
-        self:log(string.format("节点 #%d 已%s：%s（%s）", sender,
-            known and "重新连接" or "连接", w.name,
-            w.wireless and "无线" or "有线"), colour("lime", 32))
+        self:log(string.format("Worker #%d %s: %s (%s)", sender,
+            known and "reconnected" or "connected", w.name,
+            w.wireless and "wireless" or "wired"), colour("lime", 32))
         net.send(sender, proto.msg(proto.WELCOME, {
             master = os.getComputerID(),
             cfg = {
@@ -828,7 +828,7 @@ function Sched:onMessage(sender, msg)
 
     if msg.t == proto.BYE then
         w.state, w.task, w.job = "offline", nil, nil
-        self:log(string.format("节点 #%d 主动下线：%s", sender, tostring(msg.reason or "无")),
+        self:log(string.format("Worker #%d went offline: %s", sender, tostring(msg.reason or "none")),
             colour("orange", 2))
         return true
     end
@@ -847,7 +847,7 @@ function Sched:onResult(sender, msg)
     if msg.ok and msg.data == nil and msg.dataRef then
         local value, derr = state.poolGet(msg.dataRef)
         if value == nil then
-            msg.ok, msg.err = false, "结果文件读取失败: " .. tostring(derr)
+            msg.ok, msg.err = false, "failed to read result file: " .. tostring(derr)
         else
             msg.data = value
         end
@@ -908,23 +908,23 @@ function Sched:onResult(sender, msg)
         w.done = w.done + 1
         self.stats.done = self.stats.done + 1
         if self.cfg.verbose or job.total <= 40 then
-            self:log(string.format("  <- 任务 %d.%d 完成于 #%d（%s）",
+            self:log(string.format("  <- task %d.%d done on #%d (%s)",
                 job.id, t.id, sender, util.duration(ms)), colour("lightGray", 1024))
         end
     else
-        local why = "节点报错: " .. tostring(msg.err or "未知")
+        local why = "worker error: " .. tostring(msg.err or "unknown")
         if t.tries >= self.cfg.maxTries then
             t.state, t.err = "failed", why
             job.counts.failed = job.counts.failed + 1
             self.stats.failed = self.stats.failed + 1
             w.fail = w.fail + 1
-            self:log(string.format("  x 任务 %d.%d 失败：%s", job.id, t.id, why), colour("red", 16384))
+            self:log(string.format("  x task %d.%d failed: %s", job.id, t.id, why), colour("red", 16384))
         else
             t.state, t.worker = "pending", nil
             job.queue[#job.queue + 1] = t.id
             job.counts.pending = job.counts.pending + 1
             self.stats.retries = self.stats.retries + 1
-            self:log(string.format("  ~ 任务 %d.%d 重试：%s", job.id, t.id, why), colour("orange", 2))
+            self:log(string.format("  ~ task %d.%d retry: %s", job.id, t.id, why), colour("orange", 2))
         end
     end
 
@@ -942,13 +942,13 @@ function Sched:tick()
         if not w.virtual and w.state ~= "offline"
             and (nowMs - (w.lastSeen or 0)) > self.cfg.workerTimeout * 1000 then
             w.state = "offline"
-            self:log(string.format("节点 #%d 失去联系（>%ds）", id, self.cfg.workerTimeout),
+            self:log(string.format("Worker #%d lost contact (>%ds)", id, self.cfg.workerTimeout),
                 colour("red", 16384))
             if w.task and w.job then
                 local job = self.jobs[w.job]
                 local t = job and job.tasks[w.task]
                 if t and t.state == "running" and t.worker == id then
-                    self:requeue(w.job, w.task, "节点离线")
+                    self:requeue(w.job, w.task, "worker offline")
                 elseif t and t.dups then
                     -- 掉线的只是冗余副本，正主还在算，不用重派
                     for i, wid in ipairs(t.dups) do
@@ -964,7 +964,7 @@ function Sched:tick()
         if job.state == "running" then
             for tid, t in pairs(job.tasks) do
                 if t.state == "running" and t.deadline and mono > t.deadline then
-                    self:requeue(job.id, tid, string.format("超过 %.0fs 无进展",
+                    self:requeue(job.id, tid, string.format("no progress for %.0fs",
                         t.deadline - (t.lastProgressAt or t.startedAt or mono)))
                 end
             end
@@ -981,7 +981,7 @@ function Sched:tick()
             local ok, err = self:saveSnapshot()
             if not ok and not self.snapWarned then
                 self.snapWarned = true
-                self:log("快照写入失败：" .. tostring(err), colour("red", 16384))
+                self:log("snapshot write failed: " .. tostring(err), colour("red", 16384))
             end
         end
     end
@@ -989,17 +989,17 @@ end
 
 function Sched:setPriority(jobId, pri)
     local job = self.jobs[jobId]
-    if not job then return nil, "没有这个作业" end
+    if not job then return nil, "no such job" end
     job.priority = tonumber(pri) or 0
-    self:log(string.format("作业 #%d 优先级改为 %d", jobId, job.priority), colour("yellow", 256))
+    self:log(string.format("Job #%d priority set to %d", jobId, job.priority), colour("yellow", 256))
     return true
 end
 
 function Sched:pauseJob(jobId, on)
     local job = self.jobs[jobId]
-    if not job then return nil, "没有这个作业" end
+    if not job then return nil, "no such job" end
     job.paused = on and true or false
-    self:log(string.format("作业 #%d %s", jobId, job.paused and "已暂停派发" or "已恢复派发"),
+    self:log(string.format("Job #%d %s", jobId, job.paused and "dispatch paused" or "dispatch resumed"),
         colour("orange", 2))
     return true
 end
@@ -1019,8 +1019,8 @@ end
 function Sched:statusLine()
     local running = self:runningCount()
     local parts = {
-        string.format("主控 #%d", os.getComputerID()),
-        string.format("节点 %d/%d", self:onlineCount(), self:workerCount()),
+        string.format("master #%d", os.getComputerID()),
+        string.format("workers %d/%d", self:onlineCount(), self:workerCount()),
     }
     local queued = 0
     for _, j in pairs(self.jobs) do
@@ -1033,20 +1033,20 @@ function Sched:statusLine()
         parts[#parts + 1] = string.format("#%d %s %s %d%% %d/%d%s", job.id, job.name,
             util.bar(pct, 8), math.floor(pct * 100),
             job.counts.done + job.counts.failed, job.total,
-            job.counts.failed > 0 and (" 失败" .. job.counts.failed) or "")
+            job.counts.failed > 0 and (" failed " .. job.counts.failed) or "")
     end
     if running > 1 then
-        parts[#parts + 1] = string.format("并发 %d/%d", running, math.max(1, self.cfg.maxParallel or 1))
+        parts[#parts + 1] = string.format("parallel %d/%d", running, math.max(1, self.cfg.maxParallel or 1))
     end
     if queued > 0 then
-        parts[#parts + 1] = "队列 " .. queued
+        parts[#parts + 1] = "queue " .. queued
     elseif running == 0 then
-        parts[#parts + 1] = "空闲"
+        parts[#parts + 1] = "idle"
     end
     if self.cfg.redundancy and self.cfg.redundancy > 0 then
-        parts[#parts + 1] = "抢尾 " .. self.cfg.redundancy
+        parts[#parts + 1] = "redundant " .. self.cfg.redundancy
     end
-    if self.paused then parts[#parts + 1] = "已暂停" end
+    if self.paused then parts[#parts + 1] = "paused" end
     return table.concat(parts, " | ")
 end
 
@@ -1062,14 +1062,14 @@ function Sched:jobLines(jobId)
         if job then
             local pct = self:progress(job)
             local elapsed = job.durationMs or (util.now() - job.submittedAt)
-            out[#out + 1] = string.format("#%-3d %-12s %-6s pri%-3d %s %3d%%  任务 %d/%d 失败 %d  用时 %s%s",
+            out[#out + 1] = string.format("#%-3d %-12s %-6s pri%-3d %s %3d%%  tasks %d/%d failed %d  elapsed %s%s",
                 job.id, job.name, STATE_TEXT[job.state] or job.state,
                 job.priority or 0, util.bar(pct, 12), math.floor(pct * 100),
                 job.counts.done + job.counts.failed, job.total, job.counts.failed,
-                util.duration(elapsed), job.paused and "  [已暂停]" or "")
+                util.duration(elapsed), job.paused and "  [paused]" or "")
         end
     end
-    if #out == 0 then out[1] = "（还没有作业）" end
+    if #out == 0 then out[1] = "(no jobs)" end
     return out
 end
 
@@ -1080,7 +1080,7 @@ function Sched:failedTaskLines(jobId, limit)
     for _, tid in ipairs(job.order) do
         local t = job.tasks[tid]
         if t.state == "failed" then
-            out[#out + 1] = string.format("  任务 %d 失败：%s", tid, tostring(t.err))
+            out[#out + 1] = string.format("  task %d failed: %s", tid, tostring(t.err))
             if #out >= (limit or 5) then break end
         end
     end
