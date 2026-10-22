@@ -399,9 +399,10 @@ lang en         # 切回英文
 1. **字形介质**：把 unixshell 的字体盘（release 资产
    `unixshell-fonts-size12-two-disks.zip` 里的两张盘）插到主控电脑的磁盘驱动器上；
    模块按 `cc_fonts.marker` 自动找盘，大小 8/12/16 按优先级自动选。
-2. **客户端字体资源包**：按 [unixshell/tools/respack/README.md](../unixshell/tools/respack/README.md)
-   从你所用 CC:Tweaked jar 的 `assets/computercraft/textures/gui/term_font.png` 生成
-   `ush-cjk-font.zip`，放进 `<minecraft>/resourcepacks/` 并启用。
+2. **客户端字体资源包**：直接下载 dcnet release 里的 `ush-cjk-font.zip`（pack_format 15，
+   适用于 1.20.1；其他 Minecraft 版本可用 `--pack-format` 重新生成），或按
+   [unixshell/tools/respack/README.md](../unixshell/tools/respack/README.md) 自己生成
+   （standalone 模式不再需要 CC:Tweaked 的贴图）。放进 `<minecraft>/resourcepacks/` 并启用。
 
 - 缺任一项时：`lang zh` 仍可切换并持久化，但**文字保持英文**（不会乱码），`lang` 命令会
   提示缺字体介质；插好盘后重进主控（或重新 `lang zh`）即生效。
