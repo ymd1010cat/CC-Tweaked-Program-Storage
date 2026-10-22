@@ -3,12 +3,22 @@
 
 The emulator cannot be restyled (CraftOS-PC's font is compiled into the binary, and
 hdfont.bmp next to it is not read), so the only honest way to see the result before
-installing the pack on a server is to render it here: ASCII from the real CC:T
-texture, Chinese from the project's real glyph shards, encoded the way the runtime
-encodes it -- one terminal cell per byte 128 + mask.
+installing the pack on a server is to render it here: ASCII from the same source
+the pack uses, Chinese from the project's real glyph shards, encoded the way the
+runtime encodes it -- one terminal cell per byte 128 + mask.
+
+The default needs no CC:Tweaked texture at all, matching the default build of the
+pack:
+
+    python tools/respack/preview.py --out preview.png
+    python tools/respack/preview.py --text sample.txt --out preview.png
+
+ASCII comes from the embedded public-domain 6x9 table (font6x9.py), placed in its
+6x9 cell exactly as make_pack.py places it. To preview the old "patch the vanilla
+texture" mode -- or the term_font.png extracted from a pack you already built --
+pass the texture:
 
     python tools/respack/preview.py --texture term_font.png --out preview.png
-    python tools/respack/preview.py --texture term_font.png --text sample.txt
 
 A size 12 glyph is 12x12 pixels, which is 6x4 terminal cells; each of those cells
 holds a 2x3 block of the glyph. That is the whole scheme.
@@ -23,6 +33,14 @@ try:
 except ImportError:                                    # pragma: no cover
     sys.exit("this script needs Pillow: python -m pip install pillow")
 
+# The font table lives beside this script; make that true even when the script is
+# imported rather than run.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import font6x9                                        # noqa: E402
+
 FONT_WIDTH, FONT_HEIGHT = 6, 9
 STRIDE_X, STRIDE_Y = FONT_WIDTH + 2, FONT_HEIGHT + 2
 CELLS_W, CELLS_H = 6, 4            # a size 12 glyph, in terminal cells
@@ -32,8 +50,9 @@ SCALE = 3
 SAMPLE = (
     "ush 1.0 - \u8f93\u5165 help \u67e5\u770b\u547d\u4ee4\n"
     "admin@cc-0:/$ lang zh\n"
-    "\u8bed\u8a00\u5df2\u5207\u4e3a zh\n"
+    "\u8bed\u8a00\u5df2\u5207\u6362\u4e3a zh\n"
     "\u5df2\u63d2\u5165\u5b57\u5f62\u5e93\u4ecb\u8d28\n"
+    "Sphinx of black quartz, judge my vow! 0123456789 @#$%&*()\n"
 )
 
 
@@ -42,18 +61,29 @@ def cell_origin(n):
 
 
 class Fonts:
+    """ASCII from the embedded table (default) or from a texture, plus the shards."""
+
     def __init__(self, texture_path, fontdata):
-        self.tex = Image.open(texture_path).convert("RGBA")
-        self.px = self.tex.load()
+        self.tex = None
+        self.px = None
+        if texture_path:
+            self.tex = Image.open(texture_path).convert("RGBA")
+            self.px = self.tex.load()
         self.fontdata = fontdata
         self.index = None
         self.shards = {}
         self.cache = {}
 
     def ascii_bitmap(self, code):
-        gx, gy = cell_origin(code & 0xFF)
-        return [[self.px[gx + x, gy + y][3] > 100 for x in range(FONT_WIDTH)]
-                for y in range(FONT_HEIGHT)]
+        if self.px is not None:
+            gx, gy = cell_origin(code & 0xFF)
+            return [[self.px[gx + x, gy + y][3] > 100 for x in range(FONT_WIDTH)]
+                    for y in range(FONT_HEIGHT)]
+        rows = font6x9.GLYPHS.get(code)
+        if rows is None:
+            return [[False] * FONT_WIDTH for _ in range(FONT_HEIGHT)]
+        return [[bool(rows[y] & (0x80 >> x)) if y < len(rows) else False
+                 for x in range(FONT_WIDTH)] for y in range(FONT_HEIGHT)]
 
     def _load_index(self):
         text = open(os.path.join(self.fontdata, "shs12_index.lua"),
@@ -92,23 +122,32 @@ def cell_mask(mat, cx, cy):
     return m
 
 
+def default_fontdata():
+    return os.path.normpath(os.path.join(_HERE, os.pardir, os.pardir,
+                                         "fontdata"))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--texture", required=True,
-                    help="the vanilla term_font.png from the CC:Tweaked jar")
-    ap.add_argument("--fontdata", default=os.path.join("fontdata"),
-                    help="the generated glyph set (default: fontdata)")
+    ap.add_argument("--texture", default=None,
+                    help="optional: read ASCII from this term_font.png instead "
+                         "of the embedded public-domain table (the vanilla "
+                         "texture, or the one inside a pack you built)")
+    ap.add_argument("--fontdata", default=None,
+                    help="the generated glyph set (default: the fontdata/ "
+                         "beside this script)")
     ap.add_argument("--text", default=None,
                     help="a UTF-8 file to render (default: a built-in sample)")
     ap.add_argument("--out", default="preview.png")
     ap.add_argument("--scale", type=int, default=SCALE)
     args = ap.parse_args(argv)
 
-    if not os.path.isfile(args.texture):
+    if args.texture and not os.path.isfile(args.texture):
         return "no such texture: %s" % args.texture
-    if not os.path.isdir(args.fontdata):
+    fontdata = args.fontdata or default_fontdata()
+    if not os.path.isdir(fontdata):
         return ("no glyph set at %s (build it with: python tools/fontgen.py "
-                "--full --size 12 --out fontdata)" % args.fontdata)
+                "--full --size 12 --out fontdata)" % fontdata)
 
     text = SAMPLE
     if args.text:
@@ -118,7 +157,7 @@ def main(argv=None):
     if lines and lines[-1] == "":
         lines.pop()
 
-    fonts = Fonts(args.texture, args.fontdata)
+    fonts = Fonts(args.texture, fontdata)
     cols = max(40, max((sum(1 for c in ln if ord(c) < 128) +
                         sum(CELLS_W for c in ln if ord(c) >= 128) for ln in lines),
                        default=40))
@@ -163,7 +202,9 @@ def main(argv=None):
         img = img.resize((img.width * args.scale, img.height * args.scale),
                          Image.NEAREST)
     img.save(args.out)
-    print("wrote %s (%dx%d)" % (args.out, img.width, img.height))
+    print("wrote %s (%dx%d), ASCII from %s"
+          % (args.out, img.width, img.height,
+             args.texture or "the embedded 6x9 table"))
     return None
 
 

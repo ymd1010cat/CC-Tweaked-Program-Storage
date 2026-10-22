@@ -15,37 +15,111 @@ and so on.
 A resource pack can replace the terminal font texture, so these scripts make the
 assumption true instead of hoping.
 
-## What you need
+## Build the pack (the default: no CC:Tweaked file needed)
 
-The vanilla texture from **the same CC:Tweaked jar your server runs**:
+    python tools/respack/make_pack.py --out ush-cjk-font.zip
 
-    assets/computercraft/textures/gui/term_font.png
+That is the **standalone** mode. It synthesises the whole 256x256 terminal atlas
+from scratch:
 
-It is not bundled here: CC:Tweaked's source says "Do not distribute without
-permission", and building from your own copy keeps the pack matched to your
-version.
+| PNG bytes | what is drawn | where it comes from |
+| --- | --- | --- |
+| 0..31, 127 | blank | control bytes stay blank |
+| 32..126 | ASCII 6x9 glyphs | `font6x9.py`, public domain (below) |
+| 128..191 | the 64 2x3 sub-cell blocks | this project's own scheme |
+| 192..255 | Latin-1 6x9 glyphs | `font6x9.py`, public domain |
 
-## Build the pack
+It never opens CC:Tweaked's `term_font.png`, so **the pack it produces is
+redistributable** -- see the licence section below. The example writes the zip in
+the current directory; a build product does not belong in git, so point `--out`
+at an ignored path such as `temp/` (already in `.gitignore`) or somewhere outside
+the repository.
+
+`--pack-format N` picks the Minecraft resource pack format (default **15**, i.e.
+1.20/1.20.1; the table of formats is `PACK_FORMATS` in the script). A pack with
+the wrong number still loads, but Minecraft lists it as incompatible.
+
+## Build the old way (patches the vanilla texture)
 
     python tools/respack/make_pack.py --texture term_font.png --out ush-cjk-font.zip
 
-Add `--pack-format N` if your Minecraft version is not 1.20.1 (the table of
-formats is in the script). The script **refuses** a texture whose geometry does
-not match CC:Tweaked's, because blocks written into the wrong cells look like
-slightly-off Chinese rather than like an error.
+This is the previous behaviour, kept for people who want the pack to match their
+server's own font exactly: copy the vanilla texture, keep its ASCII and Latin-1,
+and rewrite only bytes 128..191. `term_font.png` is
+`assets/computercraft/textures/gui/term_font.png` from the same CC:Tweaked jar
+your server runs.
+
+**A pack built this way is not redistributable**: it contains CC:Tweaked's
+texture, whose source says "Do not distribute without permission". The script
+refuses a texture whose geometry is not CC:Tweaked's (256x256 with ink at byte
+65), because blocks written into the wrong cells look like slightly-off Chinese
+rather than like an error.
 
 ## See it before installing
 
-    python tools/respack/preview.py --texture term_font.png --out preview.png
+    python tools/respack/preview.py --out preview.png
 
-That renders ASCII from the real CC:T texture and Chinese from the project's real
-glyph shards, encoded exactly as the runtime encodes it. It is the only way to see
-the result on a machine whose emulator cannot be restyled.
+No texture is needed: ASCII comes from the same embedded 6x9 table and Chinese
+from the project's real glyph shards, encoded exactly as the runtime encodes it.
+Add `--texture term_font.png` to preview the old mode (or to preview the
+`term_font.png` you extracted from a pack you built), `--text sample.txt` to
+render a file, and `--scale N` to zoom.
 
 ## Install
 
 1. Put `ush-cjk-font.zip` in `<minecraft>/resourcepacks/` and enable it.
 2. If the server forces its own pack list, have the operator whitelist this pack.
+3. Build the glyph media with `tools/fontgen.py` + `tools/fontdisk.py` and insert
+   them: the pack is the font *shape* of Chinese, the glyph bitmaps are the
+   glyphs. Without the media the shell refuses `lang zh` and draws no Chinese.
+
+## Licences, part by part
+
+The generated pack is **redistributable**, because every part of it is either
+public domain or this project's own work:
+
+* **ASCII 0..127 and Latin-1 192..255** come from `font6x9.py`, a copy of
+  `6x9.bdf` from Markus Kuhn's Unicode versions of the X11 "misc-fixed" fonts
+  (the "ucs-fonts" package, <http://www.cl.cam.ac.uk/~mgk25/ucs-fonts.html>).
+  Its COPYRIGHT property reads, verbatim: **"Public domain font. Share and
+  enjoy."** The package's AUTHORS file notes that the designers of the original
+  ASCII repertoire "appear to have been lost in history" (probably MIT Project
+  Athena or DEC, early-to-mid 1980s), and its README states that contributions
+  "will remain in the public domain for everyone's free use". No conditions, no
+  attribution requirement; the credit above is a courtesy. The full reasoning for
+  choosing 6x9 over an 8x8 or 5x7 table is in the header of `font6x9.py`.
+
+* **Bytes 128..191** are the 64 possible 2x3 black/white blocks, encoded by
+  `lib/cc_chinese.lua` (this project's MIT-licensed code). They are all 64
+  patterns, not a copy of any font.
+
+* **The Chinese glyphs themselves are not in the pack.** They are
+  `unixshell/fontdata/*.lua`, bitmap renderings of **Noto Sans SC** generated by
+  `tools/fontgen.py` and carried on their own media by `tools/fontdisk.py`. Those
+  files are a derivative work of the font and are distributed under the **SIL Open
+  Font License 1.1** -- *not* the repository's own licence. The copyright notice,
+  the exact filename the glyphs were rendered from, and the full OFL text are in
+  `unixshell/THIRD_PARTY_LICENSES`. If you redistribute a pack **together with**
+  the glyph media, ship that notice with them; under OFL 1.1 the notice and
+  licence must accompany the font software, and the reserved font name must not
+  be used to promote a modified version. The pack alone embeds no Noto data.
+
+## What the default build verifies
+
+`make_pack.py` refuses to produce a pack that would install cleanly and be blank
+or wrong on screen:
+
+* every required ASCII character (A-Z, a-z, 0-9, all printable punctuation) must
+  have ink where it belongs;
+* bytes 129..191 must have ink (63 masks) and byte 128 -- mask 0, the blank half
+  of a cell -- must be empty, or every blank sub-pixel in Chinese text would show
+  a block;
+* the texture must be 256x256;
+* when `unixshell/fontdata/` is present beside the script, the glyph shards are
+  read and every one of the six-bit cell masks they use is checked against the
+  same bit order `cell_byte()` implements. The shipped set uses **all 64 masks**.
+  The check is skipped, with a note, if the glyph set is not there; the pack does
+  not depend on it.
 
 ## Geometry, for anyone changing this
 
@@ -57,8 +131,10 @@ From CC:Tweaked's renderer
     yStart = 1 + row * (FONT_HEIGHT + 2)
 
 A glyph is 6x9 pixels in an 8x11 stride with a 1 pixel inset; the byte picks its
-cell by column = byte % 16, row = byte / 16. A 2x3 block of a 6x9 glyph is exactly
-3x3 pixels, which is why the scheme works at all.
+cell by column = byte % 16, row = byte / 16. The texture is 256x256 (the glyphs
+occupy its top-left 128x175 pixels; the rest is padding implied by the renderer's
+256.0f texture width). A 2x3 block of a 6x9 glyph is exactly 3x3 pixels, which is
+why the scheme works at all.
 
 Bit order, the same in the pack and in `cell_byte()`:
 
@@ -67,10 +143,14 @@ Bit order, the same in the pack and in `cell_byte()`:
 
 ## Limits, honestly
 
-* The pack changes bytes 128..191 only; 192..255 keep their Latin-1 glyphs.
+* The pack changes bytes 128..191 and, in standalone mode, draws 192..255 itself.
+  It cannot add glyphs for bytes that the scheme does not reserve -- one byte per
+  cell is the terminal's limit.
 * A size 12 glyph is 12x12 pixels = **6x4 terminal cells**, so one character is
   six columns and four rows wide. On a 51-column screen that is eight characters
-  per line. That is a property of the terminal, not of the pack.
+  per line. That is a property of the terminal, not of the pack. ASCII stays one
+  cell wide, so mixed lines are visibly two sizes -- also a property of the
+  terminal.
 * Without the pack the shell should not claim to be in Chinese: `lang zh` already
   refuses when the glyph medium is missing, and the same reasoning applies here.
   This is a display font, so the check cannot be made from Lua -- the operator has
