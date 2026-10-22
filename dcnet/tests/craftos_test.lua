@@ -1877,6 +1877,24 @@ do
     local SCR_ID = (REAL_ID == 8) and 9 or 8
     extraRoles[SCR_ID] = "screen" .. SCR_ID
 
+    -- 黑名单持久化在 settings 里：每个场景都从干净的黑名单开始（否则上一轮 fail 的
+    -- 残留会让本轮的屏幕一开始就被拒绝）。
+    settings.set("dcnet.screenBlock", "")
+    settings.save()
+
+    local function screenBlockHas(id)
+        local v = tostring(settings.get("dcnet.screenBlock") or "")
+        for token in v:gmatch("[^,%s]+") do
+            if tonumber(token) == id then return true end
+        end
+        return false
+    end
+
+    local function screenBlockEmpty()
+        local v = tostring(settings.get("dcnet.screenBlock") or "")
+        return v:match("^%s*$") ~= nil
+    end
+
     local fake = { buf = {}, x = 1, y = 1, scale = 1 }
     function fake.getSize() return 51, 19 end
     function fake.setTextScale(s) fake.scale = s end
@@ -1929,7 +1947,27 @@ do
 
             local mark = #captured
             typeLine("mon net kick " .. SCR_ID)
-            check(waitForAfter(mark, "Net screen #" .. SCR_ID .. " kicked", 10), "mon net kick 断开指定屏幕")
+            check(waitForAfter(mark, "Net screen #" .. SCR_ID .. " kicked", 10),
+                "mon net kick 断开指定屏幕")
+            check(screenBlockHas(SCR_ID), "kick 把 ID 写进 settings（dcnet.screenBlock，持久化）")
+
+            -- 永久生效：屏幕继续心跳也不会被重新登记，屏幕端显示被屏蔽
+            check(waitBuf("Blocked by the master", 15), "屏幕端显示被主控屏蔽")
+            typeLine("mon net")
+            check(waitForAfter(mark, "blocked: #" .. SCR_ID, 10), "mon net 列表里显示被屏蔽的 ID")
+            sleep(3)                               -- 心跳间隔 1s：3 秒里至少来 3 次 hello
+            check(not seenAfter(mark, "Net screen #" .. SCR_ID .. " connected"),
+                "3 秒内屏幕没有被重新登记（心跳被拒绝）")
+            check(waitBuf("Blocked by the master", 5), "屏幕端仍显示被屏蔽")
+
+            -- 解除屏蔽：下一次心跳就重新登记
+            local mark2 = #captured
+            typeLine("mon net unblock " .. SCR_ID)
+            check(waitForAfter(mark2, "Net screen #" .. SCR_ID .. " unblocked", 10),
+                "mon net unblock 解除屏蔽")
+            check(waitForAfter(mark2, "Net screen #" .. SCR_ID .. " connected", 20),
+                "屏幕在下次心跳重新登记")
+            check(screenBlockEmpty(), "解除后 settings 里的黑名单为空")
             typeLine("quit")
         end)
     check(ok12, "网络屏幕场景正常退出" .. (ok12 and "" or ("：" .. tostring(err12))))
@@ -1939,6 +1977,8 @@ do
     end
     peripheral.getNames, peripheral.getType, peripheral.wrap = rgn, rgt, rw
     extraRoles[SCR_ID] = nil
+    settings.set("dcnet.screenBlock", "")      -- 别把残留的黑名单留给后面的运行
+    settings.save()
 end
 
 _G.print = realPrint

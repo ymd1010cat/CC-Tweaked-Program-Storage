@@ -225,7 +225,7 @@ worker  name         state  done  failed  elapsed   avg/s  current
 | `key` | 查看签名状态、密钥指纹与丢弃统计 |
 | `standby [on\|off]` | 待命主控：在岗主控掉线时自动接管并接续作业 |
 | `mon [名字\|off]` | 挂载 / 关闭**本地** monitor 大屏面板（持久化；网络上的显示器也能挂） |
-| `mon net [on\|off\|kick ID]` | 网络屏幕：查看 / 开关 / 断开「另一台电脑 + 显示器」的屏幕节点 |
+| `mon net [on\|off\|kick ID\|unblock ID]` | 网络屏幕：查看 / 开关 / 永久屏蔽（`kick`，持久化）/ 解除屏蔽「另一台电脑 + 显示器」的屏幕节点 |
 | `repo <主控ID>` | 查询另一台主控有哪些作业 |
 | `pull <主控ID> <作业名…>` | 从它那里拉作业（自动补 `.lua`） |
 | `pullall <主控ID>` | 只拉本地没有的（先 `repo` 看清单） |
@@ -293,10 +293,18 @@ screen.lua --name=机房大屏      -- 主控 mon net 里看到的名字
 ```lua
 -- 2) 主控：什么都不用配（netScreen 默认开），screen 会自动登记
 mon net                # 网络屏幕：推送中（1/16 台）  #12 screen-12 ...
+                       #   被屏蔽时多一行：blocked: #9 #12
 mon net off            # 暂停推送（屏幕显示「主控已关闭」）
 mon net on             # 恢复
-mon net kick 12        # 断开某一台（它下次心跳会自动重连）
+mon net kick 12        # 永久屏蔽某一台（写进 settings，主控重启后依然拒绝）
+mon net unblock 12     # 解除屏蔽（下一次心跳就自动重连；also 接受 allow）
 ```
+
+`kick` 是**持久**操作：主控把被踢的 ID 记进 CC 的 `settings`（`dcnet.screenBlock`，
+逗号分隔的 ID 串），此后该屏幕每次心跳都只会收到 `screenoff {why="blocked"}`，
+屏幕端显示「Blocked by the master」和该敲的 `mon net unblock <ID>`；主控重启
+（断电/重做）后黑名单仍然生效。`mon net` 列表里的 `blocked:` 行就是当前黑名单。
+只想让屏幕暂时断开、还要它自己回来时，用 `mon net off` 再 `on`，不要用 `kick`。
 
 屏幕文件的来源：`install.lua screen`（或 `install.lua all`）会写到
 `/dccomp/screen.lua`；也可以把 `dist/screen.lua` 直接拷到屏幕电脑；unixshell 下用
@@ -728,7 +736,7 @@ python tests/run_craftos.py --data D   # 换数据目录（缺省 tests/.ccdata�
 写东西**，所以在受限的沙箱环境（只允许写工作区）下也能直接跑；唯一需要工作区外
 权限的动作是"执行"CraftOS-PC 本体，那不需要写权限。
 
-覆盖范围（当前 281 项检查）：
+覆盖范围（当前 289 项检查）：
 
 | 分组 | 验证内容 |
 | --- | --- |
@@ -747,7 +755,7 @@ python tests/run_craftos.py --data D   # 换数据目录（缺省 tests/.ccdata�
 | 场景 9 | 大负载通道：24KB 负载经文件通道下发、14KB 结果经文件通道上传 |
 | 场景 10 | 主控高可用：待命机按心跳接管 + 从快照接续作业（"节点换主"需两台真机，见 §4.6） |
 | 场景 11 | **混沌**：确定性丢包 1/7 + 杀节点 + 重复上报，作业结果仍须完全正确 |
-| 场景 12 | 网络屏幕：屏幕节点登记 → 收 disp 帧画出面板 → `mon net off/on/kick` 生效 |
+| 场景 12 | 网络屏幕：屏幕节点登记 → 收 disp 帧画出面板 → `mon net off/on/kick`（`kick` 持久化、屏幕被拒且显示 blocked）→ `mon net unblock` 后重连 |
 
 > 混沌测试用的是**确定性丢包**（每 7 条丢 1 条，不用真随机），所以失败可复现。
 > 游戏里对应的是：拔网线 / Ctrl+T 干掉节点 / 让别的脚本乱发消息（后者配 `setkey` 直接拒掉）。

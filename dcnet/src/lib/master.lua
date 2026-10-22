@@ -156,7 +156,46 @@ function M.run(opts)
         activeMaster = nil,
         tookOver = 0,
         screens = {},               -- 网络屏幕：id -> { id, name, w, h, lastSeen, ... }
+        screenBlock = {},           -- 被永久踢掉的网络屏幕：id -> true（持久化，见下）
     }
+
+    -- ── 网络屏幕黑名单（持久化） ──────────────────────────────────────
+    -- kick 是永久的：被踢的 ID 记进 settings（dcnet.screenBlock），主控重启后仍然
+    -- 拒绝它的心跳，屏幕端一直显示 "Blocked by the master"，直到 mon net unblock。
+    -- 存成逗号分隔的 ID 串（CC 的 settings 只能存 string/number/boolean）。
+    local function parseScreenBlock(text)
+        local out = {}
+        for token in tostring(text or ""):gmatch("[^,%s]+") do
+            local id = tonumber((token:gsub("^#", "")))
+            if id then out[math.floor(id)] = true end
+        end
+        return out
+    end
+
+    local function screenBlockIds()
+        local ids = {}
+        for id in pairs(M0.screenBlock) do ids[#ids + 1] = id end
+        table.sort(ids)
+        return ids
+    end
+
+    local function saveScreenBlock()
+        local parts = {}
+        for _, id in ipairs(screenBlockIds()) do parts[#parts + 1] = tostring(id) end
+        util.saveCfg("screenBlock", table.concat(parts, ","))
+        -- CC 的 settings.set 只改内存，落盘要显式 save（新版 ROM 明确如此；幂等，多调无副作用）。
+        if type(settings.save) == "function" then settings.save() end
+    end
+
+    M0.screenBlock = parseScreenBlock(settings.get("dcnet.screenBlock") or "")
+    do
+        local parts = {}
+        for _, id in ipairs(screenBlockIds()) do parts[#parts + 1] = "#" .. tostring(id) end
+        if #parts > 0 then
+            ui:log("Net screen blocklist: " .. table.concat(parts, " ") ..
+                " (mon net unblock <ID>)", col("orange", 2))
+        end
+    end
 
     -- ── 云端卸载 ─────────────────────────────────────────────────────
     local CL = cloud.new({
@@ -229,6 +268,11 @@ function M.run(opts)
     end
 
     local function screenHello(sender, msg)
+        -- 永久踢掉的屏幕：直接回 blocked，不登记、也不刷日志（心跳每秒都会来）。
+        if M0.screenBlock[sender] then
+            net.send(sender, proto.msg(proto.SCREENOFF, { why = "blocked" }), util.PROTO_CTRL)
+            return
+        end
         if not S.cfg.netScreen then
             net.send(sender, proto.msg(proto.SCREENOFF, { why = "off" }), util.PROTO_CTRL)
             return
@@ -302,6 +346,11 @@ function M.run(opts)
         if #ids == 0 then
             out[#out + 1] = "  (run screen.lua on the screen computer to connect)"
         end
+        local blocked = {}
+        for _, id in ipairs(screenBlockIds()) do blocked[#blocked + 1] = "#" .. tostring(id) end
+        if #blocked > 0 then
+            out[#out + 1] = "  blocked: " .. table.concat(blocked, " ")
+        end
         return out
     end
 
@@ -368,7 +417,7 @@ function M.run(opts)
             "  cloud del <name>        Delete endpoint",
             "  cloud test <name>       Probe (one GET)",
             "  mon [name|off]          Attach/close local monitor panel (persisted)",
-            "  mon net [on|off|kick ID] Net screen: another computer + monitor as panel",
+            "  mon net [on|off|kick ID|unblock ID] Net screen: another computer + monitor as panel",
             "  setkey <key>            Enable signing (anti-spoof/replay, same everywhere)",
             "  key                     Show signing state, key fingerprint, drop stats",
             "  standby [on|off]        Standby master: take over and resume if active dies",
@@ -761,15 +810,33 @@ function M.run(opts)
                     elseif not M0.screens[id] then
                         ui:log("No such net screen: #" .. id, col("orange", 2))
                     else
+                        id = math.floor(id)
                         M0.screens[id] = nil
-                        net.send(id, proto.msg(proto.SCREENOFF, { why = "kick" }), util.PROTO_CTRL)
-                        ui:log("Net screen #" .. id .. " kicked (reconnects on next heartbeat)",
+                        M0.screenBlock[id] = true
+                        saveScreenBlock()
+                        net.send(id, proto.msg(proto.SCREENOFF, { why = "blocked" }), util.PROTO_CTRL)
+                        ui:log(string.format("Net screen #%d kicked and blocked (mon net unblock %d)",
+                            id, id), col("lime", 32))
+                    end
+                elseif action == "unblock" or action == "allow" then
+                    local id = tonumber((tostring(toks[3] or ""):gsub("^#", "")))
+                    if not id then
+                        ui:log("Usage: mon net unblock <screen id> (mon net lists them)",
+                            col("orange", 2))
+                    elseif not M0.screenBlock[math.floor(id)] then
+                        ui:log("Net screen #" .. id .. " is not blocked", col("orange", 2))
+                    else
+                        id = math.floor(id)
+                        M0.screenBlock[id] = nil
+                        saveScreenBlock()
+                        ui:log(string.format(
+                            "Net screen #%d unblocked (it reconnects on its next heartbeat)", id),
                             col("lime", 32))
                     end
                 else
                     ui:logLines(screenLines())
-                    ui:log("  mon net on|off toggles / mon net kick <ID> drops one",
-                        col("lightGray", 1024))
+                    ui:log("  mon net on|off toggles / mon net kick <ID> blocks for good" ..
+                        " / mon net unblock <ID> allows again", col("lightGray", 1024))
                 end
             elseif sub then
                 local ok, err = PN:attach(sub)

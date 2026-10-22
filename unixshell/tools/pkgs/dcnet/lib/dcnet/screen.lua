@@ -12,7 +12,7 @@
 协议（见 docs/PROTOCOL.md）：
     屏幕 ── screen {name,w,h} ──▶ 主控     （上线登记 + 心跳，缺省每 3 秒）
     屏幕 ◀── disp {lines,w,h} ─── 主控     （一帧面板内容，缺省每 1 秒）
-    屏幕 ◀── screenoff {why} ─── 主控     （推送关闭 / 屏幕数满 / 被踢）
+    屏幕 ◀── screenoff {why} ─── 主控     （推送关闭 / 屏幕数满 / 被踢 / 被永久屏蔽）
 
 集群设了共享密钥（dcnet.key）时，屏幕端也要设同一个密钥，否则消息会被丢弃。
 ]]
@@ -147,6 +147,10 @@ function M.run(opts)
         elseif offWhy == "kick" then
             out[#out + 1] = { text = "Disconnected by master", colour = col("orange", 2) }
             out[#out + 1] = { text = "Will reconnect on next heartbeat", colour = col("lightGray", 1024) }
+        elseif offWhy == "blocked" then
+            out[#out + 1] = { text = "Blocked by the master", colour = col("red", 16384) }
+            out[#out + 1] = { text = string.format("operator: mon net unblock %d",
+                os.getComputerID()), colour = col("lightGray", 1024) }
         else
             out[#out + 1] = { text = "Looking for master...", colour = col("yellow", 256) }
             out[#out + 1] = { text = "Type mon at the master to view network screens",

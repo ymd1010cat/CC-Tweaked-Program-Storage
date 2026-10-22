@@ -301,6 +301,9 @@ end
 function M.saveCfg(key, value)
     if settings and settings.set then
         settings.set(M.CFG_PREFIX .. key, value)
+        -- Some ROMs (CraftOS-PC) only update memory in settings.set; without
+        -- save() the value is gone on the next boot.
+        if type(settings.save) == "function" then pcall(settings.save) end
         return true
     end
     return false, "settings API not available"

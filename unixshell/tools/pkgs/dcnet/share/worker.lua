@@ -285,6 +285,8 @@ end
 function M.saveCfg(key, value)
     if settings and settings.set then
         settings.set(M.CFG_PREFIX .. key, value)
+
+        if type(settings.save) == "function" then pcall(settings.save) end
         return true
     end
     return false, "settings API not available"

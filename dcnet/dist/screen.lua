@@ -285,6 +285,8 @@ end
 function M.saveCfg(key, value)
     if settings and settings.set then
         settings.set(M.CFG_PREFIX .. key, value)
+
+        if type(settings.save) == "function" then pcall(settings.save) end
         return true
     end
     return false, "settings API not available"
@@ -867,6 +869,10 @@ function M.run(opts)
         elseif offWhy == "kick" then
             out[#out + 1] = { text = "Disconnected by master", colour = col("orange", 2) }
             out[#out + 1] = { text = "Will reconnect on next heartbeat", colour = col("lightGray", 1024) }
+        elseif offWhy == "blocked" then
+            out[#out + 1] = { text = "Blocked by the master", colour = col("red", 16384) }
+            out[#out + 1] = { text = string.format("operator: mon net unblock %d",
+                os.getComputerID()), colour = col("lightGray", 1024) }
         else
             out[#out + 1] = { text = "Looking for master...", colour = col("yellow", 256) }
             out[#out + 1] = { text = "Type mon at the master to view network screens",
