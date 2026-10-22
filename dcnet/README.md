@@ -232,7 +232,8 @@ worker  name         state  done  failed  elapsed   avg/s  current
 | `push [节点ID..]` | 把 `/dccomp/worker.lua` 推给节点（缺省=全部在线节点） |
 | `reboot [节点ID..]` | 让节点重启电脑；配合 `push` 完成升级（需节点有开机自启） |
 | `kick <节点ID>` | 让某个节点退出 |
-| `halt` | 让所有节点退出 |
+| `halt` | 让所有节点退出（回到 shell，电脑不关） |
+| `shutdown [节点ID..]` | 一键关闭节点电脑（不带参数=全部在线节点） |
 | `save <作业号> [路径]` | 结果另存为文件（作业结束时也会自动存到 `/dccomp/out/`） |
 | `clear` | 重绘界面（终端被别的东西刷乱时用） |
 | `quit` | 关闭主控；节点会继续等待，重开主控后自动重连 |

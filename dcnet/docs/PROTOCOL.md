@@ -61,7 +61,7 @@
 | `progress` | 节点 → 主控 | `job`, `task`, `pct`, `note` | 进度（节流 ~0.7s） |
 | `result` | 节点 → 主控 | `job`, `task`, `ok`, `data` 或 `err`, `ms` | 任务结果 |
 | `cancel` | 主控 → 节点 | `job`, `task` | 任务已被重派，请放弃（节点在下次 `ctx.tick()` 生效） |
-| `halt` | 主控 → 节点 | 可选 `reboot=true` | 节点退出；带 `reboot` 时改为 `os.reboot()` 重启电脑（配合 `push` 加载新代码） |
+| `halt` | 主控 → 节点 | 可选 `reboot=true` / `shutdown=true` | 节点退出；`reboot` 调 `os.reboot()`，`shutdown` 调 `os.shutdown()` 关机（配合 `push` 加载新代码） |
 | `ping` / `pong` | 双向 | — | 保活探测（可选） |
 | `bye` | 节点 → 主控 | `reason` | 主动下线 |
 | `screen` | 屏幕 → 广播 | `name`, `w`, `h`, `scale` | 网络屏幕上线登记 + 心跳（缺省每 3s） |

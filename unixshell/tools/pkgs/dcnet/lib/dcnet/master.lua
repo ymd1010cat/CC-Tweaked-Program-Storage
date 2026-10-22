@@ -50,7 +50,7 @@ local COMMANDS = {
     "cancel", "pause", "resume", "pri", "limit", "redun", "set", "cfg", "net",
     "state", "cache", "history", "top", "cloud", "mon", "repo", "pull", "pullall",
     "setkey", "key", "standby", "lang",
-    "push", "kick", "halt", "reboot", "save", "clear", "quit",
+    "push", "kick", "halt", "shutdown", "reboot", "save", "clear", "quit",
 }
 
 --- opts: { defaultJobs = { ["primes.lua"] = "源码", ... }, cfg = {...} }
@@ -429,6 +429,7 @@ function M.run(opts)
             "  reboot [worker id..]    Reboot workers (load new code after push)",
             "  kick <worker id>        Make one worker exit",
             "  halt                    Make all workers exit",
+            "  shutdown [ids..]         Power off all workers (no args = all)",
             "  save <job id> [path]    Save result to a file",
             "  clear                   Redraw the UI",
             "  quit                    Close master (workers stay, reconnect on restart)",
@@ -943,6 +944,17 @@ function M.run(opts)
             end
             M0.halted = true
             ui:log(string.format("Told %d workers to exit.", #list), col("orange", 2))
+        elseif c == "shutdown" then
+            local list = targetWorkers(toks)
+            if #list == 0 then
+                ui:log("No workers to shut down.", col("orange", 2))
+            else
+                for _, w in ipairs(list) do
+                    net.send(w.id, proto.msg(proto.HALT, { shutdown = true }), util.PROTO_CTRL)
+                end
+                M0.halted = true
+                ui:log(string.format("Told %d workers to shut down.", #list), col("orange", 2))
+            end
         elseif c == "reboot" then
             -- 配合 push 使用：节点重启后，startup 文件里的 shell.run 会拉起新代码
             local list = targetWorkers(toks)

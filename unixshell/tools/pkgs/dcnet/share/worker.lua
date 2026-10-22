@@ -1693,8 +1693,16 @@ local function runOnce(opts)
                 elseif msg.t == proto.HALT and fromMaster then
                     S.running = false
                     net.send(S.master, proto.msg(proto.BYE, {
-                        reason = msg.reboot and "reboot" or "halt",
+                        reason = msg.shutdown and "shutdown"
+                            or (msg.reboot and "reboot" or "halt"),
                     }), util.PROTO_CTRL)
+                    if msg.shutdown then
+                        ui:log("Shutdown command from master, powering off...",
+                            col("orange", 2))
+                        os.sleep(0.6)
+                        if os.shutdown then os.shutdown() end
+                        return
+                    end
                     if msg.reboot then
                         ui:log("Reboot command from master, rebooting...", col("orange", 2))
                         ui:log("(/startup.lua starts the new worker.lua on reboot)",
