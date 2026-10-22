@@ -74,6 +74,12 @@ function M.trim(s)
     return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+function M.tr(text)
+    local f = rawget(_G, "DCNET_TR")
+    if type(f) == "function" then return f(text) end
+    return text
+end
+
 function M.split(s, sep)
     s, sep = tostring(s or ""), tostring(sep or " ")
     local out, i = {}, 1
@@ -1311,6 +1317,7 @@ function M.linesFor(sched, cloud, w, h)
     h = math.max(1, tonumber(h) or 19)
 
     local function add(text, colour)
+        text = util.tr(tostring(text))
         out[#out + 1] = { text = util.trunc(text, w), colour = colour }
     end
 
@@ -1358,6 +1365,7 @@ function M.linesFor(sched, cloud, w, h)
         else
             cell = "#" .. wk.id .. ":idle"
         end
+        cell = util.tr(cell)
         cells[#cells + 1] = cell
     end
     if #cells > 0 then
@@ -1454,11 +1462,11 @@ if not _G.dc_require then
     end
 end
 
-local screen = dc_require("dc.screen")
-
 local argv = { ... }
 
 if type(argv[1]) == "table" then argv = argv[1] end
+
+local screen = dc_require("dc.screen")
 
 local opts = {}
 for k, v in pairs(rawget(_G, "DCNET_CFG") or {}) do opts[k] = v end

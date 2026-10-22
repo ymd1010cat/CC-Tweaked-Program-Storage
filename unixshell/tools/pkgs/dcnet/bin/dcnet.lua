@@ -95,6 +95,7 @@ local root = conf.root or rawget(_G, "DCNET_ROOT")
 local transport = conf.transport
 local key = conf.key
 local worker_file = conf.worker_file
+local lang = conf.lang
 local rest = {}
 local keep_cmd_line = (tostring(argv[1]) == "cmd")
 for _, a in ipairs(argv) do
@@ -110,6 +111,8 @@ for _, a in ipairs(argv) do
         key = v
     elseif k == "worker_file" then
         worker_file = v
+    elseif k == "lang" then
+        lang = v
     elseif k == "config" then
         -- already consumed
     else
@@ -132,6 +135,9 @@ _G.DCNET_ROOT = root
 _G.DCNET_TRANSPORT = transport
 _G.DCNET_KEY = key
 _G.DCNET_WORKER_FILE = worker_file
+-- UI language must be in place before the dc modules load (dc.lang reads it once);
+-- --lang=xx wins over lang= in /etc/dcnet.conf; dc.lang normalises bad values.
+_G.DCNET_LANG = lang
 
 local function ensure_dir(path)
     if type(fs) ~= "table" then return false end
@@ -259,6 +265,7 @@ elseif cmd == "config" then
     say("transport: " .. tostring(transport))
     say("worker_file: " .. tostring(worker_file))
     say("key: " .. (key and #key >= 8 and "set" or "off"))
+    say("lang: " .. tostring(lang or "en"))
     say("jobs: " .. tostring(util.JOB_DIR))
     say("control: " .. tostring(rawget(_G, "DCNET_CTL") or (root .. "/ctl")))
     return 0

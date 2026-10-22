@@ -67,6 +67,14 @@ function M.trim(s)
     return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+--- 输出边界翻译钩子：主控启动时把 dc.lang.tr 挂到 _G.DCNET_TR；
+-- 节点/网络屏幕不加载语言包时原样返回（保持英文）。
+function M.tr(text)
+    local f = rawget(_G, "DCNET_TR")
+    if type(f) == "function" then return f(text) end
+    return text
+end
+
 --- 纯文本切分（sep 不做模式匹配）
 function M.split(s, sep)
     s, sep = tostring(s or ""), tostring(sep or " ")

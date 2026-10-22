@@ -41,6 +41,14 @@ if not _G.dc_require then
 end
 
 -- ── 启动 ────────────────────────────────────────────────────────────────
+-- --lang=zh 必须在加载模块前设置（dc.lang 在加载时读取）
+local early = { ... }
+if type(early[1]) == "table" then early = early[1] end
+for _, a in ipairs(early) do
+    local v = tostring(a):match("^%-%-lang=(.+)$")
+    if v then _G.DCNET_LANG = v end
+end
+
 local util   = dc_require("dc.util")
 local master = dc_require("dc.master")
 local sched  = dc_require("dc.sched")

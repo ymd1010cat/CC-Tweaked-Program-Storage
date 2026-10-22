@@ -21,6 +21,11 @@ local console = dc_require("dc.console")
 local state   = dc_require("dc.state")
 local cloud   = dc_require("dc.cloud")
 local panel   = dc_require("dc.panel")
+local lang    = dc_require("dc.lang")
+
+-- 输出边界翻译钩子（console/panel/sched 通过 util.tr 调用）。只有主控加载语言包：
+-- 节点与网络屏幕保持英文，dist 体积也更小。
+_G.DCNET_TR = function(text) return lang.tr(text) end
 
 local M = {}
 
@@ -31,7 +36,7 @@ local COMMANDS = {
     "help", "status", "workers", "jobs", "run", "run!", "queue", "result",
     "cancel", "pause", "resume", "pri", "limit", "redun", "set", "cfg", "net",
     "state", "cache", "history", "top", "cloud", "mon", "repo", "pull", "pullall",
-    "setkey", "key", "standby",
+    "setkey", "key", "standby", "lang",
     "push", "kick", "halt", "reboot", "save", "clear", "quit",
 }
 
@@ -354,6 +359,7 @@ function M.run(opts)
             "  setkey <key>            Enable signing (anti-spoof/replay, same everywhere)",
             "  key                     Show signing state, key fingerprint, drop stats",
             "  standby [on|off]        Standby master: take over and resume if active dies",
+            "  lang [en|zh]            Show/switch interface language (persisted)",
             "  repo <master id>        Query another master's job repo",
             "  pull <master id> <job names...> Pull jobs from it (adds .lua)",
             "  pullall <master id>     Pull only missing ones (repo first)",
@@ -654,6 +660,19 @@ function M.run(opts)
                     ui:log(string.format("  Silent for %.1f s", util.mono() - M0.lastBeatAt))
                 elseif M0.tookOver and M0.tookOver > 0 then
                     ui:log("  This master took over (original went offline)", col("orange", 2))
+                end
+            end
+        elseif c == "lang" then
+            local code = toks[1]
+            if not code then
+                ui:log("language: " .. lang.get() .. " (available: en, zh)")
+            else
+                local ok2, lerr = lang.set(code)
+                if not ok2 then
+                    ui:log("language: " .. tostring(lerr), col("orange", 2))
+                else
+                    ui:log("language: " .. lang.get() .. " (persisted)", col("lime", 32))
+                    if PN:attached() then PN:redraw(S, CL, true) end
                 end
             end
         elseif c == "setkey" then

@@ -102,7 +102,7 @@ local m=peripheral.find("modem",function(_,d)return not d.isWireless()end) redne
 ### 方式 D：一键安装器（最省事）
 
 `dist/install.lua` 是**一个自包含的安装器**（把主控、节点、拉取器、全部作业都塞在
-里面，约 370KB）：拷到任意一台电脑上运行即可。
+里面，约 424KB）：拷到任意一台电脑上运行即可。
 
 ```
 install.lua                       装全部（主控 + 节点 + 网络屏幕 + 拉取器 + 作业）
@@ -114,7 +114,7 @@ install.lua all --startup=master  顺便生成开机自启（跑主控）
 install.lua all --startup=worker  顺便生成开机自启（跑节点）
 install.lua all --startup=screen  顺便生成开机自启（跑网络屏幕）
 install.lua all --force           覆盖已存在的文件
-install.lua all --cleanup         装完把安装器自己删掉（省 ~370KB 磁盘）
+install.lua all --cleanup         装完把安装器自己删掉（省 ~424KB 磁盘）
 ```
 
 默认**不覆盖**已存在的文件，所以重复运行很安全（你改过的作业不会被冲掉）。
@@ -148,9 +148,9 @@ end
 看到状态栏 + 命令提示符 `dcnet> ` 就成功了。首次运行会自动把 5 个示例作业
 写到 `/dccomp/jobs/`（含集群自检 `selftest`）。
 
-> **界面语言**：dcnet 的游戏内界面、日志与作业结果全部是**英文**（ASCII），
-> 原版 CC 字体即可正常显示，不需要中文字体资源包。本文档为了说明方便仍用中文，
-> 部分示例输出可能是旧版界面。
+> **界面语言**：dcnet 的游戏内界面、日志与作业结果默认是**英文**（ASCII），
+> 原版 CC 字体即可正常显示，不需要中文字体资源包；需要中文时用 §4.7 的 `lang zh` 切换
+> （需装中文字体包）。本文档为了说明方便仍用中文，部分示例输出可能是旧版界面。
 
 **每台运算机：**
 
@@ -210,6 +210,7 @@ worker  name         state  done  failed  elapsed   avg/s  current
 | `limit [N]` | 同时执行几个作业（并发上限，缺省 1） |
 | `redun [N]` | 抢尾冗余阈值：剩余任务 ≤ N 时把任务复制给空闲节点抢尾 |
 | `set <配置项> <值>` | 改配置并**持久化**（`cfg` 看全部配置项） |
+| `lang [en\|zh]` | 查看 / 切换界面语言（缺省 `en`，持久化到本机 settings） |
 | `cfg` | 显示当前生效的全部配置 |
 | `net` | 显示 modem / 网络情况（支持多网段桥接） |
 | `state [save\|clear]` | 断点续算快照的状态 / 立即写 / 清除 |
@@ -380,6 +381,23 @@ standby on / off     # 本机是否默认以待命模式启动（持久化）
 > 3. 把在岗主控**退出/断电**；
 > 4. 15 秒内待命机应打印 `* Took over as master` + `Resumed 1 jobs`；
 > 5. 再过 ≤25 秒，各节点应打印 "found master #N"，作业在新主控上继续跑完（总数不变）。
+
+### 4.7 界面语言（lang）
+
+界面默认是**英文**（ASCII，原版 CC 字体即可正常显示）。需要中文时可以切回：
+
+```
+lang            # language: en (available: en, zh)
+lang zh         # 切换为中文并持久化（需要中文字体资源包，否则中文会乱码）
+lang en         # 切回英文
+```
+
+- 语言是**主控本机**的设置（CC settings 的 `dcnet.lang`，持久化）；也可以在启动时用
+  `master.lua --lang=zh` 指定。主控的 `lang` 只改主控自己。
+- 翻译覆盖主控的控制台、日志、状态面板（含 monitor 大屏）与内置作业的结果行；
+  **网络屏幕显示的面板由主控生成，所以也会跟随主控语言**。节点自己的控制台保持英文。
+  自己写的作业和协议数据保持原样。
+- 没有中文字体资源包时请保持 `en`（默认值）。
 
 ### 4.4 节点侧（worker 自己的 settings）
 
@@ -694,7 +712,7 @@ python tests/run_craftos.py --data D   # 换数据目录（缺省 tests/.ccdata�
 写东西**，所以在受限的沙箱环境（只允许写工作区）下也能直接跑；唯一需要工作区外
 权限的动作是"执行"CraftOS-PC 本体，那不需要写权限。
 
-覆盖范围（当前 271 项检查）：
+覆盖范围（当前 280 项检查）：
 
 | 分组 | 验证内容 |
 | --- | --- |
@@ -789,9 +807,9 @@ CC 电脑默认磁盘上限只有 **1MB**，所以打包时会**剥掉注释与�
 
 | 产物 | 剥注释后 | 说明 |
 | --- | --- | --- |
-| `dist/master.lua` | **202 KB** | 主控常驻的就是这个 |
+| `dist/master.lua` | **258 KB** | 主控常驻的就是这个（含中文语言包） |
 | `dist/worker.lua` | **80 KB** | 每台运算节点一份 |
-| `dist/install.lua` | **367 KB** | 只在安装时用，装完可删 |
+| `dist/install.lua` | **424 KB** | 只在安装时用，装完可删 |
 
 界面文案全部是英文（ASCII），不再依赖中文字体：原版 CC 客户端与 CraftOS-PC 都能直接
 正常显示，不需要中文字体资源包。字库本身也不在电脑磁盘上（CC 的终端字体是客户端资源包、
@@ -845,7 +863,7 @@ python tools/build_dcnet_pkg.py
 python tools/build_worker.py
 ```
 
-得到 `unixshell/dist/worker-image/`（15 文件，约 125 KB）：只有 `startup.lua` 和 dcnet
+得到 `unixshell/dist/worker-image/`（15 文件，约 126 KB）：只有 `startup.lua` 和 dcnet
 包的 worker 所需模块，循环执行 `dcnet worker --headless`。镜像里**没有** ush、firstboot、
 BIOS、man/usr/cmd、`fontdata/`、`lib/cc_chinese.lua`/`cc_font*` 或桌面包——计算端没有
 中文字体支持和交互界面。主控端保留完整 unixshell + multishell。

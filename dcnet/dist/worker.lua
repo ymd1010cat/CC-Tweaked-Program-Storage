@@ -74,6 +74,12 @@ function M.trim(s)
     return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+function M.tr(text)
+    local f = rawget(_G, "DCNET_TR")
+    if type(f) == "function" then return f(text) end
+    return text
+end
+
 function M.split(s, sep)
     s, sep = tostring(s or ""), tostring(sep or " ")
     local out, i = {}, 1
@@ -802,6 +808,7 @@ function Console:setStatus(text)
 end
 
 function Console:log(text, colour)
+    text = util.tr(tostring(text))
     term.redirect(self.logWin)
     if colour then term.setTextColour(colour) end
     print(tostring(text))
@@ -858,6 +865,7 @@ end
 
 function Null:setStatus(text) self.statusText = text end
 function Null:log(text)
+    text = util.tr(tostring(text))
     if self.logFile then util.appendLog(self.logFile, util.logLine(text)) end
 end
 function Null:logLines(lines)
@@ -2449,11 +2457,11 @@ if not _G.dc_require then
     end
 end
 
-local worker = dc_require("dc.worker")
-
 local argv = { ... }
 
 if type(argv[1]) == "table" then argv = argv[1] end
+
+local worker = dc_require("dc.worker")
 
 local opts = {}
 for k, v in pairs(rawget(_G, "DCNET_CFG") or {}) do opts[k] = v end

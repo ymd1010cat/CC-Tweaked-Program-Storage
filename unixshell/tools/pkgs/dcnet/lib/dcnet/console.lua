@@ -81,8 +81,9 @@ function Console:setStatus(text)
     self:redrawStatus()
 end
 
---- 往日志区追加一行
+--- 往日志区追加一行（界面语言在输出边界翻译，调用点不用关心）
 function Console:log(text, colour)
+    text = util.tr(tostring(text))
     term.redirect(self.logWin)
     if colour then term.setTextColour(colour) end
     print(tostring(text))
@@ -151,6 +152,7 @@ end
 
 function Null:setStatus(text) self.statusText = text end
 function Null:log(text)
+    text = util.tr(tostring(text))
     if self.logFile then util.appendLog(self.logFile, util.logLine(text)) end
 end
 function Null:logLines(lines)

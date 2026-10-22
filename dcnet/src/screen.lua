@@ -45,11 +45,11 @@ if not _G.dc_require then
     end
 end
 
-local screen = dc_require("dc.screen")
-
 local argv = { ... }
 -- unixshell 的命令块拿到的是 (args_table, stage)；独立运行时才是逐个字符串。
 if type(argv[1]) == "table" then argv = argv[1] end
+
+local screen = dc_require("dc.screen")
 
 local opts = {}
 for k, v in pairs(rawget(_G, "DCNET_CFG") or {}) do opts[k] = v end

@@ -326,7 +326,7 @@ function Sched:addJob(def, tokens, opts)
             self:log(string.format("Job #%d %s result cache hit (computed %s ago), returning result",
                 id, job.name, util.duration(util.now() - (hit.at or util.now()))), colour("lime", 32))
             for _, line in ipairs(util.split(job.resultText, "\n")) do
-                self:log("  " .. line, colour("white", 1))
+                self:log("  " .. util.tr(line), colour("white", 1))
             end
             if self.onFinished then self.onFinished(job) end
             return job
@@ -712,7 +712,7 @@ function Sched:finalize(job)
         job.state == "done" and colour("lime", 32) or colour("red", 16384))
     if job.state == "done" and job.resultText then
         for _, line in ipairs(util.split(job.resultText, "\n")) do
-            self:log("  " .. line, colour("white", 1))
+            self:log("  " .. util.tr(line), colour("white", 1))
         end
     elseif job.error then
         self:log("  " .. job.error, colour("red", 16384))

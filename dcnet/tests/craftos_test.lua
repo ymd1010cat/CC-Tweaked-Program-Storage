@@ -173,7 +173,7 @@ local function makeUniverse(role, roleId)
         net.broadcast = function(msg, proto) return busBroadcast(roleId, msg, proto) end
         req("dc.util"); req("dc.protocol"); req("dc.jobs")
         req("dc.xfer"); req("dc.sched"); req("dc.console")
-        req("dc.master"); req("dc.worker"); req("dc.screen")
+        req("dc.master"); req("dc.worker"); req("dc.screen"); req("dc.lang")
     end)
     _G.dc_require = saved
     if not ok then error("宇宙 " .. tostring(role) .. " 加载失败: " .. tostring(err), 0) end
@@ -204,6 +204,25 @@ do
     local chopped = util.trunc("中文字符", 3)
     check(chopped:byte(-2) ~= nil and util.textWidth(chopped) <= 3,
         "trunc 不会把多字节字符切成两半")
+end
+
+-- ── 2b. 语言切换（lang） ───────────────────────────────────────────────
+section("语言切换（lang）")
+do
+    local L = U["dc.lang"]
+    check(L.set("en") == true and L.get() == "en", "可设回英文")
+    check(L.tr("Workers 2/3 online") == "Workers 2/3 online", "en 模式原样输出")
+    check(L.set("zh") == true and L.get() == "zh", "可切换到中文")
+    local panel = L.tr("Workers 2/3 online   parallel 1/2   queue 0")
+    check(panel:find("节点", 1, true) ~= nil and panel:find("在线", 1, true) ~= nil,
+        "面板行翻译为中文：" .. panel)
+    local line = L.tr("Job #1 primes finished: done 6 / failed 0, elapsed 1.2s")
+    check(line:find("作业", 1, true) ~= nil and line:find("用时", 1, true) ~= nil,
+        "带占位符的日志翻译为中文：" .. line)
+    check(L.tr("no dictionary entry here") == "no dictionary entry here", "未收录文本回退英文")
+    local ok, err = L.set("fr")
+    check(ok == nil and err ~= nil, "拒绝未知语言")
+    L.set("en")
 end
 
 -- ── 3. 五个内置作业的真机计算 ─────────────────────────────────────────────
@@ -1388,6 +1407,10 @@ runScenario("场景 1：正常派发/回收 + push 分发", {}, function()
         if t and t:find("Worker starting", 1, true) then nodeLog = name end
     end
     check(nodeLog ~= nil, "节点日志已落盘且含启动记录（" .. tostring(nodeLog) .. "）")
+    typeLine("lang zh")
+    check(waitFor("language: zh", 10), "lang zh 切换语言")
+    typeLine("lang en")
+    check(waitFor("language: en", 10), "lang en 切回英文")
     typeLine("quit")
 end)
 

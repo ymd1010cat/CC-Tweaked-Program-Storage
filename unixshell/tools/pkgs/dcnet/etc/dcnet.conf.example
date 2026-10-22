@@ -38,3 +38,7 @@
 # netScreen: true (default) = push the master panel to network screens
 #            (run "dcnet screen" on a computer with a monitor).
 #netScreen=true
+#
+# lang: interface language for the master console ("en" default; "zh" needs a CJK
+#       font pack on the client). Can also be changed at runtime with "lang".
+#lang=en
