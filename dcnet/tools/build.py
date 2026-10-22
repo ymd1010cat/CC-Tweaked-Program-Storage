@@ -28,7 +28,7 @@ LIB = os.path.join(SRC, "lib")
 JOBS = os.path.join(SRC, "jobs")
 DIST = os.path.join(ROOT, "dist")
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 REQUIRE_RE = re.compile(r'dc_require\(\s*"([^"]+)"\s*\)')
 
 BANNER = """--[[- ==========================================================================

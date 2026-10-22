@@ -1,5 +1,5 @@
 --[[- ==========================================================================
-  dcnet v1.3.0 — CC:Tweaked 分布式计算网络（运算节点 worker）
+  dcnet v1.3.1 — CC:Tweaked 分布式计算网络（运算节点 worker）
 
   本文件由 tools/build.py 自动生成，请勿直接编辑。
   要改逻辑请改 src/ 下的源码，然后重新运行：
@@ -24,7 +24,7 @@ _G.dc_require = __dc_load
 __dc_define("dc.util", function()
 local M = {}
 
-M.VERSION    = "1.3.0"
+M.VERSION    = "1.3.1"
 M.PROTO_CTRL = "dccomp"
 M.PROTO_PUSH = "dcpush"
 M.ROOT       = rawget(_G, "DCNET_ROOT") or "/dccomp"

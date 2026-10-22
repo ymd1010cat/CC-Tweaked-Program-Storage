@@ -895,4 +895,4 @@ BIOS、man/usr/cmd、`fontdata/`、`lib/cc_chinese.lua`/`cc_font*` 或桌面包�
 unixshell 仓库里的 `python tools/dcnet_pkg_verify.py` 会在真 CraftOS-PC 上部署 ush +
 dcnet 包，并跑 `dcnet version` / `dcnet config` 做端到端验收。
 
-版本：1.3.0 · 协议版本：1 · 适用 CC:Tweaked 1.16+（含 1.20/1.21 系列）
+版本：1.3.1 · 协议版本：1 · 适用 CC:Tweaked 1.16+（含 1.20/1.21 系列）

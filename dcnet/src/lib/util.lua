@@ -9,7 +9,7 @@
 local M = {}
 
 -- ── 常量 ────────────────────────────────────────────────────────────────
-M.VERSION    = "1.3.0"
+M.VERSION    = "1.3.1"
 M.PROTO_CTRL = "dccomp"          -- 控制 / 任务协议
 M.PROTO_PUSH = "dcpush"          -- 代码分发协议（push / bootstrap）
 M.ROOT       = rawget(_G, "DCNET_ROOT") or "/dccomp" -- 安装根目录（ush 包会覆盖）
