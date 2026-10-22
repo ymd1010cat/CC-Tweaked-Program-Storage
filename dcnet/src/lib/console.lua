@@ -82,11 +82,21 @@ function Console:setStatus(text)
 end
 
 --- 往日志区追加一行（界面语言在输出边界翻译，调用点不用关心）
+-- 翻译后的中文是 UTF-8 多字节，原版 CC 字体没有汉字字形。主控启动时若找到
+-- 了 CJK 字体介质，会把逐字形的渲染器挂到 _G.DCNET_DRAW（见 master.lua）：
+-- 它返回 true 表示这一行已经画完（字形块），false 表示纯 ASCII 没画，照常
+-- print 即可。这样英文日志仍然是一行、和以前完全一样。
 function Console:log(text, colour)
     text = util.tr(tostring(text))
     term.redirect(self.logWin)
     if colour then term.setTextColour(colour) end
-    print(tostring(text))
+    local draw = rawget(_G, "DCNET_DRAW")
+    local drawn = false
+    if type(draw) == "function" then
+        local ok, res = pcall(draw, text, colour)
+        drawn = (ok and res == true)
+    end
+    if not drawn then print(tostring(text)) end
     if colour then term.setTextColour(WHITE) end
     term.redirect(self.hasPrompt and self.promptWin or self.logWin)
 end
@@ -151,6 +161,8 @@ function M.null(opts)
 end
 
 function Null:setStatus(text) self.statusText = text end
+--- headless 没有屏幕，不挂 CJK 渲染（日志文件里存的是翻译后的 UTF-8 文本，
+-- 由读日志的那一端决定怎么显示）
 function Null:log(text)
     text = util.tr(tostring(text))
     if self.logFile then util.appendLog(self.logFile, util.logLine(text)) end

@@ -1,12 +1,15 @@
 --[[- dc.lang — 运行时界面语言（en / zh）
 
   设计：英文串是唯一事实来源（源码里全是英文），中文词典从历史版本
-  （git 9f44af3）恢复。M.tr(text) 在输出边界（Console:log / panel 行 /
-  调度器日志）做翻译，调用点一律不用改。
+  （git 9f44af3）恢复。M.tr(text) 在输出边界（Console:log / 调度器日志）
+  做翻译，调用点一律不用改。monitor 大屏面板（dc.panel）保持英文：面板是
+  定宽的 6x9 像素字符网格，中文一个字要 6x4 格，应该迁就原来的布局。
 
   - en 模式：原样返回，且不构建 pattern 索引（启动零开销）。
   - zh 模式：先精确查表；带 printf 占位符的英文模板会被编译成锚定的 Lua
     pattern（逐个捕获占位符），命中后把捕获值塞回中文模板。
+  - zh 模式但 _G.DCNET_CJK_READY 不是 true（没有 CJK 字形介质）：原样返回
+    英文。原版 CC 终端字体没有汉字，输出中文只会是乱码。
   - 词典没收录的文本原样返回，绝不抛错。
 ]]
 
@@ -786,6 +789,10 @@ end
 
 function M.tr(text)
     if M.lang ~= "zh" then return text end
+    -- 没有 CJK 字形介质（字体盘 + 客户端资源包）时，原版 CC 终端画不出汉字，
+    -- 打印出去只会是乱码。所以这里回退英文：主控启动时 dc.cjk 探测成功才会
+    -- 把 _G.DCNET_CJK_READY 设为 true（见 master.lua）。
+    if rawget(_G, "DCNET_CJK_READY") ~= true then return text end
     if type(text) ~= "string" then return text end
     local hit = ZH[text]
     if hit ~= nil then return hit end

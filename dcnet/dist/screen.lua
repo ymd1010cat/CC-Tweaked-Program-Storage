@@ -1317,8 +1317,8 @@ function M.linesFor(sched, cloud, w, h)
     h = math.max(1, tonumber(h) or 19)
 
     local function add(text, colour)
-        text = util.tr(tostring(text))
-        out[#out + 1] = { text = util.trunc(text, w), colour = colour }
+
+        out[#out + 1] = { text = util.trunc(tostring(text), w), colour = colour }
     end
 
     add(string.format("dcnet master #%d   %s", os.getComputerID(), os.date("%H:%M:%S")),
@@ -1365,7 +1365,6 @@ function M.linesFor(sched, cloud, w, h)
         else
             cell = "#" .. wk.id .. ":idle"
         end
-        cell = util.tr(cell)
         cells[#cells + 1] = cell
     end
     if #cells > 0 then

@@ -102,7 +102,7 @@ local m=peripheral.find("modem",function(_,d)return not d.isWireless()end) redne
 ### 方式 D：一键安装器（最省事）
 
 `dist/install.lua` 是**一个自包含的安装器**（把主控、节点、拉取器、全部作业都塞在
-里面，约 424KB）：拷到任意一台电脑上运行即可。
+里面，约 457KB）：拷到任意一台电脑上运行即可。
 
 ```
 install.lua                       装全部（主控 + 节点 + 网络屏幕 + 拉取器 + 作业）
@@ -114,7 +114,7 @@ install.lua all --startup=master  顺便生成开机自启（跑主控）
 install.lua all --startup=worker  顺便生成开机自启（跑节点）
 install.lua all --startup=screen  顺便生成开机自启（跑网络屏幕）
 install.lua all --force           覆盖已存在的文件
-install.lua all --cleanup         装完把安装器自己删掉（省 ~424KB 磁盘）
+install.lua all --cleanup         装完把安装器自己删掉（省 ~457KB 磁盘）
 ```
 
 默认**不覆盖**已存在的文件，所以重复运行很安全（你改过的作业不会被冲掉）。
@@ -150,7 +150,8 @@ end
 
 > **界面语言**：dcnet 的游戏内界面、日志与作业结果默认是**英文**（ASCII），
 > 原版 CC 字体即可正常显示，不需要中文字体资源包；需要中文时用 §4.7 的 `lang zh` 切换
-> （需装中文字体包）。本文档为了说明方便仍用中文，部分示例输出可能是旧版界面。
+> （需要 unixshell 字体盘 + 自建的 `ush-cjk-font.zip` 资源包）。本文档为了说明方便仍用
+> 中文，部分示例输出可能是旧版界面。
 
 **每台运算机：**
 
@@ -388,16 +389,30 @@ standby on / off     # 本机是否默认以待命模式启动（持久化）
 
 ```
 lang            # language: en (available: en, zh)
-lang zh         # 切换为中文并持久化（需要中文字体资源包，否则中文会乱码）
+lang zh         # 切换为中文并持久化
 lang en         # 切回英文
 ```
 
-- 语言是**主控本机**的设置（CC settings 的 `dcnet.lang`，持久化）；也可以在启动时用
-  `master.lua --lang=zh` 指定。主控的 `lang` 只改主控自己。
-- 翻译覆盖主控的控制台、日志、状态面板（含 monitor 大屏）与内置作业的结果行；
-  **网络屏幕显示的面板由主控生成，所以也会跟随主控语言**。节点自己的控制台保持英文。
+中文显示复用了 unixshell 的 CJK 模块（`cjk.lua` / `cjk_fonts.lua` / `cjk_shards.lua`，
+原名 `cc_chinese.lua` / `cc_fonts.lua` / `cc_font_shards.lua`）。需要准备两样东西：
+
+1. **字形介质**：把 unixshell 的字体盘（release 资产
+   `unixshell-fonts-size12-two-disks.zip` 里的两张盘）插到主控电脑的磁盘驱动器上；
+   模块按 `cc_fonts.marker` 自动找盘，大小 8/12/16 按优先级自动选。
+2. **客户端字体资源包**：按 [unixshell/tools/respack/README.md](../unixshell/tools/respack/README.md)
+   从你所用 CC:Tweaked jar 的 `assets/computercraft/textures/gui/term_font.png` 生成
+   `ush-cjk-font.zip`，放进 `<minecraft>/resourcepacks/` 并启用。
+
+- 缺任一项时：`lang zh` 仍可切换并持久化，但**文字保持英文**（不会乱码），`lang` 命令会
+  提示缺字体介质；插好盘后重进主控（或重新 `lang zh`）即生效。
+- 中文渲染是**位图**的：一个汉字占 **6×4 个终端格**（size 12），所以含中文的日志行会占
+  4 行，日志区一次能显示的行数会变少；纯英文行仍是正常一行。
+- 翻译覆盖主控的控制台、日志与内置作业的结果行。**monitor 大屏面板固定英文**（面板是
+  6×9 定宽字体布局，混排中文放不下）；节点/网络屏幕自己的控制台也保持英文。
   自己写的作业和协议数据保持原样。
-- 没有中文字体资源包时请保持 `en`（默认值）。
+- 语言是**主控本机**的设置（CC settings 的 `dcnet.lang`，持久化）；也可以在启动时用
+  `master.lua --lang=zh` 指定。
+- 没有字体介质/资源包时请保持 `en`（默认值）。
 
 ### 4.4 节点侧（worker 自己的 settings）
 
@@ -712,7 +727,7 @@ python tests/run_craftos.py --data D   # 换数据目录（缺省 tests/.ccdata�
 写东西**，所以在受限的沙箱环境（只允许写工作区）下也能直接跑；唯一需要工作区外
 权限的动作是"执行"CraftOS-PC 本体，那不需要写权限。
 
-覆盖范围（当前 280 项检查）：
+覆盖范围（当前 281 项检查）：
 
 | 分组 | 验证内容 |
 | --- | --- |
@@ -807,9 +822,9 @@ CC 电脑默认磁盘上限只有 **1MB**，所以打包时会**剥掉注释与�
 
 | 产物 | 剥注释后 | 说明 |
 | --- | --- | --- |
-| `dist/master.lua` | **258 KB** | 主控常驻的就是这个（含中文语言包） |
+| `dist/master.lua` | **292 KB** | 主控常驻的就是这个（含中文语言包 + CJK 渲染模块） |
 | `dist/worker.lua` | **80 KB** | 每台运算节点一份 |
-| `dist/install.lua` | **424 KB** | 只在安装时用，装完可删 |
+| `dist/install.lua` | **457 KB** | 只在安装时用，装完可删 |
 
 界面文案全部是英文（ASCII），不再依赖中文字体：原版 CC 客户端与 CraftOS-PC 都能直接
 正常显示，不需要中文字体资源包。字库本身也不在电脑磁盘上（CC 的终端字体是客户端资源包、
@@ -863,7 +878,7 @@ python tools/build_dcnet_pkg.py
 python tools/build_worker.py
 ```
 
-得到 `unixshell/dist/worker-image/`（15 文件，约 126 KB）：只有 `startup.lua` 和 dcnet
+得到 `unixshell/dist/worker-image/`（15 文件，约 127 KB）：只有 `startup.lua` 和 dcnet
 包的 worker 所需模块，循环执行 `dcnet worker --headless`。镜像里**没有** ush、firstboot、
 BIOS、man/usr/cmd、`fontdata/`、`lib/cc_chinese.lua`/`cc_font*` 或桌面包——计算端没有
 中文字体支持和交互界面。主控端保留完整 unixshell + multishell。

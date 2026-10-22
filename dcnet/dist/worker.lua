@@ -811,7 +811,13 @@ function Console:log(text, colour)
     text = util.tr(tostring(text))
     term.redirect(self.logWin)
     if colour then term.setTextColour(colour) end
-    print(tostring(text))
+    local draw = rawget(_G, "DCNET_DRAW")
+    local drawn = false
+    if type(draw) == "function" then
+        local ok, res = pcall(draw, text, colour)
+        drawn = (ok and res == true)
+    end
+    if not drawn then print(tostring(text)) end
     if colour then term.setTextColour(WHITE) end
     term.redirect(self.hasPrompt and self.promptWin or self.logWin)
 end
@@ -864,6 +870,7 @@ function M.null(opts)
 end
 
 function Null:setStatus(text) self.statusText = text end
+
 function Null:log(text)
     text = util.tr(tostring(text))
     if self.logFile then util.appendLog(self.logFile, util.logLine(text)) end

@@ -210,9 +210,21 @@ end
 section("语言切换（lang）")
 do
     local L = U["dc.lang"]
+    -- 2b 会把 DCNET_CJK_READY 当成"字体介质找到了"来测翻译；测完要还原，
+    -- 否则后面的集成测试会以为这台机器能画汉字。
+    local savedReady = rawget(_G, "DCNET_CJK_READY")
     check(L.set("en") == true and L.get() == "en", "可设回英文")
     check(L.tr("Workers 2/3 online") == "Workers 2/3 online", "en 模式原样输出")
+
+    -- 没有 CJK 字形介质时必须回退英文：原版 CC 终端没有汉字字形，输出中文
+    -- 只会是乱码，所以 zh 翻译要先看 _G.DCNET_CJK_READY。
+    _G.DCNET_CJK_READY = nil
     check(L.set("zh") == true and L.get() == "zh", "可切换到中文")
+    check(L.tr("Workers 2/3 online") == "Workers 2/3 online",
+        "没有 CJK 字体介质时 zh 也输出英文（回退，不乱码）")
+
+    -- 有字形介质（主控启动时 cjk.available() 成功）才真的翻译
+    _G.DCNET_CJK_READY = true
     local panel = L.tr("Workers 2/3 online   parallel 1/2   queue 0")
     check(panel:find("节点", 1, true) ~= nil and panel:find("在线", 1, true) ~= nil,
         "面板行翻译为中文：" .. panel)
@@ -223,6 +235,7 @@ do
     local ok, err = L.set("fr")
     check(ok == nil and err ~= nil, "拒绝未知语言")
     L.set("en")
+    _G.DCNET_CJK_READY = savedReady
 end
 
 -- ── 3. 五个内置作业的真机计算 ─────────────────────────────────────────────

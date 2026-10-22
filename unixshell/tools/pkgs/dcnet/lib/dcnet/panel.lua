@@ -186,8 +186,9 @@ function M.linesFor(sched, cloud, w, h)
     h = math.max(1, tonumber(h) or 19)
 
     local function add(text, colour)
-        text = util.tr(tostring(text))
-        out[#out + 1] = { text = util.trunc(text, w), colour = colour }
+        -- 面板固定是 6x9 像素的字符网格（一个汉字要 6x4 格），所以面板永远是
+        -- 英文：不经过 util.tr，也就不会在 zh 模式里出现撒豆子一样的乱码。
+        out[#out + 1] = { text = util.trunc(tostring(text), w), colour = colour }
     end
 
     add(string.format("dcnet master #%d   %s", os.getComputerID(), os.date("%H:%M:%S")),
@@ -237,7 +238,6 @@ function M.linesFor(sched, cloud, w, h)
         else
             cell = "#" .. wk.id .. ":idle"
         end
-        cell = util.tr(cell)
         cells[#cells + 1] = cell
     end
     if #cells > 0 then

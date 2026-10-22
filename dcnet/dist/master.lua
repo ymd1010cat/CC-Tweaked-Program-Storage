@@ -5,7 +5,7 @@
   要改逻辑请改 src/ 下的源码，然后重新运行：
       python tools/build.py
 
-  模块：dc.util, dc.protocol, dc.net, dc.console, dc.xfer, dc.jobs, dc.sched, dc.master, dc.cloud, dc.crypto, dc.lang, dc.panel, dc.state
+  模块：dc.util, dc.protocol, dc.net, dc.console, dc.xfer, dc.jobs, dc.sched, dc.master, dc.cjk, dc.cjk_fonts, dc.cjk_shards, dc.cloud, dc.crypto, dc.lang, dc.panel, dc.state
 ========================================================================== ]]
 local __dc_modules, __dc_cache = {}, {}
 local function __dc_define(name, fn) __dc_modules[name] = fn end
@@ -811,7 +811,13 @@ function Console:log(text, colour)
     text = util.tr(tostring(text))
     term.redirect(self.logWin)
     if colour then term.setTextColour(colour) end
-    print(tostring(text))
+    local draw = rawget(_G, "DCNET_DRAW")
+    local drawn = false
+    if type(draw) == "function" then
+        local ok, res = pcall(draw, text, colour)
+        drawn = (ok and res == true)
+    end
+    if not drawn then print(tostring(text)) end
     if colour then term.setTextColour(WHITE) end
     term.redirect(self.hasPrompt and self.promptWin or self.logWin)
 end
@@ -864,6 +870,7 @@ function M.null(opts)
 end
 
 function Null:setStatus(text) self.statusText = text end
+
 function Null:log(text)
     text = util.tr(tostring(text))
     if self.logFile then util.appendLog(self.logFile, util.logLine(text)) end
@@ -2360,8 +2367,17 @@ local state   = dc_require("dc.state")
 local cloud   = dc_require("dc.cloud")
 local panel   = dc_require("dc.panel")
 local lang    = dc_require("dc.lang")
+local cjk     = dc_require("dc.cjk")
 
 _G.DCNET_TR = function(text) return lang.tr(text) end
+
+do
+    local ok, ready = pcall(cjk.available)
+    if ok and ready then
+        _G.DCNET_CJK_READY = true
+        _G.DCNET_DRAW = function(text, colour) return cjk.say(text, colour) end
+    end
+end
 
 local M = {}
 
@@ -2987,6 +3003,11 @@ function M.run(opts)
                     ui:log("language: " .. tostring(lerr), col("orange", 2))
                 else
                     ui:log("language: " .. lang.get() .. " (persisted)", col("lime", 32))
+
+                    if lang.get() == "zh" and rawget(_G, "DCNET_CJK_READY") ~= true then
+                        ui:log("zh needs the CJK font medium (insert the unixshell font disks + enable the ush-cjk-font resource pack); text stays English",
+                            col("orange", 2))
+                    end
                     if PN:attached() then PN:redraw(S, CL, true) end
                 end
             end
@@ -3580,6 +3601,1065 @@ function M.run(opts)
 end
 
 return M
+
+end)
+
+__dc_define("dc.cjk", function()
+local cjk = {}
+
+local shards = dc_require("dc.cjk_shards")
+local fonts = dc_require("dc.cjk_fonts")
+
+cjk.config = {
+
+    base = nil,
+    size = 12,
+    text_color = colors.white,
+    bg_color = colors.black,
+
+    fallback = 0xFFFD,
+}
+
+function cjk.stem(size)
+    return "shs" .. tostring(size)
+end
+
+local function stem_of(base)
+    return tostring(base):match("([^/]+)$") or tostring(base)
+end
+
+local function bases_on(medium)
+    local dir = medium .. "/" .. fonts.DIR
+    if not (fs.exists(dir) and fs.isDir(dir)) then return {} end
+    local found = {}
+    for _, name in ipairs(fs.list(dir) or {}) do
+        local stem = name:match("^(.*)_index%.lua$")
+        if stem then found[#found + 1] = dir .. "/" .. stem end
+    end
+    table.sort(found)
+
+    local prefer = { cjk.stem(cjk.config.size), "shs16", "shs12", "shs8" }
+    local out, taken = {}, {}
+    for _, want in ipairs(prefer) do
+        for _, base in ipairs(found) do
+            if stem_of(base) == want and not taken[base] then
+                taken[base] = true
+                out[#out + 1] = base
+            end
+        end
+    end
+    for _, base in ipairs(found) do
+        if not taken[base] then
+            taken[base] = true
+            out[#out + 1] = base
+        end
+    end
+    return out
+end
+
+local function size_from_index(index)
+    if type(index) ~= "table" then return nil end
+    local rows = tonumber(index.__rows)
+    if not rows or rows <= 0 then return nil end
+    return rows
+end
+cjk.size_from_index = size_from_index
+
+local function adopt(base, ok, ...)
+
+    if ok then
+        local size = size_from_index(shards.index and shards.index())
+        if size then cjk.config.size = size end
+    end
+    return ok, ...
+end
+
+local function ensure()
+    if cjk.config.base then
+        local base, _medium, _index, why = fonts.resolve(cjk.config.base)
+        if not base then return false, why end
+        return adopt(base, shards.init(base))
+    end
+
+    local all = {}
+    for _, entry in ipairs(fonts.media()) do
+        for _, base in ipairs(entry.bases or {}) do all[#all + 1] = base end
+    end
+    if #all == 0 then
+        local _b, _m, _i, find_why = fonts.find()
+        return false, find_why
+    end
+
+    local chosen = nil
+    for _, want in ipairs({ "shs12", "shs8", "shs16",
+                            cjk.stem(cjk.config.size) }) do
+        for _, base in ipairs(all) do
+            if stem_of(base) == want then chosen = base break end
+        end
+        if chosen then break end
+    end
+    chosen = chosen or all[1]
+    return adopt(chosen, shards.init(chosen))
+end
+
+function cjk.render()
+    local ok, why = ensure()
+    if not ok then
+        error(fonts.why(why), 2)
+    end
+    return shards
+end
+
+function cjk.available()
+    return ensure()
+end
+
+function cjk.codepoints(text)
+    local s = tostring(text)
+    local i, n = 1, #s
+    return function()
+        if i > n then return nil end
+        local b1 = string.byte(s, i)
+        i = i + 1
+        if b1 < 0x80 then return b1 end
+        if b1 < 0xC0 then return 32 end
+        local function next_byte()
+            local b = string.byte(s, i)
+            i = i + 1
+            return b or 0x80
+        end
+        if b1 < 0xE0 then
+            return (b1 - 0xC0) * 64 + (next_byte() - 0x80)
+        elseif b1 < 0xF0 then
+            local b2, b3 = next_byte(), next_byte()
+            return (b1 - 0xE0) * 4096 + (b2 - 0x80) * 64 + (b3 - 0x80)
+        elseif b1 < 0xF8 then
+            local b2, b3, b4 = next_byte(), next_byte(), next_byte()
+            return (b1 - 0xF0) * 262144 + (b2 - 0x80) * 4096
+                 + (b3 - 0x80) * 64 + (b4 - 0x80)
+        end
+        return 32
+    end
+end
+
+function cjk.cell_byte(r0l, r1l, r2l, r0r, r1r, r2r)
+    local m = 0
+    if r0l == "1" then m = m + 1 end
+    if r1l == "1" then m = m + 2 end
+    if r2l == "1" then m = m + 4 end
+    if r0r == "1" then m = m + 8 end
+    if r1r == "1" then m = m + 16 end
+    if r2r == "1" then m = m + 32 end
+    return string.char(128 + m)
+end
+
+function cjk.cells(size)
+    size = size or cjk.config.size
+    return math.ceil(size / 2), math.ceil(size / 3)
+end
+
+local function blank_row(width)
+    return string.rep("0", width)
+end
+
+local function render_glyph(matrix, x, y)
+    local w = #(matrix[1] or "")
+    local cells_w, cells_h = cjk.cells(cjk.config.size)
+    local fg = colors.toBlit(cjk.config.text_color)
+    local bg = colors.toBlit(cjk.config.bg_color)
+    local blank = blank_row(w)
+
+    for cy = 0, cells_h - 1 do
+        local r0 = matrix[cy * 3 + 1] or blank
+        local r1 = matrix[cy * 3 + 2] or blank
+        local r2 = matrix[cy * 3 + 3] or blank
+        local text, fgs, bgs = {}, {}, {}
+        for cx = 0, cells_w - 1 do
+            local a = cx * 2 + 1
+            local b = cx * 2 + 2
+            text[#text + 1] = cjk.cell_byte(
+                r0:sub(a, a), r1:sub(a, a), r2:sub(a, a),
+                r0:sub(b, b), r1:sub(b, b), r2:sub(b, b))
+            fgs[#fgs + 1] = fg
+            bgs[#bgs + 1] = bg
+        end
+        term.setCursorPos(x, y + cy)
+        term.blit(table.concat(text), table.concat(fgs), table.concat(bgs))
+    end
+    return cells_h
+end
+
+function cjk.draw(text, x, y)
+    local ok, why = ensure()
+    if not ok then
+        return { ok = false, reason = why, drawn = 0, missing = 0, absent = 0,
+                 missing_parts = {}, cells = 0 }
+    end
+
+    local cx, cy = term.getCursorPos()
+    if x then cx = x end
+    if y then cy = y end
+    local screen_w = select(1, term.getSize())
+    local cells_w, cells_h = cjk.cells(cjk.config.size)
+
+    local report = { ok = true, reason = nil, drawn = 0, missing = 0, absent = 0,
+                     missing_parts = {}, cells = 0, error = nil }
+    for code in cjk.codepoints(text) do
+        local matrix, err = shards.get(code)
+        if matrix then
+            render_glyph(matrix, cx, cy)
+            report.drawn = report.drawn + 1
+        else
+            local gap = shards.absent(code)
+            if gap then
+
+                report.absent = report.absent + 1
+                local known = false
+                for _, part in ipairs(report.missing_parts) do
+                    if part == gap.part then known = true end
+                end
+                if not known then report.missing_parts[#report.missing_parts + 1] = gap.part end
+                if not report.reason then report.reason = gap.why end
+                if not report.error then report.error = gap.why end
+            else
+                local fallback = shards.get(cjk.config.fallback)
+                if fallback then
+                    render_glyph(fallback, cx, cy)
+                else
+
+                    local box_gap = shards.absent(cjk.config.fallback)
+                    if box_gap then
+                        if not report.reason then report.reason = box_gap.why end
+                        if not report.error then report.error = box_gap.why end
+                    end
+                end
+            end
+            report.missing = report.missing + 1
+
+            if err and err ~= "not in this set" and not report.error then
+                report.error = err
+            end
+        end
+        report.cells = report.cells + 1
+        cx = cx + cells_w
+        if cx + cells_w - 1 > screen_w then
+            cx = 1
+            cy = cy + cells_h
+        end
+    end
+    term.setCursorPos(cx, cy)
+    return report
+end
+
+function cjk.clear(x, y, cols, rows)
+    local bg = colors.toBlit(cjk.config.bg_color)
+    local row = string.rep(" ", cols)
+    local row_bg = string.rep(bg, cols)
+    for j = 0, rows - 1 do
+        term.setCursorPos(x, y + j)
+        term.blit(row, string.rep("0", cols), row_bg)
+    end
+end
+
+function cjk.measure(text)
+    local n = 0
+    for _ in cjk.codepoints(text) do n = n + 1 end
+    local cells_w, cells_h = cjk.cells(cjk.config.size)
+    return n * cells_w, cells_h
+end
+
+function cjk.clear_cache()
+    shards.clear()
+end
+
+local function decode(text)
+    local out, i, n = {}, 1, #text
+    while i <= n do
+        local b = text:byte(i)
+        local cp, len
+        if b < 0x80 then
+            cp, len = b, 1
+        elseif b < 0xC0 then
+            cp, len = b, 1
+        elseif b < 0xE0 then
+            local b2 = text:byte(i + 1) or 0x80
+            cp, len = (b - 0xC0) * 0x40 + (b2 % 0x40), 2
+        elseif b < 0xF0 then
+            local b2 = text:byte(i + 1) or 0x80
+            local b3 = text:byte(i + 2) or 0x80
+            cp = (b - 0xE0) * 0x1000 + (b2 % 0x40) * 0x40 + (b3 % 0x40)
+            len = 3
+        else
+            local b2 = text:byte(i + 1) or 0x80
+            local b3 = text:byte(i + 2) or 0x80
+            local b4 = text:byte(i + 3) or 0x80
+            cp = (b - 0xF0) * 0x40000 + (b2 % 0x40) * 0x1000 +
+                 (b3 % 0x40) * 0x40 + (b4 % 0x40)
+            len = 4
+        end
+        len = math.min(len, n - i + 1)
+        out[#out + 1] = { cp = cp, cjk = cp >= 0x2E80, bytes = text:sub(i, i + len - 1) }
+        i = i + len
+    end
+    return out
+end
+cjk.decode = decode
+
+function cjk.split_lines(text)
+    local out = {}
+    for line in (tostring(text) .. "\n"):gmatch("(.-)\n") do out[#out + 1] = line end
+    if #out == 0 then out[1] = "" end
+    return out
+end
+
+local function has_cjk(chars)
+    for _, c in ipairs(chars) do
+        if c.cjk then return true end
+    end
+    return false
+end
+
+function cjk.say(text, colour)
+    if type(term) ~= "table" or type(term.blit) ~= "function" then return false end
+
+    if not cjk._ready then
+        if not cjk.available() then return false end
+        cjk._ready = true
+    end
+    if colour then cjk.config.text_color = colour end
+
+    local lines = cjk.split_lines(text)
+    local decoded, any = {}, false
+    for i = 1, #lines do
+        decoded[i] = decode(lines[i])
+        if has_cjk(decoded[i]) then any = true end
+    end
+    if not any then return false end
+
+    local w, h = term.getSize()
+    local cw, ch = cjk.cells(cjk.config.size)
+    local _, y = term.getCursorPos()
+
+    for i = 1, #lines do
+        local chars = decoded[i]
+        if not has_cjk(chars) then
+
+            if y > h then
+                term.scroll(1)
+                y = h
+            end
+            term.setCursorPos(1, y)
+            term.write(lines[i])
+            y = y + 1
+        else
+
+            local rows, row, used = {}, {}, 0
+            for _, c in ipairs(chars) do
+                local width = c.cjk and cw or 1
+                if used + width > w and #row > 0 then
+                    rows[#rows + 1] = row
+                    row, used = {}, 0
+                end
+                row[#row + 1] = c
+                used = used + width
+            end
+            rows[#rows + 1] = row
+
+            local need = #rows * ch
+            if y + need - 1 > h then
+                local over = y + need - 1 - h
+                if over >= h then
+                    term.clear()
+                    y = 1
+                else
+                    term.scroll(over)
+                    y = y - over
+                    if y < 1 then y = 1 end
+                end
+            end
+
+            for _, r in ipairs(rows) do
+                local x, j = 1, 1
+                while j <= #r do
+
+                    local is_cjk = r[j].cjk
+                    local buf = {}
+                    while j <= #r and r[j].cjk == is_cjk do
+                        buf[#buf + 1] = r[j].bytes
+                        j = j + 1
+                    end
+                    local piece = table.concat(buf)
+                    if is_cjk then
+                        cjk.draw(piece, x, y)
+                        x = x + #buf * cw
+                    else
+                        term.setCursorPos(x, y)
+                        term.write(piece)
+                        x = x + #buf
+                    end
+                end
+                y = y + ch
+            end
+        end
+    end
+
+    if y > h then y = h end
+    term.setCursorPos(1, y)
+    return true
+end
+
+return cjk
+
+end)
+
+__dc_define("dc.cjk_fonts", function()
+local cjk_fonts = {}
+
+cjk_fonts.MARKER = "cc_fonts.marker"
+
+cjk_fonts.DIR = "fonts"
+
+cjk_fonts.MANIFEST_SUFFIX = ".set.lua"
+
+cjk_fonts.DRIVES = { "/disk", "/disk0", "/disk1", "/disk2", "/disk3", "/rom" }
+
+cjk_fonts.CANDIDATES = nil
+
+local function exists(path)
+    return fs.exists(path)
+end
+
+local function is_medium(path)
+    if not (exists(path) and fs.isDir(path)) then return false end
+    local ok, cap = pcall(fs.getCapacity, path)
+    if ok and cap == nil then return false end
+    return true
+end
+
+local function within(path, root)
+    if type(path) ~= "string" or type(root) ~= "string" then return false end
+    if path == root then return true end
+    return path:sub(1, #root + 1) == root .. "/"
+end
+
+local function candidates()
+    if cjk_fonts.CANDIDATES then return cjk_fonts.CANDIDATES end
+    local out, seen = {}, {}
+    local function add(path)
+        if type(path) ~= "string" or path == "" then return end
+        if seen[path] then return end
+        seen[path] = true
+        out[#out + 1] = path
+    end
+
+    local ok, mounts = pcall(dc_require, "dc.mounts")
+    if ok and type(mounts) == "table" and mounts.list then
+        local ok_list, list = pcall(mounts.list)
+        if ok_list then
+            for _, entry in ipairs(list or {}) do add(entry.source) end
+        end
+    end
+    for _, drive in ipairs(cjk_fonts.DRIVES) do add(drive) end
+    return out
+end
+
+local function bases_under(medium)
+    local dir = medium .. "/" .. cjk_fonts.DIR
+    if not (exists(dir) and fs.isDir(dir)) then return nil end
+    local out = {}
+    for _, name in ipairs(fs.list(dir) or {}) do
+        local stem = name:match("^(.*)_index%.lua$")
+        if stem then out[#out + 1] = dir .. "/" .. stem end
+    end
+    table.sort(out)
+    return out
+end
+
+local function stem_of(path)
+    return tostring(path):match("([^/]+)$") or tostring(path)
+end
+cjk_fonts.stem_of = stem_of
+
+function cjk_fonts.manifest(base)
+    local path = base .. cjk_fonts.MANIFEST_SUFFIX
+    if not exists(path) then return nil, path end
+    local handle = fs.open(path, "r")
+    if not handle then return nil, path end
+    local text = handle.readAll()
+    handle.close()
+    if type(text) ~= "string" or text == "" then return nil, path end
+    local loader = loadstring or load
+    local chunk = loader(text, "@" .. path)
+    if not chunk then return nil, path end
+    local ok, value = pcall(chunk)
+    if ok and type(value) == "table" then return value, path end
+    return nil, path
+end
+
+function cjk_fonts.media()
+    local out = {}
+    for _, medium in ipairs(candidates()) do
+        if is_medium(medium) and exists(medium .. "/" .. cjk_fonts.MARKER) then
+            local bases = bases_under(medium)
+            if bases and #bases > 0 then
+                out[#out + 1] = { medium = medium, bases = bases }
+            end
+        end
+    end
+    table.sort(out, function(a, b) return a.medium < b.medium end)
+    return out
+end
+
+function cjk_fonts.bases()
+    local out = {}
+    for _, entry in ipairs(cjk_fonts.media()) do
+        for _, base in ipairs(entry.bases) do out[#out + 1] = base end
+    end
+    return out
+end
+
+local function plan_key(plan)
+    local out = {}
+    for _, entry in ipairs(plan or {}) do
+        local ids = {}
+        for _, id in ipairs(entry.shards or {}) do ids[#ids + 1] = tostring(id) end
+        out[#out + 1] = tostring(entry.part) .. ":" .. table.concat(ids, ",")
+    end
+    return table.concat(out, ";")
+end
+
+function cjk_fonts.parts(stem)
+    stem = tostring(stem or "")
+    if stem == "" then return nil, "no set name" end
+    local present, plan, foreign = {}, nil, nil
+    for _, entry in ipairs(cjk_fonts.media()) do
+        for _, base in ipairs(entry.bases) do
+            if stem_of(base) == stem then
+                local man, man_path = cjk_fonts.manifest(base)
+                local item = { part = 1, parts = 1, base = base, medium = entry.medium }
+                local usable = true
+                if man then
+                    if type(man.name) == "string" and man.name ~= stem then
+
+                        usable = false
+                        foreign = (foreign and (foreign .. "; ") or "") ..
+                            man_path .. " names the set " .. tostring(man.name)
+                    else
+                        item.part = tonumber(man.part) or 1
+                        item.parts = tonumber(man.parts) or 1
+                        if type(man.shards) == "table" then item.shards = man.shards end
+                        if type(man.plan) == "table" and #man.plan > 0 then
+                            local key = plan_key(man.plan)
+                            if plan and key ~= "" and plan_key(plan) ~= key then
+                                foreign = (foreign and (foreign .. "; ") or "") ..
+                                    man_path .. " describes a different split of " .. stem
+                            end
+                            plan = plan or man.plan
+                        end
+                    end
+                end
+                if usable then present[#present + 1] = item end
+            end
+        end
+    end
+
+    if #present == 0 then
+        return nil, "no marked medium carries the glyph set " .. stem ..
+            " (looked at " .. table.concat(candidates(), ", ") .. " for " ..
+            cjk_fonts.DIR .. "/" .. stem .. "_index.lua)"
+    end
+
+    table.sort(present, function(a, b)
+        if a.part ~= b.part then return a.part < b.part end
+        return a.base < b.base
+    end)
+
+    local count = 1
+    for _, item in ipairs(present) do
+        if item.parts > count then count = item.parts end
+    end
+    if plan and #plan > count then count = #plan end
+
+    local here = {}
+    for _, item in ipairs(present) do here[item.part] = item end
+    local missing = {}
+    for p = 1, count do
+        if not here[p] then
+            local gap = { part = p }
+            for _, planned in ipairs(plan or {}) do
+                if tonumber(planned.part) == p then
+                    gap.shards = planned.shards
+                    gap.first = tonumber(planned.first)
+                    gap.last = tonumber(planned.last)
+                    gap.glyphs = tonumber(planned.glyphs)
+                end
+            end
+            missing[#missing + 1] = gap
+        end
+    end
+
+    local bases = {}
+    for _, item in ipairs(present) do bases[#bases + 1] = item.base end
+    return {
+        name = stem,
+        parts = count,
+        bases = bases,
+        present = present,
+        missing = missing,
+        foreign = foreign,
+    }
+end
+
+function cjk_fonts.find()
+    local saw_medium, saw_marker, saw_dir = false, nil, nil
+    for _, medium in ipairs(candidates()) do
+        if is_medium(medium) then
+            saw_medium = true
+            if exists(medium .. "/" .. cjk_fonts.MARKER) then
+                local bases = bases_under(medium)
+                if bases and #bases > 0 then
+                    local base = bases[1]
+                    return base, medium, base .. "_index.lua", nil
+                end
+                if not saw_dir then saw_dir = medium end
+                saw_marker = saw_marker or medium
+            end
+        end
+    end
+
+    if saw_marker then
+        return nil, saw_marker, nil,
+            "the font medium " .. saw_marker .. " carries " .. cjk_fonts.MARKER ..
+            " but has no glyph set in " .. saw_marker .. "/" .. cjk_fonts.DIR ..
+            "/*_index.lua (was the medium built with tools/fontdisk.py?)"
+    end
+    if saw_medium then
+        return nil, nil, nil,
+            "no mounted medium carries " .. cjk_fonts.MARKER .. ": insert the font " ..
+            "medium, or build one with tools/fontdisk.py"
+    end
+    return nil, nil, nil,
+        "no medium is inserted (looked at " .. table.concat(candidates(), ", ") ..
+        " for " .. cjk_fonts.MARKER .. "; build a font medium with " ..
+        "tools/fontdisk.py)"
+end
+
+local function mountable(path)
+    local ok, mounts = pcall(dc_require, "dc.mounts")
+    if ok and type(mounts) == "table" and mounts.map then
+        local ok_map, mapped = pcall(mounts.map, path)
+        if ok_map and type(mapped) == "string" then return mapped end
+    end
+    return path
+end
+
+function cjk_fonts.resolve(base)
+    if base then
+        local path = mountable(base)
+        local index = path .. "_index.lua"
+        if not exists(index) then
+            return nil, nil, nil, "no glyph index at " .. index
+        end
+        return path, nil, index, nil
+    end
+    return cjk_fonts.find()
+end
+
+function cjk_fonts.why(reason)
+    return "cjk_fonts: " .. tostring(reason)
+end
+
+return cjk_fonts
+
+end)
+
+__dc_define("dc.cjk_shards", function()
+local shards = {}
+
+local state = {
+    key = nil,
+    base = nil,
+    layers = {},
+    set = nil,
+    loaded = {},
+    failed = {},
+    source = nil,
+    error = nil,
+}
+
+local function stem_of(path)
+    return tostring(path):match("([^/]+)$") or tostring(path)
+end
+
+local function compile(src, name)
+    local loader = loadstring or load
+    return loader(src, name)
+end
+
+local function read_file(path)
+    if not fs.exists(path) then return nil, "no such file: " .. path end
+    local handle = fs.open(path, "r")
+    if not handle then return nil, "cannot open " .. path end
+    local text = handle.readAll()
+    handle.close()
+    if type(text) ~= "string" or text == "" then
+        return nil, "empty file: " .. path
+    end
+    return text
+end
+
+local function evaluate(path)
+    local text, why = read_file(path)
+    if not text then return nil, why end
+    local chunk, err = compile(text, "@" .. path)
+    if not chunk then return nil, "does not compile: " .. tostring(err) end
+    local ok, value = pcall(chunk)
+    if not ok then return nil, "raised when loaded: " .. tostring(value) end
+    if type(value) ~= "table" then
+        return nil, "did not evaluate to a table (" .. type(value) .. ")"
+    end
+    return value
+end
+
+local function load_index(base)
+    local path = base .. "_index.lua"
+    local text, read_why = read_file(path)
+    if not text then return nil, nil, path .. ": " .. tostring(read_why) end
+    local index, why = evaluate(path)
+    if not index then return nil, nil, path .. ": " .. tostring(why) end
+    local rows = tonumber(text:match("matrix:%s*(%d+)%s+rows"))
+    local cols = tonumber(text:match("rows%s+of%s+(%d+)%s+chars"))
+    if rows and cols then
+        index.__rows, index.__cols = rows, cols
+    end
+    return index, path
+end
+
+local function set_of(list)
+    if type(list) ~= "table" then return nil end
+    local out = {}
+    for _, id in ipairs(list) do out[tonumber(id) or id] = true end
+    return out
+end
+
+local function make_layer(base, index, source, part, shard_list)
+    return { base = base, index = index, source = source,
+             part = part or 1, shards = set_of(shard_list) }
+end
+
+local function load_shard(layer, shard_id)
+    local key = layer.base .. "|" .. tostring(shard_id)
+    if state.loaded[key] then return state.loaded[key] end
+    if state.failed[key] then return nil, state.failed[key] end
+    local path = layer.base .. "_shard" .. tostring(shard_id) .. ".lua"
+    local glyphs, why = evaluate(path)
+    if not glyphs then
+
+        state.failed[key] = path .. ": " .. tostring(why)
+        return nil, state.failed[key]
+    end
+    state.loaded[key] = glyphs
+    return glyphs
+end
+
+local function part_reason(gap, set, code)
+    local where = ""
+    if type(gap.shards) == "table" and #gap.shards > 0 then
+        where = "shards " .. tostring(gap.shards[1]) .. "-" ..
+                tostring(gap.shards[#gap.shards])
+    end
+    if gap.first and gap.last then
+        local range = string.format("U+%04X..U+%04X", gap.first, gap.last)
+        where = (where ~= "" and (where .. ", ") or "") .. range
+    end
+    local how
+    if gap.why then
+        how = "is inserted but could not be read: " .. tostring(gap.why)
+    else
+        how = "is not inserted: insert the medium that carries it"
+    end
+    return "U+" .. string.format("%04X", tonumber(code) or 0) .. " is in " ..
+        tostring(set.name) .. " part " .. tostring(gap.part) .. " of " ..
+        tostring(set.parts) .. (where ~= "" and (" (" .. where .. ")") or "") ..
+        ", which " .. how
+end
+
+local function join_numbers(list)
+    local out = {}
+    for i, n in ipairs(list) do out[i] = tostring(n) end
+    if #out <= 1 then return out[1] or "" end
+    return table.concat(out, ", ", 1, #out - 1) .. " and " .. out[#out]
+end
+
+local function status_line()
+    local set = state.set
+    if not set then
+        if state.base then
+            return "set " .. stem_of(state.base) .. " part 1 of 1"
+        end
+        return "no font set loaded" .. (state.error and (": " .. tostring(state.error)) or "")
+    end
+    local present = {}
+    for _, entry in ipairs(set.present or {}) do present[#present + 1] = entry.part end
+    local absent, broken = {}, {}
+    for _, entry in ipairs(set.missing or {}) do absent[#absent + 1] = entry.part end
+    for _, entry in ipairs(set.broken or {}) do broken[#broken + 1] = entry.part end
+    local where
+    if #present == 1 then
+        where = "part " .. tostring(present[1]) .. " of " .. tostring(set.parts)
+    else
+        where = "parts " .. join_numbers(present) .. " of " .. tostring(set.parts)
+    end
+    local tail = {}
+    if #absent > 0 then
+        tail[#tail + 1] = (#absent == 1 and "part " or "parts ") ..
+            join_numbers(absent) .. " not inserted"
+    end
+    if #broken > 0 then
+        tail[#tail + 1] = (#broken == 1 and "part " or "parts ") ..
+            join_numbers(broken) .. " could not be read"
+    end
+    if #tail == 0 then tail[1] = "all parts inserted" end
+    return "set " .. tostring(set.name) .. " " .. where .. ", " .. table.concat(tail, ", ")
+end
+
+local function incomplete()
+    local set = state.set
+    if not set then return false end
+    return #(set.missing or {}) > 0 or #(set.broken or {}) > 0
+end
+
+local function spans_media()
+    local set = state.set
+    if not set then return false end
+    return (set.parts or 1) > 1 or incomplete()
+end
+
+local function set_view(base)
+    local ok, fonts = pcall(dc_require, "dc.cjk_fonts")
+    if not (ok and type(fonts) == "table" and fonts.parts and fonts.stem_of) then
+        return nil
+    end
+    local ok_parts, picture = pcall(fonts.parts, fonts.stem_of(base))
+    if ok_parts and type(picture) == "table" and type(picture.present) == "table" and
+       #picture.present > 0 then
+        return picture
+    end
+    return nil
+end
+
+local function init_set(picture, key)
+    local layers, present, missing, broken, first_why = {}, {}, {}, {}, nil
+    for _, entry in ipairs(picture.present or {}) do
+        local index, path, why = load_index(entry.base)
+        if index then
+            layers[#layers + 1] = make_layer(entry.base, index, path, entry.part,
+                                             entry.shards)
+            present[#present + 1] = { part = entry.part, base = entry.base,
+                                      medium = entry.medium }
+        else
+
+            first_why = first_why or why
+            broken[#broken + 1] = { part = entry.part, shards = entry.shards,
+                                    first = entry.first, last = entry.last,
+                                    why = why }
+        end
+    end
+    if #layers == 0 then
+        state.key, state.base, state.layers = nil, nil, {}
+        state.set, state.source = nil, nil
+        state.error = first_why or "no glyph index could be read"
+        return false, state.error
+    end
+    for _, entry in ipairs(picture.missing or {}) do
+        missing[#missing + 1] = { part = entry.part, shards = entry.shards,
+                                  first = entry.first, last = entry.last }
+    end
+    state.key = key
+    state.layers = layers
+    state.base = layers[1].base
+    state.source = layers[1].source
+    state.set = { name = picture.name, parts = picture.parts, present = present,
+                  missing = missing, broken = broken, foreign = picture.foreign }
+    state.loaded, state.failed = {}, {}
+    state.error = nil
+    return true
+end
+
+function shards.init(base)
+    if type(base) == "table" then
+        local key = base.name or (base.bases and base.bases[1]) or "set"
+        if state.key == key and state.error == nil and not incomplete() then
+            return true
+        end
+        return init_set(base, key)
+    end
+    if type(base) ~= "string" or base == "" then
+        return false, "no base path"
+    end
+    if state.key == base and state.error == nil and not incomplete() then
+        return true
+    end
+
+    local picture = set_view(base)
+    if picture then
+        return init_set(picture, base)
+    end
+
+    local index, path, why = load_index(base)
+    if not index then
+        state.key, state.base, state.layers, state.source = nil, nil, {}, nil
+        state.set, state.loaded, state.failed = nil, {}, {}
+        state.error = why
+        return false, state.error
+    end
+    state.key = base
+    state.layers = { make_layer(base, index, path, 1) }
+    state.base = base
+    state.source = path
+    state.set = nil
+    state.loaded, state.failed = {}, {}
+    state.error = nil
+    return true
+end
+
+function shards.index()
+    local layer = state.layers[1]
+    return layer and layer.index or nil
+end
+
+function shards.get(code)
+    if #state.layers == 0 then
+        return nil, "shards: no index loaded" ..
+                    (state.error and (" (" .. state.error .. ")") or "")
+    end
+    code = tonumber(code)
+    if not code then return nil, "shards: not a codepoint: " .. tostring(code) end
+    for _, layer in ipairs(state.layers) do
+        local shard_id = layer.index[code]
+        if shard_id ~= nil then
+            local glyphs, why = load_shard(layer, shard_id)
+            if not glyphs then return nil, why end
+            local matrix = glyphs[code]
+            if matrix == nil then
+
+                return nil, layer.base .. "_shard" .. tostring(shard_id) ..
+                       ".lua does not contain U+" .. string.format("%04X", code)
+            end
+            return matrix
+        end
+    end
+    local gap = shards.absent(code)
+    if gap then return nil, gap.why end
+    return nil, "not in this set"
+end
+
+function shards.absent(code)
+    local set = state.set
+    if not set then return nil end
+    code = tonumber(code)
+    if not code then return nil end
+    local groups = {}
+    for _, entry in ipairs(set.missing or {}) do groups[#groups + 1] = entry end
+    for _, entry in ipairs(set.broken or {}) do groups[#groups + 1] = entry end
+    for _, gap in ipairs(groups) do
+        local first, last = tonumber(gap.first), tonumber(gap.last)
+        if first and last and code >= first and code <= last then
+            return { part = gap.part, parts = set.parts, name = set.name,
+                     shards = gap.shards, first = first, last = last,
+                     why = part_reason(gap, set, code) }
+        end
+    end
+    return nil
+end
+
+function shards.has(code)
+    code = tonumber(code)
+    if code == nil then return false end
+    for _, layer in ipairs(state.layers) do
+        if layer.index[code] ~= nil then return true end
+    end
+    return false
+end
+
+function shards.stats()
+    local count, cached = 0, 0
+    for _, layer in ipairs(state.layers) do
+        for _ in pairs(layer.index) do count = count + 1 end
+    end
+    for _ in pairs(state.loaded) do cached = cached + 1 end
+    local set = state.set
+    local present, missing, broken = {}, {}, {}
+    for _, entry in ipairs(set and set.present or {}) do
+        present[#present + 1] = entry.part
+    end
+    for _, entry in ipairs(set and set.missing or {}) do
+        missing[#missing + 1] = entry.part
+    end
+    for _, entry in ipairs(set and set.broken or {}) do
+        broken[#broken + 1] = entry.part
+    end
+    if not set and state.base then present[1] = 1 end
+    return {
+        base = state.base,
+        glyphs = count,
+        cached = cached,
+        error = state.error,
+        set = set and set.name or (state.base and stem_of(state.base) or nil),
+        parts = set and set.parts or 1,
+        present = present,
+        missing = missing,
+        broken = broken,
+        layers = #state.layers,
+        foreign = set and set.foreign or nil,
+        status = status_line(),
+    }
+end
+
+function shards.status()
+    return status_line()
+end
+
+function shards.sources()
+    local out = {}
+    for _, layer in ipairs(state.layers) do out[#out + 1] = layer.source end
+    return out
+end
+
+function shards.clear()
+    state.loaded = {}
+    state.failed = {}
+    if spans_media() then
+        state.key = nil
+    end
+end
+
+function shards.preload(shard_id)
+    shard_id = tonumber(shard_id)
+    if not shard_id then return nil, "shards: not a shard id" end
+    for _, layer in ipairs(state.layers) do
+        if layer.shards and layer.shards[shard_id] then
+            return load_shard(layer, shard_id)
+        end
+    end
+
+    for _, layer in ipairs(state.layers) do
+        for _, id in pairs(layer.index) do
+            if id == shard_id then return load_shard(layer, shard_id) end
+        end
+    end
+    if #state.layers == 0 then
+        return nil, "shards: no font base set (call init() first)"
+    end
+    return nil, "no medium of " .. tostring(state.set and state.set.name or state.base) ..
+                " names shard " .. tostring(shard_id)
+end
+
+function shards.source()
+    return state.source
+end
+
+return shards
 
 end)
 
@@ -5005,6 +6085,8 @@ end
 
 function M.tr(text)
     if M.lang ~= "zh" then return text end
+
+    if rawget(_G, "DCNET_CJK_READY") ~= true then return text end
     if type(text) ~= "string" then return text end
     local hit = ZH[text]
     if hit ~= nil then return hit end
@@ -5179,8 +6261,8 @@ function M.linesFor(sched, cloud, w, h)
     h = math.max(1, tonumber(h) or 19)
 
     local function add(text, colour)
-        text = util.tr(tostring(text))
-        out[#out + 1] = { text = util.trunc(text, w), colour = colour }
+
+        out[#out + 1] = { text = util.trunc(tostring(text), w), colour = colour }
     end
 
     add(string.format("dcnet master #%d   %s", os.getComputerID(), os.date("%H:%M:%S")),
@@ -5227,7 +6309,6 @@ function M.linesFor(sched, cloud, w, h)
         else
             cell = "#" .. wk.id .. ":idle"
         end
-        cell = util.tr(cell)
         cells[#cells + 1] = cell
     end
     if #cells > 0 then
