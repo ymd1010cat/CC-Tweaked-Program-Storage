@@ -459,22 +459,61 @@ function M.dns_server_start(node, opts)
     return srv
 end
 
+-- strict dotted quad -> integer, and total: it returns nil,reason instead of raising.
+-- hosts.txt is hand-edited, so a single malformed line must never take down the boot
+-- (services_setup is the first thing node:setup calls).
+local function parse_hosts_ip(s)
+    local a, b, c, d = tostring(s or ""):match("^(%d%d?%d?)%.(%d%d?%d?)%.(%d%d?%d?)%.(%d%d?%d?)$")
+    if not a then return nil, "not a dotted quad" end
+    for _, octet in ipairs({ a, b, c, d }) do
+        if #octet > 1 and octet:sub(1, 1) == "0" then return nil, "leading zero octet" end
+        if tonumber(octet) > 255 then return nil, "octet out of range" end
+    end
+    return M.ip2int(s)                     -- validated above, so this cannot raise
+end
+
+-- hosts.txt lines:  <name> <ip>   (# comments and blank lines are ignored)
+-- Every line is validated on its own inside a pcall: a bad line is skipped, counted in
+-- node.hosts_bad and logged as HOSTS_BAD_LINE, and the good lines still load.
 function M.hosts_load(node, path)
     path = path or "hosts.txt"
-    local t = {}
-    if fs.exists(path) then
-        local f = fs.open(path, "r")
+    local t, bad = {}, 0
+    if fs.exists and fs.exists(path) then
+        local ok, f = pcall(fs.open, path, "r")
+        if not ok or not f then
+            -- unreadable right now (locked/racing with an editor): keep what we have
+            node:log("HOSTS_READ_FAIL path=%s err=%s", path, tostring(f))
+            return node.hosts or t
+        end
+        local lineno = 0
         for line in f.readLine do
+            lineno = lineno + 1
             line = line:gsub("#.*$", ""):gsub("^%s+", ""):gsub("%s+$", "")
-            local name, ip = line:match("^([%w%-_.]+)%s+([%d%.]+)$")
-            if name then t[name] = M.ip2int(ip) end
+            if line ~= "" then
+                local name, ip_str = line:match("^([%w%-_.]+)%s+([^%s]+)$")
+                if name then
+                    local ok_line, ip, why = pcall(parse_hosts_ip, ip_str)
+                    if ok_line and ip then
+                        t[name] = ip
+                    else
+                        bad = bad + 1
+                        -- on a pcall failure the error message arrives in `ip`
+                        node:log("HOSTS_BAD_LINE line=%d path=%s reason=%s", lineno, path,
+                            tostring(ok_line and why or ip))
+                    end
+                else
+                    bad = bad + 1
+                    node:log("HOSTS_BAD_LINE line=%d path=%s reason=malformed line", lineno, path)
+                end
+            end
         end
         f.close()
         local n = 0
         for _ in pairs(t) do n = n + 1 end
-        if n > 0 then node:log("HOSTS_LOADED n=%d path=%s", n, path) end
+        if n > 0 or bad > 0 then node:log("HOSTS_LOADED n=%d bad=%d path=%s", n, bad, path) end
     end
     node.hosts = t
+    node.hosts_bad = bad
     return t
 end
 

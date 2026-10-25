@@ -13,6 +13,24 @@ daemons speak either rednet or rpv without changing what they do.
 | `etc/network.conf` | `transport=`, `rpv_side=`, `rpv_cidr=`, `rpv_channel=`, `rpv_mtu=`, `rpv_peer_<id>=`, `rpv_reasm_bytes=`, `rpv_reasm_entries=`, `rpv_log_max_bytes=` |
 | `tests/batch3_check.lua` | the transport assertions (backend choice, port mapping, delegation) |
 
+## Vendored version and last sync
+
+| | |
+| --- | --- |
+| source of truth | `rpv1/poc/rpv/` in this repository (sibling of `unixshell/`) |
+| vendored at | rpv1 `bfe2a8e` (2026-10-25, "rpv1: fix hosts hot-reload path and survive malformed hosts lines"); the `.lua` files also match rpv1 `366fd18` |
+| last merge | 2026-10-25 |
+| merged | `services.lua`: new `parse_hosts_ip`, and `hosts_load` now validates every line inside a `pcall`, skips a bad line and logs it (`node.hosts_bad`, `HOSTS_BAD_LINE`) instead of failing the boot. `node.lua`: the hot reload watcher follows `cfg.hosts_file` instead of a hard coded `hosts.txt`, and the boot baseline records the same path |
+| already in sync | `crypto.lua` (`load_seed_file` / `add_entropy` are present; the shell itself never calls them), `wansec.lua` (vendored and loaded by `loader.lua`), and every other module except the two this merge touched |
+| kept local | the four changes listed under "Local changes to the vendored stack" |
+| not vendored | `API.md` and rpv1's own test suite (developer material, never deployed); `loader.lua` and `node-start.lua` exist only here (shell entry points) |
+| sync rule | probe first, then take rpv1's fixes file by file; never overwrite `rpv/` |
+
+Seven modules (`arp`, `compat`, `fabric`, `icmp`, `route`, `udp`, `util`) differ from
+rpv1 by one byte: their header comment uses `--` where rpv1 has an em dash. That is an
+old ASCII normalisation (the machine copy must stay plain ASCII), not a pending fix, so
+`diff` will always show those seven and they are not part of a sync.
+
 ## What changed in the shell
 
 Every direct `rednet.*` call became `rpvnet.*`: `lib/xfer.lua`, `lib/rexec.lua`,
@@ -52,10 +70,18 @@ make progress while it waits, instead of handing the process to `node:run()`.
 
 ## Local changes to the vendored stack
 
-Two, and both are documented where they live:
+Four, and all are documented where they live:
 
 * **The bounded pump** (`node:pump`, above) -- the shell drives the stack instead of
   handing it the process.
+* **A configurable reassembly budget** (`reasm_bytes` / `reasm_entries` read in
+  `M.node_new`, filled from `rpv_reasm_bytes` / `rpv_reasm_entries` in
+  `/etc/network.conf`, default 524288 / 128). The stock 16 entries / 64 KB is sized for
+  a quiet segment; a chunked file transfer needs the larger budget.
+* **Fragment pacing** (`frag_pace` / `frag_pace_ms`, from `rpv_frag_pace` /
+  `rpv_frag_pace_ms`). Opt-in and off by default: on a real modem the first fragment
+  goes at once and the rest follow on a timer, because a modem handed a whole datagram
+  in one loop drops most of it (144 FRAGMENTED, 0 REASSEMBLED, measured).
 * **A capped node log** (`log_write` in `rpv/node.lua`). The node logs every frame event,
   which is what makes a hardware failure readable, but it also means the log grows for as
   long as the machine is up -- into a disk of about 1 MB. Measured: a 200 KB `rget`/`rput`
@@ -69,10 +95,11 @@ Two, and both are documented where they live:
 
 ## Verifying
 
-    python tests/run_all.py                 # gates + suites (expect 718+ passed, 0 failed)
-    python tests/run_all.py --gates         # only the five gates
+    python tests/run_all.py                 # gates + suites (2026-10-25: ALL GREEN,
+                                            # gates 1-9 clean, 10 suites, 3674 assertions, 0 failed)
+    python tests/run_all.py --gates         # only the gates
 
-The transport assertions live in the `batch3` suite (110 checks after the merge). They
+The transport assertions live in the `batch3` suite (493 checks on 2026-10-25). They
 cover two layers:
 
 * the layer itself: it loads, exposes the rednet shape, maps protocols to stable ports
@@ -113,11 +140,16 @@ one acceptance: `verdict=PASS`.
 CraftOS-PC does not need a server at all: one emulator process holds both computers when
 `ccemux.openEmu` spawns the second one.
 
-    pwsh -File tools\rpv-verify\_ush-rpv-verify3.ps1     # transport round trip
+    pwsh -File tools\rpv-verify\ps1\_ush-rpv-verify3.ps1     # transport round trip
     RESULT ush-rpv-verify3 server=PASS client=PASS
 
-    pwsh -File tools\rpv-verify\_ush-rpv-file.ps1        # chunked rget / rput
+    pwsh -File tools\rpv-verify\ps1\_ush-rpv-file.ps1        # chunked rget / rput
     RESULT ush-rpv-file server=PASS
+
+Both were re-run on 2026-10-25 on the tree after this sync (rpv1 `bfe2a8e`), with `-Work`
+pointed at a scratch directory: `RESULT ush-rpv-verify3 server=PASS client=PASS` and
+`RESULT ush-rpv-file server=PASS`, whose server side reports
+`pushed size=200000 crc=4c790f2d same_as_source=true`.
 
 The second one is the file protocol end to end: a 200,000 byte payload, the default 4096 byte
 chunk (49 chunks, each a ~6 KB datagram = thirteen fragments at MTU 512), `rget` from the peer
