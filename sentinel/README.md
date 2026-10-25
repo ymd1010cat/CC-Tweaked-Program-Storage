@@ -22,6 +22,7 @@ Sentinel 是给 ComputerCraft / CraftOS 用的一套门禁与用户管理方案�
 认证服务器 --(频道 1，每 1 秒)--> heartbeat 广播
 认证服务器 --(左侧红石)--> 门/金库机构（同意 open_request 时 1 秒脉冲）
 终端 --(频道 2)--> audit_event（带签名，含 role）----------> 审计服务器
+审计服务器 --(本机 users.db 快照)--> 复核 role，不一致则丢弃并写 /auth/audit_reject.log
 审计服务器 --(频道 2)--> audit_ack（针对单个事件）
 审计服务器 --(频道 2，每 5 秒)--> audit_heartbeat 广播
 审计服务器 --(背面红石 + 驱动器)--> 软盘归档，成功后换盘
@@ -70,12 +71,13 @@ auth_response: server_id|nonce_c|nonce_s|tostring(success)|tostring(role or "")
 | 角色 | 数量 | 职责 | 频道 | 关键要求 |
 |---|---|---|---|---|
 | 认证服务器 | 1 台 | 广播心跳；处理取盐、认证与 `open_request`；本机根控制台管理用户与终端密钥；用左侧红石执行开门 | 1 | 同一有线网络里必须唯一；左侧红石接门禁 |
-| 审计服务器 | 1 台 | 验签、防重放、限速、去重、链式落盘、归档换盘、回执 | 2 | 需要终端密钥库副本与驱动器 |
+| 审计服务器 | 1 台 | 验签、角色交叉校验、防重放、限速、去重、链式落盘、归档换盘、回执 | 2 | 需要终端密钥库副本、`/auth/users.db` 快照与驱动器 |
 | 客户端终端 | 1 台起 | 登录、菜单、发起 `open_request`、退出；把动作写进审计队列 | 1（发送）、随机回包频道、2（审计/回执） | 需要有线 modem 与 PSK；没有门禁红石 |
 
-认证服务器和审计服务器可以同时在线，互不依赖；一台机器不会同时承担两种角色。认证服务器
-与客户端终端都放同一份 `/auth/role_policy.lua`，让部署里的角色定义只有一份来源（审计
-服务器只校验签名字符串里的 `role`，不做角色判定，因此不需要它）。
+认证服务器和审计服务器可以同时在线，互不依赖；一台机器不会同时承担两种角色。认证
+服务器、审计服务器与客户端终端都放同一份 `/auth/role_policy.lua`，让部署里的角色定义
+只有一份来源。认证服务器用它决定谁能开门；审计服务器用它把“事件里声称的角色”与“本机
+users.db 快照里的真实角色”规范化后再比对（见 5.3），两处的判定口径因此保持一致。
 
 ## 2. 部署文件映射（仓库目录 -> 游戏内平铺路径）
 
@@ -107,11 +109,14 @@ auth_response: server_id|nonce_c|nonce_s|tostring(success)|tostring(role or "")
 | `/auth/server_crypto.lua` | `sentinel/auth_server/auth/server_crypto.lua` |
 | `/auth/terminal_keys.lua` | `sentinel/auth_server/auth/terminal_keys.lua` |
 | `/auth/terminal_keys.db` | 从认证服务器复制，见 5.1（必须） |
+| `/auth/role_policy.lua` | `sentinel/common/role_policy.lua`（角色交叉校验用，必须） |
+| `/auth/users.db` | 从认证服务器复制，见 5.1（角色交叉校验快照，必须保持同步） |
 | `/auth/audit_config.lua` | `sentinel/audit_server/auth/audit_config.lua` |
 | `/system/audit_server.lua` | `sentinel/audit_server/system/audit_server.lua` |
 
 运行时生成：`/logs/seg_NNNN.log`、`/logs/chain.state`、`/auth/audit_fault.flag`、
-`/auth/audit_error.log`、`/swap.retry`（仅换盘重试时出现）。
+`/auth/audit_error.log`、`/auth/audit_reject.log`（角色交叉校验报警）、`/swap.retry`
+（仅换盘重试时出现）。
 
 ### 2.3 客户端终端
 
@@ -165,7 +170,9 @@ Offline mode is disabled. Connect to the auth server.
   `/auth/role_policy.lua`：缺失时登录一律 `success = false`、开门一律拒绝，根控制台也会
   拒绝 root 登录。
 - 审计服务器：至少一块有线 modem（同一网络）；一台 `drive` 外设（按名字排序取第一台）
-  与配套软盘；红石输出接到换盘机构，默认背面 `back`。
+  与配套软盘；红石输出接到换盘机构，默认背面 `back`。必须部署 `/auth/role_policy.lua`，
+  并放一份从认证服务器复制来的 `/auth/users.db` 快照：审计服务器用它交叉校验事件里的
+  role，快照缺失时所有带角色的审计事件都会被拒绝（见 5.3）。
 - 终端：至少一块有线 modem 与 PSK；**不再需要门禁红石**，开门由认证服务器执行。
 - 建议给所有机器做世界内备份：`/auth/users.db`、`/auth/terminal_keys.db`、
   `/auth/server_id`、`/logs/chain.state` 丢失的代价各不相同，见第 11 节。
@@ -326,14 +333,21 @@ nonceC, nonceS)` 完成取盐与口令校验，并在每次 `open_request` 时�
 服务器不校验口令，只校验“这台终端是否合法”以及“该用户名当前的角色是否够用”。用户名
 来自终端会话，终端软件负责只把它自己的登录用户放进请求；能改终端程序的人本来就能读到
 本机 PSK（见第 11 节）。同一个 `nonce` 在 15 秒重放窗口内再次到达会被静默忽略。
+收到 `denied` 时终端会销毁本地会话并回到登录（见 6.5），因此管理员收回权限后不需要
+额外操作，下一次开门请求就会把旧会话清掉。
 
 ## 5. 审计服务器
 
-### 5.1 部署与 `/auth/terminal_keys.db`
+### 5.1 部署、`/auth/terminal_keys.db` 与 `/auth/users.db`
 
 按 2.2 放好文件，然后**把认证服务器上的 `/auth/terminal_keys.db` 复制到审计服务器同
 路径**。审计服务器用同一份终端密钥库验签；文件缺失或过期会导致事件全部验签失败，而
 审计侧对失败是静默丢弃（无回包、无错误日志），表现为“终端一直重发、日志不增长”。
+
+还要**把认证服务器的 `/auth/users.db` 复制到审计服务器同路径**（角色交叉校验，见 5.3），
+并放一份 `/auth/role_policy.lua`。users.db 在这里是**快照**：认证服务器上增删用户或修改
+角色后要重新复制。快照过期不会伪造日志，但会把合法的角色变更当成“伪造”写进
+`/auth/audit_reject.log`，表现为终端队列一直重发。
 
 ### 5.2 启动横幅与致命错误
 
@@ -346,11 +360,12 @@ Logs:    /logs
 Ready.
 ```
 
-配置缺失/语法错误、`/sha256.lua` 或 `/auth/server_crypto.lua` 加载失败、`/logs` 无法
-创建、找不到可用有线 modem、配置的 `main_modem_side` 不存在或是无线 modem，都会写
-故障标志 `/auth/audit_fault.flag`（格式 `reason: <文本>` 与 `time: <epoch 毫秒>` 两行），
-打印 `FATAL: <原因>` 后停机。`/startup.lua` 自身加载不到
-`/system/audit_server.lua` 时只打印 `FATAL: cannot load /system/audit_server.lua`。
+配置缺失/语法错误、`/sha256.lua`、`/auth/server_crypto.lua` 或 `/auth/role_policy.lua`
+（`role_check` 开启时）加载失败、`/logs` 无法创建、找不到可用有线 modem、配置的
+`main_modem_side` 不存在或是无线 modem，都会写故障标志 `/auth/audit_fault.flag`（格式
+`reason: <文本>` 与 `time: <epoch 毫秒>` 两行），打印 `FATAL: <原因>` 后停机。
+`/startup.lua` 自身加载不到 `/system/audit_server.lua` 时只打印
+`FATAL: cannot load /system/audit_server.lua`。
 
 `main_modem_side = nil` 表示自动选择：按外设名字排序后的第一块有线 modem。
 
@@ -363,12 +378,31 @@ Ready.
 3. 重放检查：同一终端、同一 `nonce` 已在窗口内 → 视为重复，重发同一份 `audit_ack`，
    **不再写日志**。
 4. 限速：每终端 1 秒固定窗口，最多 `rate_per_sec` 条。
-5. 去重：`terminal_id|username|action` 在 `dedup_window_ms` 内最多 `dedup_burst_max` 条。
-6. 写日志、记 nonce、回 `audit_ack`（频道 2，签名 `nonce|terminal_id`）。
+5. 角色交叉校验：当场读取本机 `/auth/users.db` 快照，用 `/auth/role_policy.lua` 把事件
+   里的 `role` 与该 `username` 的真实角色都规范化后再比较（`guest` 与 `user` 视为同一
+   角色）。用户不存在、快照缺失/损坏、库里角色未知或两者不一致时，**丢弃事件并写
+   `/auth/audit_reject.log`**，且不发 ack。`role` 为空串是“未签发角色”的哨兵（登录失败
+   事件就是这样签的），它不声称任何权限，跳过比对、照常接受。这一步排限速之后，所以
+   伪造事件最多也只能按 `rate_per_sec` 的速率产生报警行，无法绕过限速刷日志。
+6. 去重：`terminal_id|username|action` 在 `dedup_window_ms` 内最多 `dedup_burst_max` 条。
+7. 写日志、记 nonce、回 `audit_ack`（频道 2，签名 `nonce|terminal_id`）。
 
 任何一步失败都只是丢弃，不发送任何错误响应。因此终端侧看到的表现只有“队列迟迟不
 清空”。第 3 步的幂等回执是刻意的：ack 在网络上丢失时，终端 10 秒后会重发同一事件，
 审计服务器再回一次 ack，不会产生重复日志。
+
+角色交叉校验是防伪造的报警面：终端持有对称 PSK，能签出任意 `role`，所以审计服务器
+不能只信“签名有效”。每次拒绝都会向 `/auth/audit_reject.log` 追加一行：
+
+```
+[YYYY-MM-DD HH:MM:SS] REJECT reason=<role_mismatch|unknown_user|unknown_stored_role|users_db_unavailable> TERMINAL=<id> USER=<user> CLAIMED=<role> REAL=<role> ACTION=<action>
+```
+
+被拒绝的事件没有回执，终端会按 10 秒重发，报警行也会重复出现——看到 `CLAIMED` 与
+`REAL` 不一致就说明有终端在伪造角色。注意角色改动后，已登录终端在重新登录前发出的
+审计事件仍会带旧角色，可能被判为 `role_mismatch`；重新登录即可恢复一致。把
+`role_check` 设为 `false` 会关闭这道校验（不建议）：服务器不再读快照、不再写 reject
+日志，只按签名接受事件。
 
 ### 5.4 分段、轮转与哈希链
 
@@ -444,6 +478,9 @@ print("chain ok, head " .. prev)
   各自被监督：函数正常返回会记 `<name> exited; restarting`；抛错记
   `<name> error: <错误>`，连续错误计数加一。任意一次成功迭代都会把计数清零。达到
   `max_consecutive_errors` 时写故障标志、红石输出 2、永久停机。
+- 角色交叉校验报警 `/auth/audit_reject.log`：每次丢弃一条未通过角色校验的事件就追加
+  一行（格式见 5.3），文件不存在时自动创建。它只是报警面，不参与监督计数、不写故障
+  标志；`role_check = false` 时不会产生任何内容。
 - 启动时若配置里 `swap_fault == 1`，会先打印：
 
   ```
@@ -596,7 +633,7 @@ Add/Delete/Change Role 只有在机器上额外部署了 `/auth/user_manager.lua
 | 结果 | 屏幕输出 | 后续 |
 |---|---|---|
 | 服务器 `ok = true` | `[OK] Vault opened by auth server.` | 结束本次会话，回到登录 |
-| 服务器拒绝（`ok = false`） | `[Denied] Access denied by auth server.` | 等待 2 秒回到菜单 |
+| 服务器拒绝（`ok = false`，角色不足或被收回） | 弹窗 `[!] Permission denied`，提示角色不足或已被管理员收回，按 Enter 关闭 | 立即销毁本地 session，回到登录界面 |
 | 网络预检失败/无 modem | `[Error] Auth server unreachable.` | 等待 2 秒回到菜单 |
 | 8 秒内没有回包 | `[Error] Auth server did not answer.` | 等待 2 秒回到菜单 |
 | 回包字段/签名不合法 | `[Denied] Invalid response ...` | 等待 2 秒回到菜单 |
@@ -604,6 +641,14 @@ Add/Delete/Change Role 只有在机器上额外部署了 `/auth/user_manager.lua
 终端**不接门禁红石、也不输出任何开门信号**；1 秒脉冲由认证服务器在本机左侧执行。服务器
 对未登记终端根本不回包，所以那种情况在终端上表现为
 `[Error] Auth server did not answer.`，而不是明确的拒绝。
+
+权限被收回后终端的表现（动态收回闭环）：认证服务器每次都当场重读 `users.db`，所以管理员
+把账号降权或删除后，终端**下一次**点 `Open Vault` 就会收到 `denied`。终端不会只回菜单：
+它先弹出 `[!] Permission denied`，关闭弹窗后立刻 `session.destroy(token)` 清掉内存里的
+会话，并返回内核的登录流程。这样旧权限不会滞留——屏幕回到登录界面，必须重新认证；即使
+管理员在终端仍处于菜单时收回了权限，也无法继续使用旧角色。注意会话角色在重新登录前不会
+刷新，期间终端发出的审计事件可能被审计服务器判为 `role_mismatch`（见 5.3），重新登录
+即可恢复。
 
 ### 6.6 Exit to CraftOS 与 `/anti.txt`
 
@@ -647,6 +692,9 @@ Add/Delete/Change Role 只有在机器上额外部署了 `/auth/user_manager.lua
   别家的 ack、其它频道上的 ack 都会被忽略。
 - 队列文件跨重启保留，下次启动会继续重发；重复事件由审计服务器的幂等回执兜底，不会
   写重复日志。
+- `audit_event` 里的 `role` 是审计服务器交叉校验的依据（见 5.3）：正常登录/动作事件带
+  服务器下发的角色；失败登录的 `LOGIN_FAIL`/`LOGIN_FAIL_TIMEOUT` 带空串，表示“没有签发
+  角色”，审计服务器对空串不做角色比对、照常记录。
 
 ## 7. 独立终端（已退役）
 
@@ -702,6 +750,9 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 | `max_consecutive_errors` | `5` | 连续错误达到该值时写故障标志并停机 |
 | `fault_flag` | `"/auth/audit_fault.flag"` | 故障标志文件 |
 | `error_log` | `"/auth/audit_error.log"` | 监督错误日志 |
+| `users_db` | `"/auth/users.db"` | 角色交叉校验用的本机用户库快照 |
+| `role_check` | `true` | 是否按 users.db 复核事件里的 `role`；`false` 关闭该防线 |
+| `reject_log` | `"/auth/audit_reject.log"` | 角色不一致/无法校验时的报警日志 |
 | `restart_delay_seconds` | `3` | 循环重启前的等待（秒） |
 | `swap_fault` | `0` | 换盘故障状态；服务器会在故障/恢复时改写它 |
 
@@ -729,8 +780,10 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 - 认证服务器的左侧红石确实接到门禁；`Open Vault` 只是 1 秒脉冲，不会保持常亮。
 - 审计服务器的 `redstone_side` 与实际接线一致；驱动器与换盘机构可用。
 - 终端不需要、也不应该接门禁红石；它的开门能力只来自认证服务器的回包。
-- 认证服务器与客户端终端都放了同一份 `/auth/role_policy.lua`，且认证服务器的
-  `/auth/users.db` 里每个账号都有合法角色。
+- 认证服务器、审计服务器与客户端终端都放了同一份 `/auth/role_policy.lua`，且认证服务器
+  的 `/auth/users.db` 里每个账号都有合法角色。
+- 审计服务器有从认证服务器复制的 `/auth/users.db` 快照；认证服务器改角色或增删用户后
+  要重新复制，否则合法事件会被当成伪造拒绝（见 5.1、5.3）。
 - 所有文件名、路径为 ASCII；CraftOS 屏幕不显示中文文件名。
 - 认证服务器与审计服务器的时间不必同步，但日志时间取自终端上报的 `timestamp`。
 
@@ -748,7 +801,10 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 | `[Error] Invalid credentials` | 口令错误；服务器缺 `/auth/user_manager.lua`；或账号角色缺失/未知导致服务端 `success = false` | 先确认口令与账号角色；再检查服务器文件与 `/auth/role_policy.lua` |
 | `[Error] Server returned no usable role.` | 服务器回了 `success = true`，但 role 为空或不在合法集合内；常见于 `users.db` 角色字段拼错/缺失，或终端缺 `/auth/role_policy.lua` | 在认证服务器用 `Change Role` 写成 admin/operator/user/guest；确认终端部署了 `role_policy.lua` |
 | 终端报 `Offline mode is disabled. Connect to the auth server.` | 旧部署仍调用 `login_standalone.lua`（例如未更新 `login.lua`）；终端已没有本地账号库 | 按 2.3 更新登录模块，删除 `/auth/mode.lua`、`/auth/users.db` 与 `/auth/user_manager.lua` |
-| `Open Vault` 显示 `[Denied] Access denied by auth server.` | 账号角色低于 operator（user/guest）；角色未知；或认证服务器缺 `/auth/role_policy.lua` | 用 root 控制台把账号改成 operator/admin；确认服务器部署了 role_policy |
+| `Open Vault` 弹窗 `[!] Permission denied` 后直接回到登录 | 账号角色低于 operator（user/guest）、角色被管理员收回/删除，或认证服务器缺 `/auth/role_policy.lua`；终端收回闭环生效 | 正常现象；需要权限就用 root 在认证服务器改成 operator/admin，再重新登录 |
+| 审计日志不增长但 `/auth/audit_reject.log` 有 `reason=role_mismatch` | 审计服务器的 users.db 快照与认证服务器不一致（改过角色/增删用户但没重新复制）；或已登录终端还在用旧角色 | 重新复制 `/auth/users.db`；让终端重新登录；对照 `CLAIMED` 与 `REAL` |
+| `/auth/audit_reject.log` 有 `reason=users_db_unavailable` | 审计服务器缺 `/auth/users.db` 快照或文件损坏 | 按 2.2 复制 users.db 后重启；确实不需要校验时才把 `role_check` 设为 `false` |
+| `/auth/audit_reject.log` 有 `reason=unknown_user` | 事件里的 username 不在快照里（可能快照过期，或终端伪造用户名） | 先重新复制 users.db；若反复出现，检查是哪台终端在发 |
 | `Open Vault` 显示 `[Error] Auth server did not answer.` | 认证服务器离线/频道不对；或该终端未登记、PSK 不匹配（服务器无法验签就不回包） | 查认证服务器横幅与 `Manage Terminal Keys`；核对 `terminal_id.txt` 与 `psk.txt` |
 | 有权限但门禁不动，终端显示 `[Denied]` | 认证服务器脉冲失败：没有 `redstone` API 或左侧被占用/接线错，服务器会按 denied 回包 | 检查认证服务器左侧红石接线后重试 |
 | 控制台 `WARNING: /auth/role_policy.lua is not loadable` | 认证服务器缺 `role_policy.lua` | 按 2.1 部署 `/auth/role_policy.lua` |
@@ -802,12 +858,18 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
     或恢复成功时红石为低电平、`swap_fault = 0`。故障细节以 `/auth/audit_fault.flag` 为准。
 14. 权限跟随账户而不是终端：角色只存在于认证服务器的 `/auth/users.db`，由
     `/auth/role_policy.lua` 解释；终端上报/回显的角色不被采信，未知角色一律拒绝
-    （fail-closed）。
+    （fail-closed）。权限被收回后，终端在下一次 `open_request` 收到 `denied` 就会销毁
+    本地会话回到登录（见 6.5），旧角色不会继续留在菜单里。
 15. 开门执行机构在认证服务器：终端连门禁红石都没有。`open_request` 只证明“这台终端
     持有登记的 PSK”和“它声称的用户名”；服务器不校验口令，用户名由终端软件从当前会话
     填入。能改终端程序的人本来就能读本机 PSK，所以物理安全仍是系统的安全上限（第 2 条）。
 16. 离线模式是明确拒绝而不是静默降级：`login.lua` 不读 `/auth/mode.lua`，
     `login_standalone.lua` 只会报 `Offline mode is disabled. Connect to the auth server.`。
+17. 审计服务器的防伪造是“验签 + 角色交叉校验”两道：对称 PSK 让终端能签出任意 `role`，
+    所以审计服务器不把 payload 里的 `role` 当事实，而是用本机 users.db 快照复核；不一致
+    就丢弃并写 `/auth/audit_reject.log`（见 5.3）。快照本身也是本机文件，能改文件的人
+    同样能改快照，这条防线针对的是“只改终端程序/伪造报文”的攻击面，不是文件级入侵
+    （见第 8 条）。
 
 相对旧实现的刻意改进（都已在代码里）：
 
@@ -823,13 +885,17 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 - 审计终端在无法签名时拒绝入队，而不是写一个永远不会被 ack 的文件。
 - 客户端正确解析 `modem_message` 的 `(side, channel, replyChannel, message)` 参数，并
   只在频道与 `terminal_id` 匹配时接受回包。
+- 权限被收回后终端立即销毁本地会话回到登录（`denied` 弹窗 + `session.destroy`），旧
+  角色不再滞留到下一次重启。
+- 审计服务器对签名有效的 `audit_event` 再按本机 users.db 快照复核 `role`；不一致时丢弃
+  并写 `/auth/audit_reject.log`，补上“终端能签任意 role”这个对称 PSK 的缺口。
 
 ## 12. 文件清单
 
 | 仓库文件 | 部署路径 | 所属机器 | 作用 |
 |---|---|---|---|
 | `sentinel/common/sha256.lua` | `/sha256.lua` | 全部 | 纯 Lua SHA-256，`hash(s)` |
-| `sentinel/common/role_policy.lua` | `/auth/role_policy.lua` | 认证服务器/客户端终端 | 角色规范化、权重与 `allows` |
+| `sentinel/common/role_policy.lua` | `/auth/role_policy.lua` | 认证服务器/审计服务器/客户端终端 | 角色规范化、权重与 `allows`（审计服务器用于交叉校验） |
 | `sentinel/terminal/startup.lua` | `/startup.lua` | 客户端终端 | 启动、沙箱、自检、anti 两阶段 |
 | `sentinel/terminal/auth/login.lua` | `/auth/login.lua` | 客户端终端 | 始终加载 login_client（登录/复核/开门请求） |
 | `sentinel/terminal/auth/login_client.lua` | `/auth/login_client.lua` | 客户端终端 | 网络挑战-响应、角色校验、`open_request` |
@@ -852,9 +918,11 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 | `sentinel/auth_server/system/user_admin.lua` | `/system/user_admin.lua` | 认证服务器 | 根控制台 |
 | `sentinel/audit_server/startup.lua` | `/startup.lua` | 审计服务器 | 加载并运行审计服务器 |
 | `sentinel/audit_server/auth/audit_config.lua` | `/auth/audit_config.lua` | 审计服务器 | 审计配置 |
-| `sentinel/audit_server/system/audit_server.lua` | `/system/audit_server.lua` | 审计服务器 | 验签、日志、归档、换盘 |
+| `sentinel/audit_server/system/audit_server.lua` | `/system/audit_server.lua` | 审计服务器 | 验签、角色交叉校验、日志、归档、换盘 |
 
 部署时不需要附带测试文件；`sentinel/tests/`（`run.lua`、`run-tests.ps1`）只存在于仓库里。
+审计服务器还需要两份部署输入：从认证服务器复制的 `/auth/users.db` 快照（角色交叉校验）
+和 `/auth/role_policy.lua`；它们由认证服务器运行时生成/共享，不在仓库文件清单里。
 
 ## 13. 部署顺序清单
 
@@ -869,16 +937,19 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 5. 终端：把 ID 写进 `/auth/terminal_id.txt`，把 Key 写进 `/auth/psk.txt`，按 2.3 放好
    其余文件（含 `role_policy.lua`）。从旧独立终端迁移时先删掉 `/auth/mode.lua`、
    `/auth/users.db` 与 `/auth/user_manager.lua`。
-6. 审计服务器：按 2.2 放好文件，**从认证服务器复制
-   `/auth/terminal_keys.db`**，按现场修改 `/auth/audit_config.lua`（`protocol` 保持
-   `secure_auth_v5`），重启，确认 `Ready.` 与频道 2。
+6. 审计服务器：按 2.2 放好文件，**从认证服务器复制 `/auth/terminal_keys.db` 与
+   `/auth/users.db`**，并放入 `/auth/role_policy.lua`，按现场修改
+   `/auth/audit_config.lua`（`protocol` 保持 `secure_auth_v5`），重启，确认 `Ready.` 与
+   频道 2。
 7. 接好红石：认证服务器**左侧**接门禁/金库机构，审计服务器 `back` 接换盘机构；终端不接
    门禁红石。插好软盘，确认 `/disk*` 出现。
 8. 开机一台终端：应通过 3 秒自检并出现登录界面；登录后确认审计服务器写入了带
    `ROLE=<role>` 的 `LOGIN_SUCCESS` 日志行与正确的哈希链。
 9. 用 root（或 operator/admin）在终端测试一次 `Open Vault`（由认证服务器脉冲 1 秒），
-   再用一个 user 账号确认会被拒绝；顺带测 `Exit to CraftOS`（两次重启后落到 shell，
-   再重启回到登录）。
+   再用一个 user 账号确认会被拒绝并回到登录；顺带测 `Exit to CraftOS`（两次重启后落到
+   shell，再重启回到登录）。权限收回闭环：先在认证服务器把一个已登录 operator 改成
+   user，再让该终端点 `Open Vault`——应弹出 `[!] Permission denied`，关闭后直接回到
+   登录界面（不是回到菜单）。
 10. 备份 `/auth/users.db`、`/auth/terminal_keys.db`、`/auth/server_id` 与
     `/logs/chain.state`；终端密钥库变更后重新同步到审计服务器。角色修改由认证服务器
     实时读取，不需要重启终端。

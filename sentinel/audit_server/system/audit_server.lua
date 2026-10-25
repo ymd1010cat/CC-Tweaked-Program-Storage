@@ -9,6 +9,7 @@ local M = {}
 local CONFIG_PATH = "/auth/audit_config.lua"
 local SHA_PATH = "/sha256.lua"
 local CRYPTO_PATH = "/auth/server_crypto.lua"
+local ROLE_POLICY_PATH = "/auth/role_policy.lua"
 local RETRY_MARKER = "/swap.retry"
 
 -- Boot defaults. /auth/audit_config.lua overrides any of these keys.
@@ -33,6 +34,9 @@ local DEFAULTS = {
     max_consecutive_errors = 5,
     fault_flag = "/auth/audit_fault.flag",
     error_log = "/auth/audit_error.log",
+    users_db = "/auth/users.db",
+    role_check = true,
+    reject_log = "/auth/audit_reject.log",
     restart_delay_seconds = 3,
     swap_fault = 0,
 }
@@ -42,6 +46,7 @@ local state = {
     cfg = nil,
     sha = nil,
     crypto = nil,
+    rolePolicy = nil,
     modemSide = nil,
     hash = "GENESIS",
     segNo = 1,
@@ -679,6 +684,70 @@ local function cleanField(value)
     return (value:gsub("[\r\n]", " "))
 end
 
+-- Role cross-check. The terminal signature proves which registered terminal
+-- sent an event; it does not prove that the role in the payload is true,
+-- because a terminal holds the symmetric PSK and can sign any role. The audit
+-- server therefore re-derives the truth from its own users.db snapshot (kept in
+-- sync with the auth server) and drops every event whose claim disagrees.
+local function readUsersDb()
+    local data = readAll(state.cfg.users_db)
+    if type(data) ~= "string" then
+        return nil
+    end
+    local ok, decoded = pcall(textutils.unserialize, data)
+    if not ok or type(decoded) ~= "table" then
+        return nil
+    end
+    return decoded
+end
+
+local function rejectLogPath()
+    if state.cfg and state.cfg.reject_log then
+        return state.cfg.reject_log
+    end
+    return DEFAULTS.reject_log
+end
+
+-- One alarm line per dropped event. The event is never acked, so the terminal
+-- keeps resending and the alarm repeats; the operator sees a clear reason and
+-- the claimed versus stored role.
+local function rejectEvent(reason, realRole, terminalId, username, claimedRole,
+    action)
+    local line = "[" .. utcStamp(nowMs()) .. "] REJECT reason="
+        .. cleanField(reason)
+        .. " TERMINAL=" .. cleanField(terminalId)
+        .. " USER=" .. cleanField(username)
+        .. " CLAIMED=" .. cleanField(claimedRole)
+        .. " REAL=" .. cleanField(realRole or "")
+        .. " ACTION=" .. cleanField(action)
+    return appendLine(rejectLogPath(), line)
+end
+
+-- nil => the claim agrees (or the check is disabled). Otherwise returns the
+-- reason plus the stored role for the alarm line.
+local function roleMismatch(username, claimedRole)
+    if state.cfg.role_check == false then
+        return nil
+    end
+    local users = readUsersDb()
+    if not users then
+        return "users_db_unavailable"
+    end
+    local record = users[username]
+    if type(record) ~= "table" then
+        return "unknown_user"
+    end
+    local storedRole = state.rolePolicy and state.rolePolicy.normalize(record.role)
+    if not storedRole then
+        return "unknown_stored_role", tostring(record.role)
+    end
+    local claimed = state.rolePolicy.normalize(claimedRole)
+    if claimed ~= storedRole then
+        return "role_mismatch", storedRole
+    end
+    return nil
+end
+
 -- The ack is signed with the terminal's own key, string nonce|terminal.
 local function sendAck(terminalId, nonce)
     local sig = state.crypto.sign(terminalId, nonce .. "|" .. terminalId)
@@ -755,6 +824,20 @@ function M.handleEvent(channel, message)
     end
     if not rateAllow(terminalId, now) then
         return false, "rate"
+    end
+
+    -- Cross-check the claimed role against the locally synced users.db. An
+    -- empty role is the "no role was issued" sentinel used by failed-login
+    -- events: it claims no privilege, so only non-empty claims are compared.
+    -- A rejected event is dropped without an ack, exactly like a bad signature.
+    -- The check runs after the rate limit on purpose: a forged-role flood must
+    -- not write reject-log lines faster than rate_per_sec.
+    if role ~= "" then
+        local mismatch, realRole = roleMismatch(username, role)
+        if mismatch then
+            rejectEvent(mismatch, realRole, terminalId, username, role, action)
+            return false, "role:" .. mismatch
+        end
     end
     if not dedupAllow(dedupKey(terminalId, username, action), now) then
         return false, "dedup"
@@ -881,6 +964,7 @@ function M.boot()
     state.cfg = nil
     state.sha = nil
     state.crypto = nil
+    state.rolePolicy = nil
     state.modemSide = nil
     state.hash = "GENESIS"
     state.segNo = 1
@@ -917,6 +1001,18 @@ function M.boot()
         fatal("cannot load " .. CRYPTO_PATH)
     end
     state.crypto = crypto
+
+    -- The role cross-check needs the same role definitions as the other
+    -- machines; without them no claimed role could be normalised, so a
+    -- half-configured server refuses to start instead of silently trusting
+    -- payload roles.
+    if cfg.role_check ~= false then
+        local rolePolicy = loadModule(ROLE_POLICY_PATH)
+        if not rolePolicy or type(rolePolicy.normalize) ~= "function" then
+            fatal("cannot load " .. ROLE_POLICY_PATH)
+        end
+        state.rolePolicy = rolePolicy
+    end
 
     if not ensureDir(cfg.logs_dir) then
         fatal("cannot create " .. tostring(cfg.logs_dir))

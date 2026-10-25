@@ -222,6 +222,7 @@ local function staticTests()
     check("static.ui_no_root_compare", not contains(ui, 'user.role == "root"'))
     check("static.ui_request_open", contains(ui, "requestOpen"))
     check("static.ui_policy", contains(ui, "role_policy"))
+    check("static.ui_denied_logout", contains(ui, "session.destroy"))
 
     local admin = source("/system/user_admin.lua")
     check("static.user_admin_no_root_compare", not contains(admin, 'user.role == "root"'))
@@ -235,6 +236,9 @@ local function staticTests()
     local auditServer = source("/system/audit_server.lua")
     check("static.audit_server_v5", contains(auditServer, "secure_auth_v5"))
     check("static.audit_server_role", contains(auditServer, "ROLE="))
+    check("static.audit_server_reject_log",
+        contains(auditServer, "audit_reject.log"))
+    check("static.audit_server_users_db", contains(auditServer, "users.db"))
 
     local netcheck = source("/system/netcheck.lua")
     check("static.netcheck_v5", contains(netcheck, "secure_auth_v5"))
@@ -666,6 +670,57 @@ local function clientOpenTests()
 end
 
 ---------------------------------------------------------------------------
+-- terminal: a denied open_request clears the local session (revocation)
+--------------------------------------------------------------------------
+
+local function uiDeniedTests()
+    local destroyed = nil
+    local active = true
+    local token = "ui-token-" .. tostring(os.epoch("utc"))
+    local session = {
+        validate = function(value)
+            if active and value == token then
+                return { name = "alice", role = "operator" }
+            end
+            return false
+        end,
+        destroy = function(value)
+            destroyed = value
+            active = false
+        end,
+    }
+    local auth = {
+        requestOpen = function(username)
+            return false, "Access denied by auth server.", "denied", nil
+        end,
+        verifyPassword = function() return false end,
+    }
+    local sandbox = { restore = function() end }
+
+    local output = {}
+    local realPrint, realSleep = print, sleep
+    local ok, result, err = pcall(function()
+        print = function(text) output[#output + 1] = tostring(text) end
+        sleep = function() end
+        -- "1" opens the vault; "" (Enter) closes the denial alert.
+        setInputs("1", "")
+        local chunk = assert(loadfile("/system/ui.lua"))
+        return chunk(token, session, sandbox, auth)
+    end)
+    print, sleep = realPrint, realSleep
+
+    check("ui.denied.returns_to_login", ok and result == "break",
+        tostring(result) .. " / " .. tostring(err))
+    check("ui.denied.session_destroyed", destroyed == token and active == false,
+        tostring(destroyed))
+    check("ui.denied.session_invalid_after", session.validate(token) == false)
+
+    local text = table.concat(output, "\n")
+    check("ui.denied.alert_mentions_revoked",
+        contains(text, "Permission denied") and contains(text, "revoked"), text)
+end
+
+---------------------------------------------------------------------------
 -- audit: terminal signing with role -> audit server verification
 ---------------------------------------------------------------------------
 
@@ -692,6 +747,35 @@ local function auditTests()
 
     local config = source("/auth/audit_config.lua")
     check("audit.config_v5", contains(config, "secure_auth_v5"))
+    check("audit.config_role_check", contains(config, "role_check"))
+    check("audit.config_reject_log", contains(config, "audit_reject.log"))
+
+    local function lineCount(path)
+        local text = readFile(path) or ""
+        return select(2, text:gsub("\n", ""))
+    end
+
+    -- A well-signed event with an arbitrary role: enough to test the
+    -- cross-check without pretending the terminal key is unknown.
+    local forgedCount = 0
+    local function signedEvent(username, role, action)
+        forgedCount = forgedCount + 1
+        local timestamp = tostring(os.epoch("utc"))
+        local nonce = "forged-" .. tostring(forgedCount) .. "-" .. timestamp
+        local data = TERMINAL_ID .. "|" .. username .. "|" .. role .. "|"
+            .. action .. "|" .. timestamp .. "|" .. nonce
+        return {
+            protocol = "secure_auth_v5",
+            type = "audit_event",
+            terminal_id = TERMINAL_ID,
+            username = username,
+            role = role,
+            action = action,
+            timestamp = timestamp,
+            nonce = nonce,
+            sig = crypto.sign(TERMINAL_ID, data),
+        }
+    end
 
     if fs.exists("/audit_queue") then
         for _, name in ipairs(fs.list("/audit_queue")) do
@@ -716,6 +800,49 @@ local function auditTests()
         check("audit.server.role_event_accepted", accepted == true)
         local logText = source("/logs/seg_0001.log")
         check("audit.server.log_has_role", contains(logText, "ROLE=operator"))
+
+        -- Cross-check: a genuine signature with a forged role claim must be
+        -- dropped, alarmed in /auth/audit_reject.log, and never acked.
+        if fs.exists("/auth/audit_reject.log") then
+            fs.delete("/auth/audit_reject.log")
+        end
+        local segmentBefore = lineCount("/logs/seg_0001.log")
+        local acksBefore = countSentMessage("audit_ack")
+        local forged = signedEvent("alice", "root", "OPEN_VAULT")
+        check("audit.server.forged_role_rejected",
+            auditServer.handleEvent(2, forged) == false)
+        check("audit.server.forged_role_no_log",
+            lineCount("/logs/seg_0001.log") == segmentBefore)
+        check("audit.server.forged_role_no_ack",
+            countSentMessage("audit_ack") == acksBefore)
+        local rejectText = readFile("/auth/audit_reject.log") or ""
+        check("audit.server.forged_role_alarm",
+            contains(rejectText, "REJECT reason=role_mismatch")
+            and contains(rejectText, "TERMINAL=" .. TERMINAL_ID)
+            and contains(rejectText, "USER=alice")
+            and contains(rejectText, "CLAIMED=root")
+            and contains(rejectText, "REAL=operator"), rejectText)
+
+        -- A username that has no account at all is just as forged.
+        local ghost = signedEvent("ghost", "admin", "OPEN_VAULT")
+        check("audit.server.unknown_user_rejected",
+            auditServer.handleEvent(2, ghost) == false)
+        rejectText = readFile("/auth/audit_reject.log") or ""
+        check("audit.server.unknown_user_alarm",
+            contains(rejectText, "REJECT reason=unknown_user")
+            and contains(rejectText, "USER=ghost"), rejectText)
+
+        -- The empty role is the "no role issued" sentinel of failed logins,
+        -- which claims no privilege and must still be accepted.
+        local failEvent = signedEvent("alice", "", "LOGIN_FAIL")
+        check("audit.server.empty_role_accepted",
+            auditServer.handleEvent(2, failEvent) == true)
+
+        -- The terminal normalises guest to user, so the stored "guest" role
+        -- and the claimed "user" role must compare equal.
+        local aliasEvent = signedEvent("bob", "user", "OPEN_VAULT")
+        check("audit.server.guest_alias_accepted",
+            auditServer.handleEvent(2, aliasEvent) == true)
 
         -- A role-less event (or the old 5-field signature) is rejected.
         local timestamp = tostring(os.epoch("utc"))
@@ -770,10 +897,11 @@ serverOpenTests()
 clientLoginTests()
 offlineLoginTests()
 clientOpenTests()
+uiDeniedTests()
 auditTests()
 
 print("OFFLINE_PASS " .. tostring(pass))
 print("OFFLINE_FAIL " .. tostring(fail))
-print("OFFLINE_GROUPS 9")
+print("OFFLINE_GROUPS 10")
 print("OFFLINE_RESULT pass=" .. tostring(pass) .. " fail=" .. tostring(fail))
 print("TEST_DONE")

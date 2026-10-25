@@ -53,13 +53,48 @@ local function renderMenu(user, items)
     write("Select an option: ")
 end
 
+-- Modal alert: no separate window manager exists in CraftOS, so the alert is
+-- drawn on the terminal and closed with Enter.
+local function showAlert(heading, lines)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("[!] " .. heading)
+    for _, line in ipairs(lines) do
+        print("")
+        print(line)
+    end
+    print("")
+    write("Press Enter to continue...")
+    read()
+end
+
 -- The terminal has no door wiring: it asks the auth server, which owns the
 -- actuator, and ends the session only when the server grants access.
-local function openVault(user)
+--
+-- A "denied" answer is not just a failed menu action: the server re-read the
+-- account role and refused, so the local session may belong to a role that
+-- has been revoked. The menu must not stay open with that stale identity, so
+-- the token is destroyed and the kernel falls back to the login screen.
+local function openVault(user, token)
     print("Requesting vault access from auth server...")
     local ok, reason, code = auth.requestOpen(user.name)
     if ok then
         print("[OK] Vault opened by auth server.")
+        return "break"
+    end
+    if code == "denied" then
+        showAlert("Permission denied", {
+            "Your account no longer has vault access: the role is",
+            "insufficient or an administrator revoked it.",
+            "",
+            "The local session will be closed and the login screen",
+            "will be shown again.",
+        })
+        if type(session) == "table" and type(session.destroy) == "function" then
+            pcall(session.destroy, token)
+        end
+        print("Session closed. Returning to login...")
+        sleep(1)
         return "break"
     end
     if code == "network" then
@@ -208,7 +243,7 @@ while true do
     if item then
         local result = nil
         if item.id == "vault" then
-            result = openVault(user)
+            result = openVault(user, token)
         elseif item.id == "exit" then
             result = exitToCraftOS(user)
         elseif item.id == "logout" then

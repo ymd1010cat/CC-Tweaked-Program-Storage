@@ -26,6 +26,9 @@ return {
     max_consecutive_errors = 5,
     fault_flag = "/auth/audit_fault.flag",
     error_log = "/auth/audit_error.log",
+    users_db = "/auth/users.db",
+    role_check = true,
+    reject_log = "/auth/audit_reject.log",
     restart_delay_seconds = 3,
     swap_fault = 0,
 }
