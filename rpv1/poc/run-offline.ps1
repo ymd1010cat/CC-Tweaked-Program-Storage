@@ -28,6 +28,7 @@ Copy-Item (Join-Path $root "poc\tools\*.lua") (Join-Path $dir "tools") -Force
 Copy-Item (Join-Path $root "poc\apps\http_*.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\hosts.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\wan_acl.lua") (Join-Path $dir "apps") -Force
+Copy-Item (Join-Path $root "poc\apps\router.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\tests\startup.lua") (Join-Path $dir "startup.lua") -Force
 
 $stdout = Join-Path $out "offline.stdout.txt"
