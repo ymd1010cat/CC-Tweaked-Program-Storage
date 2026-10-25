@@ -27,8 +27,14 @@
 - **传输层**：`rpv/conn.lua` —— 三次握手、累积 ACK、滑动窗口、**AIMD 拥塞控制**、RTO（SRTT/RTTVAR）、快速重传、FIN
 - **应用层**：`rpv-selftest`（验收客户端）、`udp-echo`、`routectl`、`rednet-dir`、**rednet 兼容 shim**（未修改的
   rednet 程序可直接跑）、遥测（agent/host）、指标面板、**窗口化 / 连接式 FTP**（整文件 SHA-256 校验）
+- **HTTP 应用层**：`poc/apps/http_{common,server,client,secure}.lua` —— 极简 GET、`Connection: close`、
+  一次 datagram 一请求、PSK 信封（`H|epoch|counter|ct|tag`）、`session_epoch` / 限流 / seed
 - **可运维**：配置校验、抓包环、`routes.txt` 热加载、启动看门狗（崩溃自重启）、本地 CI（`poc/ci.ps1`，不接 GitHub）
-- **测试**：CraftOS-PC **22 个场景全绿**；真机 Minecraft **11 个场景全绿**
+- **测试**：离线套件 **20 组 / 966 断言 / lint 0**（2026-10-25 实测）；CraftOS-PC 与真机场景数为历史记录
+  （22/11，未在本轮复核，场景数随 harness 变化）
+
+> 本文各节的仿真/打包验收数字（22/25/29/39/…）是历史记录，未在 2026-10-25 复核；
+> 当前可复现实测以 `poc/run-offline.ps1`（20 组 / 966 断言 / 0 error）和 `poc/run-all.ps1` 的实际输出为准。
 
 还缺 / 可做（按性价比排序，见 §1–§9）：
 
@@ -63,7 +69,10 @@
 - ⬜ **连接层接入更多应用**：把 shim 的 `rednet.send`、遥测、文件传输统一走 `conn`
 - ⬜ **参数按真机自适应**：以 tick 为单位暴露配置（`conn_rto_min` 已可配，默认 1 tick）
 - ⬜ **应用层协议**：远程 shell（带鉴权）、配置分发、日志收集（遥测已是一半）
-- ⬜ **HTTP 风格请求/响应**：给第三方程序一个 `rpv.fetch(url)` 的简单接口
+- ✅ **HTTP 应用层（极简 GET）**：`poc/apps/http_{common,server,client,secure}.lua` —— 仅 GET、
+  `Connection: close`、一次 datagram 一请求、PSK 信封（`H|epoch|counter|ct|tag`）、`session_epoch` /
+  限流 / seed；不是 `rpv.fetch`，也不被 `rpv.lua` 自动加载。安全边界与配置见
+  [README.md](README.md) 的“应用层 HTTP（极简 GET）与安全边界”。
 
 ## 4. 安全（当前最大短板）
 
@@ -118,7 +127,8 @@
 ## 7. 工程化
 
 - ✅ **作为库使用（外部程序可调用）**：
-  - 入口 **[poc/rpv.lua](../poc/rpv.lua)**：`require("rpv")` 即可 —— 自己找目录、按依赖顺序加载 11 个模块，
+  - 入口 **[poc/rpv.lua](../poc/rpv.lua)**：`require("rpv")` 即可 —— 自己找目录、按依赖顺序加载
+    `rpv.modules` 的 19 个模块 + `node`（共 20 个 .lua），
     暴露 `rpv.version` / `rpv.modules` / `rpv.new_node` / `rpv.install_rednet_shim(node, opts)`
   - **无需配置文件**：`rpv.node_new({ role=..., ifaces={ {...} }, gw=..., routes={...}, fabric={...} })`
     直接吃 Lua 表；`rpv.node_new("role.txt")` 的旧文件形式继续兼容
@@ -126,20 +136,21 @@
   - 外部程序示例 **[poc/examples/](../poc/examples/)**：`rpv-echo.lua`（UDP 回显）与
     `rpv-libtest.lua`（ARP / ICMP+RTT / UDP 往返 / 4 KiB 分片重装 / 统计 自检），
     两者都**装成 `startup.lua` 直接跑**，不经过 `node2/startup.lua`、不读 role.txt
-  - 验收：**CraftOS-PC** `pwsh -File poc\run-lib.ps1` = PASS（7/7）；
-    **真机** `run-mc.ps1 -Scenario lib -Target fabric` = PASS（7/7，含 4009 B 分片重装）
+  - 验收：**CraftOS-PC** `pwsh -File poc\run-lib.ps1` = PASS（7/7，历史记录）；
+    **真机** `run-mc.ps1 -Scenario lib -Target fabric` = PASS（7/7，历史记录，含 4009 B 分片重装）
   - 附带修掉一个 API 泄漏：`rpv.icmp_echo` 现在自己记录发送时间，外部程序不再需要写 `node.ping_sent[seq]`
 - ✅ **内部部署包**（不对外分发、无 License）：`pwsh -File poc\build-dist.ps1` 生成 `dist/`
-  - **单文件** `rpv-bundle.lua`（93 KB，所有模块内嵌并以原 chunk 名编译 → 报错行号仍指向 `rpv/<module>.lua`）
+  - **单文件** `rpv-bundle.lua`（约 234 KB，当前 239150 B，所有模块内嵌并以原 chunk 名编译 → 报错行号仍指向 `rpv/<module>.lua`）
   - **目录形态** `rpv.lua` + `rpv/*.lua` + `compat/` + `examples/`
   - **电脑端安装器** `install.lua`：来源可为目录/软盘/HTTP(S) base URL，逐文件比对 `MANIFEST.txt` 的
     **CRC32 + 大小**（纯 Lua 计算，兼容 Lua 5.2 的 `bit32` 与 5.3+ 的真实位运算），装完加载并建节点自检
-    （`INSTALL_OK files=20 verified=20` / `INSTALL_VERIFY ok=true version=RPV1 modules=10`）
+    （`INSTALL_OK files=20 verified=20` / `INSTALL_VERIFY ok=true version=RPV1 modules=19`）
   - `MANIFEST.txt` 同时给 **SHA256**（外部工具强校验）；`dist/rpv-1.0.0.zip` 整包
-  - 验收：`run-lib.ps1 -Mode tree|bundle|install` 三种形态全部 PASS（各 7/7 断言），
-    CraftOS-PC 全量回归 **25/25**（新增 `lib-bundle`、`lib-install` 两个作业）
+  - 验收：`run-lib.ps1 -Mode tree|bundle|install` 三种形态全部 PASS（各 7/7 断言，历史记录），
+    CraftOS-PC 全量回归历史记录 **25/25**（未在本轮复核；计数随 harness 变化）
   - README 重写为部署向：[README.md](../README.md)（三种安装方式 + API 速查 + 目录 + 测试状态）
-- ✅ 已做：模块库（`poc/rpv/*.lua`，10 个模块 + 连接层）、单一 bootstrap、25 个 CraftOS-PC 场景、
+- ✅ 已做：模块库（`poc/rpv/*.lua`，20 个 .lua：`rpv.modules` 19 + `node`）、单一 bootstrap、
+  CraftOS-PC 场景（数量随 harness 变化，历史记录 25 个）、
   11 个真机场景、本地 CI 脚本、文档
 - ⬜ 单测（现在全靠场景测试；协议编解码可以做纯函数级单测）
 - ⬜ 版本迁移（协议版本号已有 `ver=1`，需要"新旧版本共存"策略）
@@ -168,7 +179,7 @@
   纯 ACK/FIN 也带标签；错误 PSK 无法完成握手（`CONN_SEC_SYN_REJECT`），安全节点拒绝明文对端
   （`CONN_SEC_PEER_PLAINTEXT` + abort = fail-closed）；计数 `sec_auth_fail/sec_ctrl/sec_plaintext`。
   密码学提升为库模块 **`poc/rpv/crypto.lua`**（由 `poc/build-crypto.ps1` 从 `poc/security/crypto.lua`
-  生成，单一实现；库用户直接得到 `rpv.sha256/hmac_sha256/hkdf_sha256/pbkdf2_sha256/chacha20_xor/...`，bundle 同步变大到 105 KB）。
+  生成，单一实现；库用户直接得到 `rpv.sha256/hmac_sha256/hkdf_sha256/pbkdf2_sha256/chacha20_xor/...`，bundle 同步变大（当前 239150 B））。
   **验收**：CraftOS-PC `conn-sec`（4400 B 逐字节一致、双方 `CONN_SEC_KEYS`、`sec_auth_fail=0`）与
   `conn-sec-wrongpsk`（零传输 + SYN 被拒）；真机 `run-mc.ps1 -Scenario ftp -FtpTransport conn -ConnSecure psk|wrongpsk` 同样 PASS。
   实测开销：4.4 KB 文件 **明文 0.837 s → 安全 1.383 s**（≈1.65×，与 ~215 KB/s 的纯 Lua 密码学预算吻合）。
@@ -230,11 +241,12 @@
   **验收**：CraftOS-PC `poc/run-p3.ps1` = PASS —— 确定性丢包（`drop_every=3`）下 SACK 路径做了 **11 次定向补洞**
   且重传数不高于经典路径；两条 4 KB 并发流在**开/关**全局上限下都完成（上限生效时 `cwnd_limited=18/20` 说明它在仲裁）；
   keepalive 在对端存活时探测 3 次、对端"变黑"后 7.5 s 内触发超时（`ka_miss=4`）。全量回归 **39/39**
-- ✅ **P4-a 离线单元测试 + lint（luacheck 替代）**：`poc/tests/`（10 个测试组、**194 条断言**，纯逻辑：
-  编解码、IP 校验和、路由表、crypto KAT、WAN AEAD 状态机、NAT 改写与校验和、组播域判定、QoS 分类、compat）
+- ✅ **P4-a 离线单元测试 + lint（luacheck 替代）**：`poc/tests/`（20 个测试组、**966 条断言**，纯逻辑：
+  编解码、IP 校验和、路由表、crypto KAT、WAN AEAD 状态机、NAT 改写与校验和、组播域判定、QoS 分类、compat、
+  HTTP framing/server/client/secure/hardening）
   + `poc/tools/lint.lua`（零依赖静态检查：BOM/语法/模块约定/已知坑（`os.epoch("ms")`、`p1 == timer`、
-  `string.concat`）/行尾空白/疑似全局变量），**33 个文件 0 error**；用 `poc/run-offline.ps1` 单进程 headless 跑
-  （零拓扑、零 spawn、约 2 秒），并附 `tests/host.lua` 让桌面 Lua 5.1 也能跑同一套。
+  `string.concat`）/行尾空白/疑似全局变量），**48 个文件 0 error**；用 `poc/run-offline.ps1` 单进程 headless 跑
+  （零拓扑、零 spawn，耗时以本机为准），并附 `tests/host.lua` 让桌面 Lua 5.1 也能跑同一套。
 - ✅ **P4-b 全量配置热加载**：运行中监听 `routes.txt` / `role.txt` / `hosts.txt`（每 2 s 比对 mtime）——
   路由重载 `ROUTES_RELOADED`；配置重载 `CFG_RELOAD changed=N restart_required=M` + 逐键 `CFG_CHANGED key=old->new`，
   不可热改的键明确报 `CFG_RELOAD_RESTART_REQUIRED key=...`（role/iface/wan/fabric/app/spawn/dhcp…），
@@ -305,7 +317,7 @@
 
 ## 11. 执行状态（M1–M4 + 传输层，全部完成）
 
-### 当前代码结构
+### 当前代码结构（节选）
 
 ```
 poc/rpv/util.lua        字节打包 / 校验和 / 地址工具
@@ -325,7 +337,8 @@ poc/compat/rednet.lua   rednet 兼容 shim（drop-in API，走 UDP 可路由）
 poc/apps/               socket-echo / m1-selftest / routectl / rpv-selftest / mc-probe /
                         mc-bench / mc-range / mc-wiredtest / udp-echo / rednet-dir /
                         legacy-chat / monitor-agent / monitor-host / panel /
-                        ftp-server / ftp-client
+                        ftp-server / ftp-client /
+                        http_common / http_server / http_client / http_secure
 poc/peer/legacy-rednet.lua   纯 rednet 设备（WAN 对端）
 poc/security/           crypto.lua / wpa.lua / wpa-node.lua（安全原型）
 poc/mc/                 Minecraft 真机 harness（rcon.py / run-mc.ps1 / server.ps1 / ENVIRONMENT.md）
@@ -419,7 +432,7 @@ poc/mc/                 Minecraft 真机 harness（rcon.py / run-mc.ps1 / server
 ### 回归
 
 ```powershell
-pwsh -File poc\run-all.ps1            # CraftOS-PC：22 个场景，约 10 分钟，失败退出码 1
+pwsh -File poc\run-all.ps1            # 全部场景（数量随 harness 变化，失败退出码 1）
 pwsh -File poc\ci.ps1                 # 本地 CI：跑同一套 + 报告落盘（不接 GitHub）
 pwsh -File poc\mc\server.ps1 -Action start|stop|status   # 真机服务器生命周期
 pwsh -File poc\mc\run-mc.ps1 -Scenario lan|pmtu|ftp|cluster|wan|shim|multi|sites|range|bench|probe

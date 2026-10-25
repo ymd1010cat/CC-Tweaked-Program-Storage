@@ -7,7 +7,7 @@
 - **可以当库用**：外部程序 `require("rpv")` 即可，不依赖本项目的 bootstrap、不需要 role.txt
 - **公开 API 稳定**：[poc/rpv/API.md](poc/rpv/API.md)（本文件末尾有速查）
 - **实测环境**：Minecraft 1.21.1 + NeoForge/Fabric + CC:Tweaked 1.120.2，以及 CraftOS-PC 2.8.3
-- **测试**：CraftOS-PC **46/46** 场景 + 真机（Minecraft）多场景，含"纯外部程序"验收（三种打包形态各一套）
+- **测试**：离线套件 **20 组 / 966 断言 / lint 0**（2026-10-25 实测）；CraftOS-PC 场景与真机套件见[测试状态](#测试状态)（历史数字已标注，未在本轮重跑）
 - **可打包部署**：三种安装方式（单文件 / 目录 / 安装器），构建产物在 `dist/`
 - **许可证**：随仓库根目录的 [`LICENSE`](../LICENSE)（**MIT**），本目录不另附许可声明
 
@@ -29,14 +29,14 @@ pwsh -File poc\build-dist.ps1            # 生成 dist\ ：树 + 单文件 + 安
 
 ```
 INSTALL_OK files=<n> verified=<n> skipped=0
-INSTALL_VERIFY ok=true version=RPV1 modules=10 node_new=true
+INSTALL_VERIFY ok=true version=RPV1 modules=19 node_new=true
 ```
 
 `MANIFEST.txt` 同时给出每个文件的 **SHA256**（要强校验就在电脑外用系统工具核对）。发布包结构：
 
 ```
-dist/rpv-bundle.lua        单文件库（93 KB）
-dist/rpv.lua dist/rpv/*.lua  目录形态的库（11 个模块）
+dist/rpv-bundle.lua        单文件库（约 234 KB，当前 239150 B）
+dist/rpv.lua dist/rpv/*.lua  目录形态的库（20 个 .lua：rpv.modules 19 + node）
 dist/install.lua           电脑端安装器（目录/软盘/HTTP 三种来源）
 dist/compat/rednet.lua     rednet 兼容 shim
 dist/examples/*.lua        外部程序示例 + 库自检
@@ -95,6 +95,59 @@ pwsh -File poc\mc\run-mc.ps1 -Scenario lib -Target fabric         # 真机（Min
 停等 RTT = 1 tick（50 ms）、10 跳链 RTT 仍是 **0 tick**、协议层单路由器 ≈550–650 pps（≈30 包/tick）、
 服务器 tick 中位 0.5 ms、连接层 200 kB 零丢包 ≈133 kB/s。
 
+## 应用层 HTTP（极简 GET）与安全边界
+
+`poc/apps/http_common.lua`、`http_server.lua`、`http_client.lua`、`http_secure.lua` 是**独立应用层模块**：不被 `poc/rpv.lua` 加载，也不导出为 `rpv.*`；用 `dofile`/`loadfile` 直接加载，测试在 `poc/tests/t_http_*.lua`。
+
+### 范围（以代码为准）
+
+- **仅 GET**：`http_server.start(port, routes, opts)` 只服务 GET；对已匹配的路由，HEAD/POST/PUT 等返回 `405` 且 `Allow: GET`，不会执行处理器；未知路径仍返回 404。
+- **`Connection: close`**：`http_common.build_response` 默认加 `Connection: close`；服务端不主动启用 keep-alive，每个响应默认关闭（handler 若显式给出 Connection 头则以其为准）。
+- **一次 datagram 一请求**：`server:handle(raw, src)` 一次只解析一个请求；没有 TCP、keep-alive、流水线或并发连接。
+- **ASCII**：模块源码与默认文本响应为 ASCII；请求头/请求目标按 ASCII 校验（body 不强制 ASCII）。
+- **默认端口**：`8080`（`http_common.DEFAULT_PORT`）。
+- **secure 上限**：`http_secure.MAX_PLAINTEXT_BYTES = 60000`，按单条 rpv UDP datagram 设计；IPv4/UDP 数据上限 `65507` B，余量留给 `H | epoch | counter | ct | tag`。这不是 TCP 流式上限。
+- **解析限制**：`MAX_PATH=1024` -> 414、`MAX_REQUEST_LINE=2048` -> 414、`MAX_HEADER_BYTES=8192` -> 431、`MAX_BODY_BYTES=65536` -> 413；错误码为 400/403/404/405/413/414/431/500，HTTP 版本不支持时为 505，handler 可返回 201/204 等状态。
+
+### 安全边界
+
+| 能防 | 不能防 |
+| --- | --- |
+| 被动监听：secure 模式下 ChaCha20 加密 payload 与头部 | DoS 根治：令牌桶只能降低速率，不能消除资源耗尽 |
+| payload/头部篡改：HMAC-SHA256 tag 覆盖 epoch、counter 与 ciphertext | 流量分析：包大小、时序、epoch/counter 仍可观察 |
+| 重放：每方向 counter + 64 条滑动窗口，strict 模式要求单调递增 | PSK 泄露后的历史解密：静态 PSK 无前向保密 |
+| 反射：c2s/s2c 使用不同方向密钥，信封不能反向通过认证 | 本地窃取：能读文件的人可直接拿到 PSK 或 seed |
+| 明文回退：strict 服务端拒绝明文；封装失败也不回退明文 | 弱口令爆破：PBKDF2 4096 次只提高成本，口令模式生产禁用 |
+| 错误 PSK：认证失败 fail closed，不返回明文 | 无证书身份：不提供证书或公网身份认证 |
+|  | 应用层授权：不判断“这个客户端能访问哪个路由” |
+
+本层不声称能防公网攻击；公网部署依赖 `wan_acl`（网络侧 ACL）、限流、服主日志追溯和运维。
+
+### 四项加固配置
+
+1. **PSK**：默认要求 **64 hex**（解码为 32 字节）；口令模式必须 `allow_passphrase=true` 且 `psk_iter >= 4096`（默认 4096），生产环境应禁用口令模式。
+2. **rate_limit**（opt-in）：`opts.rate_limit = { rate=50, burst=100, idle_ttl=300, max_sources=1024 }`（rate 为令牌/秒，idle_ttl 为秒），也接受 `true` 或数字简写（数字同时作为 rate 与 burst）；`src_label` 是同级 `opts.src_label(src, base)` 函数，不是 `rate_limit` 表内字段。三条副作用必须考虑：
+   - fail-closed 有可用性代价：缺 `src`、时钟异常、`src_label` 抛错/非字符串、桶满且无可回收桶时直接拒绝，不会回退放行。
+   - `max_sources` 满时拒绝新源；`make_room()` 只回收空闲超过 `idle_ttl` 的桶，活跃桶不会被驱逐。
+   - 畸形/非 ASCII `src` 会归一化成 `_` 或 `unknown`，多个坏源可能共享同一个桶而误伤；可用 `src_label` 明确分桶。
+3. **session_epoch**：信封为 `"H" | epoch(u32BE) | counter(u32BE) | ct | tag`；双方必须配置相同的 `opts.session_epoch`（默认 0），不匹配 fail closed。epoch 只做会话隔离，不替代 re-key，也不提供身份认证；这是破坏性 wire format，双端必须同时升级。
+4. **seed_file**：默认 `<role_file 所在目录>/seed.bin`，`role_file` 默认 `role.txt`（因此默认是 `seed.bin`）；文件缺失时 `seed_loaded=false` 且不阻塞构造，`seed_file=false` 可禁用。当前实现只把它交给 `crypto.load_seed_file` 增强 DRBG，不改变 HKDF 密钥，也不改变 counter 起点（counter 固定从 1 开始）。
+
+### 运维清单
+
+- PSK 使用 64 hex；不要写进明文日志、公共软盘或可公开读取的文件；定期轮换。
+- 轮换 PSK/epoch 时双端同步升级；epoch 变更会重置会话语义。
+- `max_sources` 按并发源估算，避免被大量源占满后误拒新客户端。
+- 服主日志需包含末影 Modem 发送者、频道与时间，便于追溯；HTTP 层本身不替代这些网络侧记录。
+
+### 测试
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File poc\run-offline.ps1
+```
+
+当前实测：**20 组 / 966 断言 / OFFLINE_FAIL 0 / LINT_ERRORS 0**（LINT_WARNINGS 51 为既有 `rpv/*` 告警）。
+
 ## API 速查
 
 ```lua
@@ -126,14 +179,14 @@ rpv.wan_new rpv.wan_setup rpv.wan_send rpv.wan_advert ...    -- rednet WAN
 ```
 dist/                     发布包（build-dist.ps1 生成）：树 + 单文件 + 安装器 + MANIFEST + zip
 poc/rpv.lua              库入口（外部程序只需要这个 + rpv/）
-poc/rpv/*.lua            11 个模块：util ip route arp link icmp udp conn fabric wan node
+poc/rpv/*.lua            20 个 .lua：util ip route arp link icmp udp conn fabric wan services dv nat mcast qos wansec compat topo crypto node（rpv.modules 19 + node）
 poc/rpv/API.md           公开 API 参考（稳定面 vs 内部面）
 poc/examples/            外部程序示例 + 库验收自检
 poc/dist-src/install.lua 安装器源码（构建时拷进 dist/）
 poc/build-dist.ps1       构建发布包（含 bundle 生成、MANIFEST、zip）
 poc/apps/                项目自带应用（selftest / ftp / panel / 负载 / 网桥场景用）
 poc/mc/                  真机 harness（RCON 驱动 Minecraft 服务器）+ 独立网桥程序
-poc/run-*.ps1, run-all.ps1   仿真与真机回归（run-all = 25 个场景）
+poc/run-*.ps1, run-all.ps1   仿真与真机回归（run-all 场景数随 harness 变化，以脚本输出为准）
 poc/out/                 实测记录与证据
 rpv-roadmap.md           设计、里程碑、实测结论、下一步
 rednet-ipv4-feasibility.md  可行性分析
@@ -148,9 +201,10 @@ rpv-security.md          WPA2 风格安全层原型
 
 | 套件 | 结果 |
 | --- | --- |
-| CraftOS-PC 全量 (`pwsh -File poc\run-all.ps1`) | **46/46 PASS**（含 `lib*` 三形态、`bridge`/`bridge-wrongpsk` 网桥安全、`conn-sec`/`conn-sec-wrongpsk` 控制面 AEAD） |
-| 库打包形态验收 | 目录 `require("rpv")` / 单文件 `rpv-bundle.lua` / 安装器（每文件 CRC32 校验 + 装载自检）**三种都 PASS** |
-| 真机 Minecraft（Fabric / NeoForge） | lan(无线+有线) / pmtu / ftp / conn(干净+20%丢包) / cluster / wan / shim / multi / sites / range / bench / probe / load / loadrpv / longchain / endbridge / **lib** 全部 PASS |
+| 离线单元 + lint (`powershell -NoProfile -ExecutionPolicy Bypass -File poc\run-offline.ps1`) | **20/20 组、966 断言、OFFLINE_FAIL 0、LINT_ERRORS 0**（2026-10-25 实测） |
+| CraftOS-PC 全量 (`pwsh -File poc\run-all.ps1`) | 历史记录 PASS（未在本轮重跑；原场景计数已不适用，数量随 harness 变化） |
+| 库打包形态验收 | 目录 `require("rpv")` / 单文件 `rpv-bundle.lua` / 安装器（每文件 CRC32 校验 + 装载自检）**三种都 PASS**（历史记录，未在本轮重跑） |
+| 真机 Minecraft（Fabric / NeoForge） | 历史记录 lan/pmtu/ftp/conn/cluster/wan/shim/multi/sites/range/bench/probe/load/loadrpv/longchain/endbridge/lib 全部 PASS（未在本轮重跑） |
 
 ## 设计约定
 

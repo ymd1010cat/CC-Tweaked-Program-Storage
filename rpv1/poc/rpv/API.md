@@ -467,6 +467,33 @@ Acceptance: `poc/run-wansec.ps1` (wireless, CraftOS-PC) and
 `poc\mc\run-mc.ps1 -Scenario wanlink -WanLink wired|wireless -Target fabric` (direct WAN-only
 topology, real server: 4/4 ICMP + 900 B UDP echo, `WAN_LINK=wired|wireless` reported).
 
+## Application-layer modules (`poc/apps/`)
+
+These modules are **not** loaded by `rpv.lua` and are not re-exported as `rpv.*`.
+They are standalone application-layer files loaded with `dofile`/`loadfile`.
+The HTTP layer is intentionally GET-only and datagram-shaped; its scope, wire
+format, hardening options and security boundaries are documented in
+[README.md](../../README.md) ("应用层 HTTP（极简 GET）与安全边界").
+
+| Module | Responsibility |
+| --- | --- |
+| `http_common.lua` | HTTP/1.x framing: ASCII checks, path normalisation, request/response parse+build, `DEFAULT_PORT=8080` |
+| `http_server.lua` | minimal GET router: static/function routes, 400/403/404/405/413/414/431/500/505, xpcall guard, one request per `handle(raw, src)` |
+| `http_client.lua` | one-shot `get(opts)` / `request(method, opts)`: injected transport, `timeout_ms`, retries/backoff, `{ ok, status, body, err }` |
+| `http_secure.lua` | PSK envelope `H \| epoch \| counter \| ct \| tag`, HKDF directions, replay window, `session_epoch`, token-bucket `rate_limit`, `seed_file` |
+
+```lua
+local common = dofile("apps/http_common.lua")
+local server = dofile("apps/http_server.lua")
+local client = dofile("apps/http_client.lua")
+local secure = dofile("apps/http_secure.lua")   -- optional
+```
+
+`http_client.get` returns `ok=true` for any well-formed HTTP response (including
+4xx/5xx); callers inspect `status`. The transport owns the deadline. The server
+only serves GET: on a matched route, HEAD/POST/etc. answer `405` with
+`Allow: GET`; unknown paths answer `404`.
+
 ## Examples (in `poc/examples/`, installed as `startup.lua`)
 
 | File | What it shows |
