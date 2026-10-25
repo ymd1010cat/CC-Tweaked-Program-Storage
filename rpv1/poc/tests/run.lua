@@ -35,7 +35,8 @@ for _, mod in ipairs({ "crypto", "util", "ip", "route", "arp", "link", "icmp", "
 end
 
 -- app-layer modules are plain tables, so each one is loaded on its own
-for _, mod in ipairs({ "http_common", "http_server", "http_client", "http_secure" }) do
+for _, mod in ipairs({ "http_common", "http_server", "http_client", "http_secure",
+                       "hosts", "wan_acl" }) do
     if fs.exists("apps/" .. mod .. ".lua") then
         local ok, ret = pcall(load_module, "apps/" .. mod .. ".lua", M)
         if ok and type(ret) == "table" then
@@ -93,6 +94,7 @@ local files = {
     "tests/t_qos.lua", "tests/t_topo.lua", "tests/t_scale.lua", "tests/t_services.lua", "tests/t_addr.lua", "tests/t_compat.lua",
     "tests/t_http_common.lua", "tests/t_http_server.lua", "tests/t_http_client.lua",
     "tests/t_http_secure.lua", "tests/t_http_integration.lua", "tests/t_http_hardening.lua",
+    "tests/t_hosts.lua", "tests/t_wan_acl.lua",
 }
 local groups = 0
 for _, path in ipairs(files) do

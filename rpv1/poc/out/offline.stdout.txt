@@ -123,7 +123,7 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-                                                   SCALE_TOPO                                         SCALE_TOPO                                         SCALE_TOPO nodes=100                               SCALE_TOPO nodes=100                               SCALE_TOPO nodes=100 links=180                     SCALE_TOPO nodes=100 links=180                     SCALE_TOPO nodes=100 links=180 merge_ms=31         
+                                                   SCALE_TOPO                                         SCALE_TOPO                                         SCALE_TOPO nodes=100                               SCALE_TOPO nodes=100                               SCALE_TOPO nodes=100 links=180                     SCALE_TOPO nodes=100 links=180                     SCALE_TOPO nodes=100 links=180 merge_ms=33         
 * Type "help <program>" to see help for a specific 
 program.                                           
 * Read the documentation at                        
@@ -141,7 +141,7 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
                                                    SCALE_DV                                           SCALE_DV                                           SCALE_DV nodes=100                                 SCALE_DV nodes=100                                 SCALE_DV nodes=100 links=100                       SCALE_DV nodes=100 links=100                       SCALE_DV nodes=100 links=100 diameter=7            SCALE_DV nodes=100 links=100 diameter=7            SCALE_DV nodes=100 links=100 diameter=7 rounds=8   SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
 program.                                           
 * Read the documentation at                        
@@ -159,9 +159,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-                                                   max_metric=7                                       max_metric=7                                       max_metric=7 dv_ms=16                              
+                                                   max_metric=7                                       max_metric=7                                       max_metric=7 dv_ms=18                              
 * Read the documentation at                        
 https://www.craftos-pc.cc/docs/.                   
 * Report bugs to                                   
@@ -177,9 +177,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
                                                    TEST                                               TEST                                               TEST scale                                         TEST scale                                         TEST scale ok=true                                 
 https://www.craftos-pc.cc/docs/.                   
 * Report bugs to                                   
@@ -195,9 +195,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
                                                    TEST                                               TEST                                               TEST services                                      TEST services                                      TEST services ok=true                              
 * Report bugs to                                   
@@ -213,9 +213,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
                                                    TEST                                               TEST                                               TEST addr                                          TEST addr                                          TEST addr ok=true                                  
@@ -231,9 +231,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -249,9 +249,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -267,9 +267,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -285,9 +285,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -303,9 +303,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -321,9 +321,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -339,9 +339,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -357,9 +357,9 @@ TEST nat ok=true
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -370,14 +370,14 @@ TEST http_client ok=true
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-                                                   OFFLINE_RESULT                                     OFFLINE_RESULT                                     OFFLINE_RESULT pass=966                            OFFLINE_RESULT pass=966                            OFFLINE_RESULT pass=966 fail=0                     OFFLINE_RESULT pass=966 fail=0                     OFFLINE_RESULT pass=966 fail=0 groups=20           
+                                                   TEST                                               TEST                                               TEST hosts                                         TEST hosts                                         TEST hosts ok=true                                 
 TEST nat ok=true                                   
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -388,14 +388,14 @@ TEST http_client ok=true
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-                                                   OFFLINE_PASS                                       OFFLINE_PASS                                       OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+                                                   TEST                                               TEST                                               TEST wan_acl                                       TEST wan_acl                                       TEST wan_acl ok=true                               
 TEST mcast ok=true                                 
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -406,14 +406,14 @@ TEST http_client ok=true
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
-                                                   OFFLINE_FAIL                                       OFFLINE_FAIL                                       OFFLINE_FAIL 0                                     
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+                                                   OFFLINE_RESULT                                     OFFLINE_RESULT                                     OFFLINE_RESULT pass=1187                           OFFLINE_RESULT pass=1187                           OFFLINE_RESULT pass=1187 fail=0                    OFFLINE_RESULT pass=1187 fail=0                    OFFLINE_RESULT pass=1187 fail=0 groups=22          
 TEST qos ok=true                                   
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -424,14 +424,14 @@ TEST http_client ok=true
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
-OFFLINE_FAIL 0                                     
-                                                   OFFLINE_GROUPS                                     OFFLINE_GROUPS                                     OFFLINE_GROUPS 20                                  
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+                                                   OFFLINE_PASS                                       OFFLINE_PASS                                       OFFLINE_PASS 1187                                  
 TEST topo ok=true                                  
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -442,14 +442,50 @@ TEST http_client ok=true
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
+                                                   OFFLINE_FAIL                                       OFFLINE_FAIL                                       OFFLINE_FAIL 0                                     
+SCALE_TOPO nodes=100 links=180 merge_ms=33         
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=18                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+TEST http_common ok=true                           
+TEST http_server ok=true                           
+TEST http_client ok=true                           
+TEST http_secure ok=true                           
+TEST http_integration ok=true                      
+TEST http_hardening ok=true                        
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+                                                   OFFLINE_GROUPS                                     OFFLINE_GROUPS                                     OFFLINE_GROUPS 22                                  
+SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
+max_metric=7 dv_ms=18                              
+TEST scale ok=true                                 
+TEST services ok=true                              
+TEST addr ok=true                                  
+TEST compat ok=true                                
+TEST http_common ok=true                           
+TEST http_server ok=true                           
+TEST http_client ok=true                           
+TEST http_secure ok=true                           
+TEST http_integration ok=true                      
+TEST http_hardening ok=true                        
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
+OFFLINE_FAIL 0                                     
+OFFLINE_GROUPS 22                                  
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua rule=global?           LINT_WARN file=rpv/conn.lua rule=global?           
-SCALE_TOPO nodes=100 links=180 merge_ms=31         
-SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
+max_metric=7 dv_ms=18                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -460,14 +496,14 @@ TEST http_client ok=true
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
                                                    detail=line                                        detail=line                                        detail=line 39:                                    detail=line 39:                                    detail=line 39: k_ctrl                             detail=line 39: k_ctrl                             detail=line 39: k_ctrl assigned                    detail=line 39: k_ctrl assigned                    detail=line 39: k_ctrl assigned without            detail=line 39: k_ctrl assigned without            detail=line 39: k_ctrl assigned without `local`    
-SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
-max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
@@ -478,15 +514,15 @@ TEST http_client ok=true
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua rule=global?           LINT_WARN file=rpv/conn.lua rule=global?           
-max_metric=7 dv_ms=16                              
-TEST scale ok=true                                 
 TEST services ok=true                              
 TEST addr ok=true                                  
 TEST compat ok=true                                
@@ -496,16 +532,16 @@ TEST http_client ok=true
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
                                                    detail=line                                        detail=line                                        detail=line 1250:                                  detail=line 1250:                                  detail=line 1250: opts                             detail=line 1250: opts                             detail=line 1250: opts assigned                    detail=line 1250: opts assigned                    detail=line 1250: opts assigned without            detail=line 1250: opts assigned without            detail=line 1250: opts assigned without `local`    
-TEST scale ok=true                                 
-TEST services ok=true                              
 TEST addr ok=true                                  
 TEST compat ok=true                                
 TEST http_common ok=true                           
@@ -514,17 +550,17 @@ TEST http_client ok=true
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 1250: opts assigned without `local`    
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
-TEST services ok=true                              
-TEST addr ok=true                                  
 TEST compat ok=true                                
 TEST http_common ok=true                           
 TEST http_server ok=true                           
@@ -532,28 +568,30 @@ TEST http_client ok=true
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 1250: opts assigned without `local`    
 LINT_WARN file=rpv/crypto.lua rule=global?         
                                                    detail=line                                        detail=line                                        detail=line 255:                                   detail=line 255:                                   detail=line 255: salt                              detail=line 255: salt                              detail=line 255: salt assigned                     detail=line 255: salt assigned                     detail=line 255: salt assigned without             detail=line 255: salt assigned without             detail=line 255: salt assigned without `local`     
-TEST addr ok=true                                  
-TEST compat ok=true                                
 TEST http_common ok=true                           
 TEST http_server ok=true                           
 TEST http_client ok=true                           
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -561,17 +599,17 @@ detail=line 1250: opts assigned without `local`
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 255: salt assigned without `local`     
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
-TEST compat ok=true                                
-TEST http_common ok=true                           
 TEST http_server ok=true                           
 TEST http_client ok=true                           
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -580,16 +618,16 @@ LINT_WARN file=rpv/crypto.lua rule=global?
 detail=line 255: salt assigned without `local`     
 LINT_WARN file=rpv/crypto.lua rule=global?         
                                                    detail=line                                        detail=line                                        detail=line 257:                                   detail=line 257:                                   detail=line 257: info                              detail=line 257: info                              detail=line 257: info assigned                     detail=line 257: info assigned                     detail=line 257: info assigned without             detail=line 257: info assigned without             detail=line 257: info assigned without `local`     
-TEST http_common ok=true                           
-TEST http_server ok=true                           
 TEST http_client ok=true                           
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -599,15 +637,15 @@ detail=line 255: salt assigned without `local`
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 257: info assigned without `local`     
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
-TEST http_server ok=true                           
-TEST http_client ok=true                           
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -618,14 +656,14 @@ LINT_WARN file=rpv/crypto.lua rule=global?
 detail=line 257: info assigned without `local`     
 LINT_WARN file=rpv/crypto.lua rule=global?         
                                                    detail=line                                        detail=line                                        detail=line 286:                                   detail=line 286:                                   detail=line 286: iters                             detail=line 286: iters                             detail=line 286: iters assigned                    detail=line 286: iters assigned                    detail=line 286: iters assigned without            detail=line 286: iters assigned without            detail=line 286: iters assigned without `local`    
-TEST http_client ok=true                           
-TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -637,13 +675,13 @@ detail=line 257: info assigned without `local`
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 286: iters assigned without `local`    
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
-TEST http_secure ok=true                           
-TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -656,12 +694,12 @@ LINT_WARN file=rpv/crypto.lua rule=global?
 detail=line 286: iters assigned without `local`    
 LINT_WARN file=rpv/crypto.lua rule=global?         
                                                    detail=line                                        detail=line                                        detail=line 288:                                   detail=line 288:                                   detail=line 288: dklen                             detail=line 288: dklen                             detail=line 288: dklen assigned                    detail=line 288: dklen assigned                    detail=line 288: dklen assigned without            detail=line 288: dklen assigned without            detail=line 288: dklen assigned without `local`    
-TEST http_integration ok=true                      
-TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -677,11 +715,11 @@ detail=line 288: dklen assigned without `local`
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
  
 
-TEST http_hardening ok=true                        
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+TEST wan_acl ok=true                               
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -696,10 +734,10 @@ LINT_WARN file=rpv/crypto.lua rule=global?
 detail=line 288: dklen assigned without `local`    
 LINT_WARN file=rpv/dv.lua rule=global? detail=line 
                                                    49:                                                49:                                                49: dv_port                                        49: dv_port                                        49: dv_port assigned                               49: dv_port assigned                               49: dv_port assigned without                       49: dv_port assigned without                       49: dv_port assigned without `local`               
-OFFLINE_RESULT pass=966 fail=0 groups=20           
-OFFLINE_PASS 966                                   
+OFFLINE_RESULT pass=1187 fail=0 groups=22          
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -717,9 +755,9 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
  
 
-OFFLINE_PASS 966                                   
+OFFLINE_PASS 1187                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -737,7 +775,7 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 LINT_WARN file=rpv/dv.lua rule=global? detail=line 
                                                    51:                                                51:                                                51: dv_interval                                    51: dv_interval                                    51: dv_interval assigned                           51: dv_interval assigned                           51: dv_interval assigned without                   51: dv_interval assigned without                   51: dv_interval assigned without `local`           
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -757,7 +795,7 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
  
 
-OFFLINE_GROUPS 20                                  
+OFFLINE_GROUPS 22                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -912,7 +950,7 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-                                                   LINT_RESULT                                        LINT_RESULT                                        LINT_RESULT errors=0                               LINT_RESULT errors=0                               LINT_RESULT errors=0 warnings=51                   LINT_RESULT errors=0 warnings=51                   LINT_RESULT errors=0 warnings=51 files=48          
+                                                   LINT_RESULT                                        LINT_RESULT                                        LINT_RESULT errors=0                               LINT_RESULT errors=0                               LINT_RESULT errors=0 warnings=51                   LINT_RESULT errors=0 warnings=51                   LINT_RESULT errors=0 warnings=51 files=52          
 detail=line 257: info assigned without `local`     
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 286: iters assigned without `local`    
@@ -930,7 +968,7 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-LINT_RESULT errors=0 warnings=51 files=48          
+LINT_RESULT errors=0 warnings=51 files=52          
                                                    LINT_ERRORS                                        LINT_ERRORS                                        LINT_ERRORS 0                                      
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 286: iters assigned without `local`    
@@ -948,7 +986,7 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-LINT_RESULT errors=0 warnings=51 files=48          
+LINT_RESULT errors=0 warnings=51 files=52          
 LINT_ERRORS 0                                      
                                                    LINT_WARNINGS                                      LINT_WARNINGS                                      LINT_WARNINGS 51                                   
 detail=line 286: iters assigned without `local`    
@@ -966,10 +1004,10 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-LINT_RESULT errors=0 warnings=51 files=48          
+LINT_RESULT errors=0 warnings=51 files=52          
 LINT_ERRORS 0                                      
 LINT_WARNINGS 51                                   
-                                                   LINT_FILES                                         LINT_FILES                                         LINT_FILES 48                                      
+                                                   LINT_FILES                                         LINT_FILES                                         LINT_FILES 52                                      
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 288: dklen assigned without `local`    
 LINT_WARN file=rpv/dv.lua rule=global? detail=line 
@@ -984,10 +1022,10 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-LINT_RESULT errors=0 warnings=51 files=48          
+LINT_RESULT errors=0 warnings=51 files=52          
 LINT_ERRORS 0                                      
 LINT_WARNINGS 51                                   
-LINT_FILES 48                                      
+LINT_FILES 52                                      
                                                    TEST_DONE                                          
 detail=line 288: dklen assigned without `local`    
 LINT_WARN file=rpv/dv.lua rule=global? detail=line 
@@ -1002,9 +1040,9 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-LINT_RESULT errors=0 warnings=51 files=48          
+LINT_RESULT errors=0 warnings=51 files=52          
 LINT_ERRORS 0                                      
 LINT_WARNINGS 51                                   
-LINT_FILES 48                                      
+LINT_FILES 52                                      
 TEST_DONE                                          
                                                    >                                                  >                                                  >                                                  

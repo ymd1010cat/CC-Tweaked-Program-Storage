@@ -40,6 +40,21 @@ function H.isDir(path)
     return H.exists(path)
 end
 
+-- rename/delete are needed by apps/hosts.lua's atomic save. Windows os.rename
+-- refuses to overwrite, exactly like the CC fs.move, so the module's move-aside
+-- fallback exercises the same code path here.
+function H.move(from, to)
+    local ok, err = os.rename(from, to)
+    if ok then return true end
+    return false, err
+end
+
+function H.delete(path)
+    local ok, err = os.remove(path)
+    if ok then return true end
+    return false, err
+end
+
 function H.list(path)
     local out = {}
     local cmd = sh .. path .. (sep == "\\" and "" or " 2>/dev/null")

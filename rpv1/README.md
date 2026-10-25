@@ -7,7 +7,7 @@
 - **可以当库用**：外部程序 `require("rpv")` 即可，不依赖本项目的 bootstrap、不需要 role.txt
 - **公开 API 稳定**：[poc/rpv/API.md](poc/rpv/API.md)（本文件末尾有速查）
 - **实测环境**：Minecraft 1.21.1 + NeoForge/Fabric + CC:Tweaked 1.120.2，以及 CraftOS-PC 2.8.3
-- **测试**：离线套件 **20 组 / 966 断言 / lint 0**（2026-10-25 实测）；CraftOS-PC 场景与真机套件见[测试状态](#测试状态)（历史数字已标注，未在本轮重跑）
+- **测试**：离线套件 **22 组 / 1218 断言 / lint 0**（2026-10-25 实测）；CraftOS-PC 场景与真机套件见[测试状态](#测试状态)（历史数字已标注，未在本轮重跑）
 - **可打包部署**：三种安装方式（单文件 / 目录 / 安装器），构建产物在 `dist/`
 - **许可证**：随仓库根目录的 [`LICENSE`](../LICENSE)（**MIT**），本目录不另附许可声明
 
@@ -121,7 +121,7 @@ pwsh -File poc\mc\run-mc.ps1 -Scenario lib -Target fabric         # 真机（Min
 | 错误 PSK：认证失败 fail closed，不返回明文 | 无证书身份：不提供证书或公网身份认证 |
 |  | 应用层授权：不判断“这个客户端能访问哪个路由” |
 
-本层不声称能防公网攻击；公网部署依赖 `wan_acl`（网络侧 ACL）、限流、服主日志追溯和运维。
+本层不声称能防公网攻击；公网部署依赖 WAN 侧频道白名单（`poc/apps/wan_acl.lua`）、限流、服主日志追溯和运维。
 
 ### 四项加固配置
 
@@ -146,7 +146,30 @@ pwsh -File poc\mc\run-mc.ps1 -Scenario lib -Target fabric         # 真机（Min
 powershell -NoProfile -ExecutionPolicy Bypass -File poc\run-offline.ps1
 ```
 
-当前实测：**20 组 / 966 断言 / OFFLINE_FAIL 0 / LINT_ERRORS 0**（LINT_WARNINGS 51 为既有 `rpv/*` 告警）。
+当前实测：**22 组 / 1218 断言 / OFFLINE_FAIL 0 / LINT_ERRORS 0**（LINT_WARNINGS 51 为既有 `rpv/*` 告警）。
+
+## 应用层 hosts 与 WAN ACL
+
+`poc/apps/hosts.lua`、`poc/apps/wan_acl.lua` 同样是**独立应用层模块**：不被 `poc/rpv.lua` 加载，也不导出为 `rpv.*`；用 `dofile`/`loadfile` 直接加载，测试在 `poc/tests/t_hosts.lua`、`poc/tests/t_wan_acl.lua`。网络侧只调用 node 的公开 socket API：`node:bind(port, cb)`、`sk:sendto(dst, dport, data)`、`sk:close()`。
+
+### hosts（本地域名表）
+
+- 表是 `hostname -> IPv4`；文件一行一条 `<hostname> <ip>`，`#` 注释，最多 1024 条 / 64 KiB。
+- 接口：`hosts.load(path)`、`hosts.resolve(name)`、`hosts.set(name, ip)`、`hosts.save(path)`、`hosts.update(node, server_ip, opts)`；成功返回 `{ok=true, ...}`，失败返回 `nil, err`。
+- 落盘：先写 `<path>.tmp`，再 rename 安装。CC 的 `fs.move` 拒绝覆盖已存在文件，所以旧文件先挪到 `<path>.bak`、最终安装失败时挪回；`path` 本身永不以写模式打开，不会留下半截文件。
+- 更新：UDP 6702。请求 `HOSTS1 GET\n`，应答 `HOSTS1 <bytes>\n` + 文件正文；`opts.timeout`（单次，默认 2 s）、`opts.retries`（额外重试，默认 2）、`opts.wait` 可注入。只接受来自 `server_ip` 的应答；正文、主机名、IP 全部校验通过且落盘成功后才替换内存表，失败保持旧表。
+- 安全：hostname 1..63 ASCII（字母/数字/`.`/`-`/`_`）；IPv4 严格点分十进制（无前导零）；路径含 `..` 或控制字节直接拒绝。
+- 边界（与 rpv 内建名字服务 `services.lua` 的关系）：`apps/hosts` 是**应用层独立表**（`hosts.entries`，hostname -> 点分十进制），只由 `load/set/update` 写入、整表替换，模块自己不监听文件；它**不是** rpv 内建名字服务的补充或缓存。`services.lua` 维护另一张表 `node.hosts`（hostname -> 整数 IP）：`node:setup()` 时由 `services.hosts_load` 从 `hosts_file`（默认 `hosts.txt`）加载，`rpv/node.lua` 在 `hosts.txt` 的 mtime 变化时重载，`dns_register` 与查询命中会写入；`node:lookup()` 先查 `node.hosts`，未命中才向名字服务器发 QUERY。
+- 同步：两套表**互不同步**。同名同格式、默认都叫 `hosts.txt`，但解析器、内存表和加载时机各自独立：`hosts.update()` 只改本模块表并重写文件，不碰 `node.hosts`；`dns_register`/`lookup` 只改 `node.hosts`，不碰本模块表。两者不同步时没有谁覆盖谁：应用层（HTTP 客户端/服务器、脚本）用 `hosts.resolve()`，需要 rpv services 视角（DHCP/DNS 服务器、动态注册）用 `node:lookup()`，以调用方选中的那张表为准。
+- 空更新：`update()` **默认拒绝空正文**（防误清空），只有 `opts.allow_empty = true` 才接受并落盘空表；`load()` 没有这个守卫（空文件会清空表）。默认值不改。
+
+### wan_acl（WAN 侧频道白名单）
+
+- 默认策略 **Fail-Closed**：只允许 200..299 频段，其余一律拒绝；`wan_acl.new({ band=false })` 得到空白名单（全拒）。
+- 接口：`wan_acl.new(opts)`、`acl:allow(ch)`、`acl:allow_range(lo, hi)`、`acl:deny(ch)`、`acl:check(ch)`、`acl:load(path)`、`acl:stats()`。
+- 非法频道（nil、字符串、小数、NaN、越界 0..65535）一律拒绝；显式 `deny` 优先于 `allow`/band；空白名单拒绝一切。
+- 日志只记计数：`check()` 只累加 `allowed`/`denied`，可选 `opts.log` 只收到 `"WAN_ACL_DENY"` 事件词，拿不到包内容。
+- `acl:load(path)` 是**追加**语义：只把文件里的频道/频段并入当前策略，不撤销已有规则；重复 load 同一文件不改变 `check()` 结果，但会把频段重复追加进内部区间表（上限 `MAX_RANGES = 128`），所以启动时 load 一次即可。要整表刷新就重建实例（`wan_acl.new(...)`），要撤销某频道用 `acl:deny(ch)`（deny 优先于 allow/band）。
 
 ## API 速查
 
@@ -201,7 +224,7 @@ rpv-security.md          WPA2 风格安全层原型
 
 | 套件 | 结果 |
 | --- | --- |
-| 离线单元 + lint (`powershell -NoProfile -ExecutionPolicy Bypass -File poc\run-offline.ps1`) | **20/20 组、966 断言、OFFLINE_FAIL 0、LINT_ERRORS 0**（2026-10-25 实测） |
+| 离线单元 + lint (`powershell -NoProfile -ExecutionPolicy Bypass -File poc\run-offline.ps1`) | **22/22 组、1218 断言、OFFLINE_FAIL 0、LINT_ERRORS 0**（2026-10-25 实测） |
 | CraftOS-PC 全量 (`pwsh -File poc\run-all.ps1`) | 历史记录 PASS（未在本轮重跑；原场景计数已不适用，数量随 harness 变化） |
 | 库打包形态验收 | 目录 `require("rpv")` / 单文件 `rpv-bundle.lua` / 安装器（每文件 CRC32 校验 + 装载自检）**三种都 PASS**（历史记录，未在本轮重跑） |
 | 真机 Minecraft（Fabric / NeoForge） | 历史记录 lan/pmtu/ftp/conn/cluster/wan/shim/multi/sites/range/bench/probe/load/loadrpv/longchain/endbridge/lib 全部 PASS（未在本轮重跑） |
