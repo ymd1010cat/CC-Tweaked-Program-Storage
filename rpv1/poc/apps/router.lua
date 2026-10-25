@@ -1,6 +1,6 @@
---[[- apps/router.lua - RPV1 router: core routing + a fixed 19x51 terminal UI.
+--[[- apps/router.lua - RPV1 router: core routing + an adaptive terminal UI.
 
-Round 1 scope (ROUTER ROUND 1 CONTRACT v1):
+Round 1 scope (ROUTER ROUND 1 CONTRACT v1) built the routing lifecycle:
 
   * Router.new(opts) builds the state object; Router.node_spec(opts) is the node
     spec handed to rpv.node_new when the caller does not pass a pre-built node.
@@ -14,11 +14,24 @@ Round 1 scope (ROUTER ROUND 1 CONTRACT v1):
     nat_new fallback would otherwise pick the first non-WAN interface and treat
     the LAN as external) and cfg.dhcp_probe defaults to "0" (the ICMP conflict
     probe cannot work while NAT rewrites the probe replies).
-  * The UI is a fixed 19 row x 51 column screen redrawn by a coroutine task
-    (node:add_task "router-tui"); every normal line is padded or clipped to 51
-    chars and the layout never depends on the terminal size.
   * print() is hijacked while the router runs, so any node:log/print from the
     rest of the library lands in the ring buffer instead of the screen.
+  * The UI is redrawn by a coroutine task (node:add_task "router-tui").
+
+Round 2 (ROUTER ROUND 2 CONTRACT):
+
+  * The layout is recomputed from term.getSize() on every frame: the log window
+    and the lease page grow or shrink to the terminal, every line is clipped (never
+    wrapped) to the current width, and a terminal below 40x10 degrades to the
+    status line alone instead of an error box.
+  * The status line gains the forwarded packet counter (node.stats.fwd) and the
+    live NAT flow count (node.nat.flows); it picks a narrower shape when the
+    terminal cannot hold the wide one, but FWD/NAT survive every shape.
+  * A two row ASCII sparkline under the log window charts the RX/TX packet rate,
+    sampled once per tick from node.stats.frames_rx / frames_tx.
+  * This file is a table module (`return Router`, `Router.new`). The bootstrap
+    (node2/startup.lua) builds it through its app loader, which still supports the
+    round 1 `return function(M, node, args)` app form.
 
 All terminal access goes through pcall and missing methods are skipped, every
 rpv/node call that can fail is pcalled too, and refresh/render/leases only read
@@ -28,16 +41,20 @@ local ARGV = ...
 
 local Router = {}
 
-Router.VERSION = "0.1"
+Router.VERSION = "0.2"
 Router.COLS = 51
 Router.ROWS = 19
 Router.MIN_COLS = 51
 Router.MIN_ROWS = 19
+-- below either of these the screen shows the status line only
+Router.MIN_VIEW_COLS = 40
+Router.MIN_VIEW_ROWS = 10
 Router.LOG_ROWS = 8
 Router.MIN_LOG_KEEP = 8
 Router.LEASE_ROWS = 5
+Router.SPARK_SAMPLES = 32
+Router.SPARK_RAMP = " .:-=+*#%@"
 Router.DEFAULT_INTERVAL = 0.25
-Router.TOO_SMALL = "TERMINAL TOO SMALL (need 51x19)"
 Router.KEYS_HELP = "q quit  r refresh  l clear  j/k log  J/K page"
 
 local DEFAULTS = {
@@ -176,11 +193,46 @@ local function masked_value(rpv, n, prefix)
     return math.floor(n / block) * block
 end
 
-local function header_line(status)
-    return string.format("LAN %s  WAN %s  DHCP %d  CH %d  UP %s",
-        tostring(status.lan_ip), status.wan_up and "up" or "down",
-        tonumber(status.dhcp_bound) or 0, tonumber(status.channels) or 0,
-        tostring(status.uptime_text))
+-- The status line is built in four shapes, widest first; the widest one that fits
+-- the terminal wins, so a 51 column CraftOS screen keeps FWD/NAT instead of folding
+-- the line and a 40 column one drops the labels it cannot afford. FWD and NAT are
+-- in every shape: they are the round 2 additions.
+local function status_text(status, width)
+    local ip = tostring(status.lan_ip)
+    local up = status.wan_up and "up" or "down"
+    local dhcp = tonumber(status.dhcp_bound) or 0
+    local channels = tonumber(status.channels) or 0
+    local fwd = tonumber(status.fwd) or 0
+    local nat = tonumber(status.nat_flows) or 0
+    local uptime = tostring(status.uptime_text)
+    local shapes = {
+        string.format("LAN %s  WAN %s  DHCP %d  CH %d  FWD %d  NAT %d  UP %s",
+            ip, up, dhcp, channels, fwd, nat, uptime),
+        string.format("LAN %s %s DHCP %d CH %d FWD %d NAT %d UP %s",
+            ip, up, dhcp, channels, fwd, nat, uptime),
+        string.format("LAN %s %s DHCP %d FWD %d NAT %d UP %s",
+            ip, up, dhcp, fwd, nat, uptime),
+        string.format("LAN %s %s FWD %d NAT %d UP %s", ip, up, fwd, nat, uptime),
+        string.format("%s %s FWD %d NAT %d UP %s", ip, up, fwd, nat, uptime),
+    }
+    width = tonumber(width) or Router.COLS
+    for i = 1, #shapes do
+        if #shapes[i] <= width then return shapes[i] end
+    end
+    return shapes[#shapes]
+end
+
+-- one ASCII bar for a rate; a nonzero rate always gets at least "." so a busy tick
+-- cannot look like an idle one
+local function spark_char(value, peak, ramp)
+    local chars = ramp or Router.SPARK_RAMP
+    local v = tonumber(value) or 0
+    if v <= 0 or peak <= 0 then return chars:sub(1, 1) end
+    if v > peak then v = peak end
+    local idx = math.floor(v / peak * (#chars - 1) + 0.5) + 1
+    if idx < 2 then idx = 2 end
+    if idx > #chars then idx = #chars end
+    return chars:sub(idx, idx)
 end
 
 -- ===== option normalisation ================================================
@@ -205,8 +257,8 @@ local function resolve_opts(opts)
     else
         o.clock = nil
     end
-    o.min_cols = Router.MIN_COLS
-    o.min_rows = Router.MIN_ROWS
+    o.min_cols = Router.MIN_VIEW_COLS
+    o.min_rows = Router.MIN_VIEW_ROWS
     o.lan_prefix = tonumber(o.lan_prefix) or 24
     o.lan_channel = tonumber(o.lan_channel) or 1001
     o.wan_channel_band = tonumber(o.wan_channel_band) or 2000
@@ -277,6 +329,10 @@ function Router.new(opts)
     r.dhcp_pool = nil
     r.lease_list = {}
     r.pages = 1
+    r.layout = nil
+    r.rx_rates = {}
+    r.tx_rates = {}
+    r.traffic_last = nil
     r.stopped = false
     return r
 end
@@ -442,6 +498,25 @@ function Router:start()
         end
     end
 
+    -- NAT has to exit through the WAN side. When the bootstrap already ran
+    -- node:setup() (opts.setup=false) and role.txt enabled nat, nat_new ran before
+    -- cfg.nat_out was known and fell back to the first LAN interface: point it at
+    -- the WAN before the first packet. Without a nat table, create one now.
+    if opts.nat then
+        local rpv = self.rpv
+        local wan = self:wan_iface()
+        if type(node.nat) == "table" then
+            if wan and node.nat.out ~= wan then
+                node.nat.out = wan
+                node.nat.ext_ip = wan.ip
+                self:log("ROUTER_NAT_REBIND out=" .. tostring(wan.name))
+            end
+        elseif type(rpv) == "table" and type(rpv.nat_setup) == "function" then
+            local ok, err = pcall(rpv.nat_setup, node)
+            if not ok then self:log("ROUTER_NAT_ERROR err=" .. tostring(err)) end
+        end
+    end
+
     -- real node.ifaces is empty before setup(), so the LAN interface object only
     -- exists here; the DHCP server must find these routes already installed
     self:install_route(32, "255.255.255.255")
@@ -471,6 +546,8 @@ function Router:start()
     end
     self.started = true
     self.started_at = self:now()
+    -- first sample only records the baseline; the first tick turns it into a rate
+    self:sample_traffic(self.started_at)
     self:refresh()
     self:draw()
     self:log(string.format("ROUTER_START lan=%s/%s wan=%s", tostring(opts.lan_ip),
@@ -490,10 +567,20 @@ end
 
 -- ===== ring buffer / status ================================================
 
+-- rows the log window shows on the current terminal; log_lines is the requested
+-- window and the adaptive layout may grow it on a tall screen
+function Router:log_window()
+    local view = self.layout
+    if view and not view.tiny and type(view.logs) == "number" and view.logs > 0 then
+        return view.logs
+    end
+    return self.log_lines
+end
+
 function Router:clamp_scroll()
-    -- one window is log_lines tall, so at most (#logs - log_lines) entries can be
+    -- one window is log_window() rows tall, so at most (#logs - window) entries can be
     -- scrolled back out of view
-    local max_scroll = #self.logs - self.log_lines
+    local max_scroll = #self.logs - self:log_window()
     if max_scroll < 0 then max_scroll = 0 end
     if self.scroll > max_scroll then self.scroll = max_scroll end
     if self.scroll < 0 then self.scroll = 0 end
@@ -504,11 +591,28 @@ function Router:log(text)
     local line = tostring(text)
     self.logs[#self.logs + 1] = line
     local keep = self.log_keep or math.max(self.log_lines, Router.MIN_LOG_KEEP)
+    -- a tall terminal grows the window, so the ring must be at least that tall
+    local window = self:log_window()
+    if window > keep then keep = window end
     while #self.logs > keep do
         table.remove(self.logs, 1)
     end
     self:clamp_scroll()
     return line
+end
+
+function Router:wan_iface()
+    local node = self.node
+    local ifaces = type(node) == "table" and node.ifaces or nil
+    if type(ifaces) ~= "table" then return nil end
+    local want = self.opts.wan_name
+    for _, iface in ipairs(ifaces) do
+        if type(iface) == "table" and iface.name == want then return iface end
+    end
+    for _, iface in ipairs(ifaces) do
+        if type(iface) == "table" and iface.is_wan then return iface end
+    end
+    return nil
 end
 
 function Router:wan_up()
@@ -548,6 +652,102 @@ function Router:channel_count()
         end
     end
     return n
+end
+
+-- ===== traffic statistics ===================================================
+
+-- packets the node forwarded between interfaces; node.lua bumps stats.fwd on
+-- every routed frame, so this is the router's forwarding counter
+function Router:forwarded()
+    local node = self.node
+    local stats = type(node) == "table" and node.stats or nil
+    if type(stats) ~= "table" then return 0 end
+    local n = tonumber(stats.fwd)
+    if not n or n ~= n or n < 0 then return 0 end
+    return math.floor(n)
+end
+
+-- live NAT flows; rpv/nat.lua keeps node.nat.flows keyed by flow id, so the
+-- connection count is the number of keys, not a counter (flows expire)
+function Router:nat_flows()
+    local node = self.node
+    local nat = type(node) == "table" and node.nat or nil
+    local flows = type(nat) == "table" and nat.flows or nil
+    if type(flows) ~= "table" then return 0 end
+    local n = 0
+    for _ in pairs(flows) do n = n + 1 end
+    return n
+end
+
+function Router:node_stats()
+    local node = self.node
+    local stats = type(node) == "table" and node.stats or nil
+    if type(stats) ~= "table" then return {} end
+    return stats
+end
+
+local function keep_last(list, value, limit)
+    list[#list + 1] = value
+    while #list > limit do table.remove(list, 1) end
+end
+
+local function last_n(list, n)
+    local out = {}
+    local first = #list - n + 1
+    if first < 1 then first = 1 end
+    for i = first, #list do out[#out + 1] = list[i] end
+    return out
+end
+
+-- Sample node.stats.frames_rx/frames_tx once per tick and push the packet rate
+-- (packets per second, using the injected clock) into the sparkline history.
+function Router:sample_traffic(now)
+    now = tonumber(now) or self:now()
+    local stats = self:node_stats()
+    local rx = tonumber(stats.frames_rx) or 0
+    local tx = tonumber(stats.frames_tx) or 0
+    local last = self.traffic_last
+    local rx_rate, tx_rate = 0, 0
+    if last then
+        local drx, dtx = rx - last.rx, tx - last.tx
+        if drx < 0 then drx = 0 end
+        if dtx < 0 then dtx = 0 end
+        local dt = now - last.t
+        if dt > 0 then
+            rx_rate = drx / dt
+            tx_rate = dtx / dt
+        end
+    end
+    self.traffic_last = { t = now, rx = rx, tx = tx }
+    keep_last(self.rx_rates, rx_rate, Router.SPARK_SAMPLES)
+    keep_last(self.tx_rates, tx_rate, Router.SPARK_SAMPLES)
+    return rx_rate, tx_rate
+end
+
+-- the two chart rows: "RX " + one ASCII bar per recent sample. RX and TX share a
+-- scale so the taller bar is the busier direction.
+function Router:chart_lines(width)
+    width = tonumber(width) or Router.COLS
+    local bars = width - 3
+    if bars < 1 then bars = 1 end
+    if bars > Router.SPARK_SAMPLES then bars = Router.SPARK_SAMPLES end
+    local rx = last_n(self.rx_rates or {}, bars)
+    local tx = last_n(self.tx_rates or {}, bars)
+    local peak = 0
+    for _, v in ipairs(rx) do
+        if type(v) == "number" and v > peak then peak = v end
+    end
+    for _, v in ipairs(tx) do
+        if type(v) == "number" and v > peak then peak = v end
+    end
+    local function row(tag, values)
+        local out = { tag }
+        for i = 1, #values do
+            out[#out + 1] = spark_char(values[i], peak)
+        end
+        return table.concat(out)
+    end
+    return { row("RX ", rx), row("TX ", tx) }
 end
 
 function Router:uptime_seconds(now)
@@ -605,13 +805,16 @@ function Router:leases()
 end
 
 function Router:pages_for(count)
-    local rows = math.max(1, self.lease_rows)
+    local view = self.layout
+    local rows = math.max(1, (view and view.leases) or self.lease_rows)
     local pages = math.ceil(count / rows)
     if pages < 1 then pages = 1 end
     return pages
 end
 
 function Router:refresh()
+    local view = self:view()
+    self.layout = view
     local now = self:now()
     local leases = self:leases()
     self.lease_list = leases
@@ -627,6 +830,8 @@ function Router:refresh()
         wan_up = self:wan_up(),
         dhcp_bound = self:bound_count(),
         channels = self:channel_count(),
+        fwd = self:forwarded(),
+        nat_flows = self:nat_flows(),
         uptime = uptime,
         uptime_text = hms(uptime),
         page = self.lease_page,
@@ -640,7 +845,8 @@ end
 
 function Router:status_line()
     local status = self.status or self:refresh()
-    return fit(header_line(status), Router.COLS)
+    local view = self.layout or self:view()
+    return fit(status_text(status, view.cols), view.cols)
 end
 
 -- ===== terminal ============================================================
@@ -654,49 +860,93 @@ function Router:term_size()
     return cols, rows
 end
 
+-- Layout for the current terminal size. It is recomputed on every call, so a
+-- resize (or a monitor of another size) never needs a restart. A terminal below
+-- MIN_VIEW_COLS x MIN_VIEW_ROWS gets the status line only.
+function Router:view()
+    local cols, rows = self:term_size()
+    cols, rows = tonumber(cols), tonumber(rows)
+    if not cols or not rows or cols < 1 or rows < 1 or cols ~= cols or rows ~= rows then
+        -- no terminal (or a broken getSize): fall back to the reference 51x19 layout
+        cols, rows = Router.COLS, Router.ROWS
+    end
+    cols, rows = math.floor(cols), math.floor(rows)
+    local v = {
+        cols = cols, rows = rows, tiny = false,
+        logs = self.log_lines, leases = self.lease_rows, help = true,
+    }
+    if cols < Router.MIN_VIEW_COLS or rows < Router.MIN_VIEW_ROWS then
+        v.tiny = true
+        v.logs, v.leases, v.help = 0, 0, false
+        return v
+    end
+    -- fixed rows: status, the rule above the log, the rule below it, the two chart
+    -- rows, the lease header and the page row
+    local fixed = 7
+    local help = 1
+    local data = rows - fixed - help
+    if data < 2 then data, help = rows - fixed, 0 end
+    if data < 2 then data = 2 end
+    local want_log = math.max(1, self.log_lines)
+    local want_lease = math.max(1, self.lease_rows)
+    -- split the data rows in the requested log:lease ratio, then clamp to the
+    -- requested sizes; a tall terminal gives every extra row to the log window
+    local leases = math.floor(data * want_lease / (want_log + want_lease) + 0.5)
+    if leases < 1 then leases = 1 end
+    if leases > want_lease then leases = want_lease end
+    if leases > data - 1 then leases = data - 1 end
+    local logs = data - leases
+    if logs < 1 then
+        logs = 1
+        leases = data - 1
+    end
+    v.logs, v.leases, v.help = logs, math.max(1, leases), help == 1
+    return v
+end
+
 function Router:render()
     local status = self:refresh()
-    local cols, rows = self:term_size()
-    if cols and (cols < Router.MIN_COLS or rows < Router.MIN_ROWS) then
-        return { Router.TOO_SMALL }
+    local view = self.layout or self:view()
+    if view.tiny then
+        return { fit(status_text(status, view.cols), view.cols) }
     end
+    local width = view.cols
     local lines = {}
-    lines[#lines + 1] = fit(header_line(status), Router.COLS)
-    lines[#lines + 1] = string.rep("-", Router.COLS)
-    -- the log window is log_lines rows tall (the sum of every block gives
-    -- 11 + log_lines lines: 19 at the default log_lines=8) and ends at
-    -- #logs - scroll; idx counts back from that end
+    local function push(text) lines[#lines + 1] = fit(text, width) end
+    push(status_text(status, width))
+    push(string.rep("-", width))
+    -- the log window is view.logs rows tall and ends at #logs - scroll; idx counts
+    -- back from that end
     local endidx = #self.logs - self.scroll
-    for row = 1, self.log_lines do
-        local idx = endidx - self.log_lines + row
+    for row = 1, view.logs do
+        local idx = endidx - view.logs + row
         local text = nil
         if idx >= 1 then text = self.logs[idx] end
-        lines[#lines + 1] = fit(text and one_line(text) or "", Router.COLS)
+        push(text and one_line(text) or "")
     end
-    lines[#lines + 1] = string.rep("-", Router.COLS)
-    lines[#lines + 1] = fit(string.format("%-17s%-9s%s", "IP", "MAC", "EXPIRES"), Router.COLS)
+    push(string.rep("-", width))
+    local chart = self:chart_lines(width)
+    push(chart[1])
+    push(chart[2])
+    push(string.format("%-17s%-9s%s", "IP", "MAC", "EXPIRES"))
     local leases = self.lease_list or {}
     if #leases == 0 then
-        lines[#lines + 1] = fit("(no leases)", Router.COLS)
-        for _ = 2, Router.LEASE_ROWS do lines[#lines + 1] = fit("", Router.COLS) end
+        push("(no leases)")
+        for _ = 2, view.leases do push("") end
     else
-        local per_page = math.max(1, self.lease_rows)
-        for row = 1, Router.LEASE_ROWS do
-            local lease = nil
-            if row <= per_page then
-                lease = leases[(self.lease_page - 1) * per_page + row]
-            end
+        local per_page = math.max(1, view.leases)
+        for row = 1, view.leases do
+            local lease = leases[(self.lease_page - 1) * per_page + row]
             if lease then
-                lines[#lines + 1] = fit(string.format("%-17s%-9s%s", lease.ip, lease.mac,
-                    expiry_text(lease.expires)), Router.COLS)
+                push(string.format("%-17s%-9s%s", lease.ip, lease.mac,
+                    expiry_text(lease.expires)))
             else
-                lines[#lines + 1] = fit("", Router.COLS)
+                push("")
             end
         end
     end
-    lines[#lines + 1] = fit(string.format("PAGE %d/%d", self.lease_page, self.pages or 1),
-        Router.COLS)
-    lines[#lines + 1] = fit(Router.KEYS_HELP, Router.COLS)
+    push(string.format("PAGE %d/%d", self.lease_page, self.pages or 1))
+    if view.help then push(Router.KEYS_HELP) end
     return lines
 end
 
@@ -721,6 +971,7 @@ function Router:draw()
 end
 
 function Router:tick()
+    self:sample_traffic()
     self:draw()
     return true
 end
