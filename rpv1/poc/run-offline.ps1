@@ -2,10 +2,11 @@
 #
 #   pwsh -File poc\run-offline.ps1
 #
-# Stages ONLY rpv/, tests/ and tools/ on a single headless computer: no role.txt, no
-# apps, no modems, no second computer, no topology. The tests exercise the pure
-# logic (codecs, route table, crypto KATs, WAN AEAD state machine, NAT rewrite,
-# multicast domains, QoS classes) and tools/lint.lua checks every Lua file.
+# Stages rpv/, tests/, tools/ and the pure app-layer modules in apps/http_*.lua on a
+# single headless computer: no role.txt, no running apps, no modems, no second
+# computer, no topology. The tests exercise the pure logic (codecs, route table,
+# crypto KATs, WAN AEAD state machine, NAT rewrite, multicast domains, QoS classes,
+# HTTP framing/server/client/secure) and tools/lint.lua checks every Lua file.
 #
 # The same suite runs under desktop Lua 5.1 with the shim in tests/host.lua:
 #   lua -e 'dofile("tests/host.lua")' tests/run.lua
@@ -20,10 +21,11 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 
 $dir = Join-Path $data "computer\20"
-foreach ($sub in @("rpv", "tests", "tools")) { New-Item -ItemType Directory -Force -Path (Join-Path $dir $sub) | Out-Null }
+foreach ($sub in @("rpv", "tests", "tools", "apps")) { New-Item -ItemType Directory -Force -Path (Join-Path $dir $sub) | Out-Null }
 Copy-Item (Join-Path $root "poc\rpv\*.lua") (Join-Path $dir "rpv") -Force
 Copy-Item (Join-Path $root "poc\tests\*.lua") (Join-Path $dir "tests") -Force
 Copy-Item (Join-Path $root "poc\tools\*.lua") (Join-Path $dir "tools") -Force
+Copy-Item (Join-Path $root "poc\apps\http_*.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\tests\startup.lua") (Join-Path $dir "startup.lua") -Force
 
 $stdout = Join-Path $out "offline.stdout.txt"

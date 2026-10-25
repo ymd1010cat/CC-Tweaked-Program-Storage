@@ -34,6 +34,18 @@ for _, mod in ipairs({ "crypto", "util", "ip", "route", "arp", "link", "icmp", "
     end
 end
 
+-- app-layer modules are plain tables, so each one is loaded on its own
+for _, mod in ipairs({ "http_common", "http_server", "http_client", "http_secure" }) do
+    if fs.exists("apps/" .. mod .. ".lua") then
+        local ok, ret = pcall(load_module, "apps/" .. mod .. ".lua", M)
+        if ok and type(ret) == "table" then
+            M[mod] = ret
+        else
+            print("TEST_FAIL module:" .. mod .. " err=" .. tostring(ret))
+        end
+    end
+end
+
 -- ===== tiny assertion harness ==============================================
 local T = { pass = 0, fail = 0, current = "?" , failures = {} }
 local function report(name, ok, detail)
@@ -79,6 +91,8 @@ local files = {
     "tests/t_util.lua", "tests/t_ip.lua", "tests/t_route.lua", "tests/t_crypto.lua",
     "tests/t_conn.lua", "tests/t_wansec.lua", "tests/t_nat.lua", "tests/t_mcast.lua",
     "tests/t_qos.lua", "tests/t_topo.lua", "tests/t_scale.lua", "tests/t_services.lua", "tests/t_addr.lua", "tests/t_compat.lua",
+    "tests/t_http_common.lua", "tests/t_http_server.lua", "tests/t_http_client.lua",
+    "tests/t_http_secure.lua", "tests/t_http_integration.lua", "tests/t_http_hardening.lua",
 }
 local groups = 0
 for _, path in ipairs(files) do
