@@ -1,18 +1,28 @@
 -- Sentinel client login: challenge/response over the auth modem.
 -- Deploy: /auth/login_client.lua
 --
--- Wire contract (secure_auth_v4):
+-- Wire contract (secure_auth_v5):
 --   H  = sha256(password .. salt)
 --   H' = sha256(H .. "|" .. nonce_c .. "|" .. nonce_s)
 -- Only H' crosses the wire; the password never leaves this terminal.
+--
+-- auth_response is signed over
+--   server_id|nonce_c|nonce_s|tostring(success)|tostring(role or "")
+-- The role is issued by the server; a success whose role is missing or does
+-- not normalise through /auth/role_policy.lua is rejected, never defaulted.
+--
+-- open_request/open_response ask the server to actuate the vault. The terminal
+-- holds no door wiring: it signs terminal_id|username|nonce with the PSK and
+-- the server decides and actuates.
 
 local sha256 = dofile("/sha256.lua")
 local psk = dofile("/auth/psk.lua")
 local netcheck = dofile("/system/netcheck.lua")
+local rolePolicy = dofile("/auth/role_policy.lua")
 
 local M = {}
 
-local PROTOCOL = "secure_auth_v4"
+local PROTOCOL = "secure_auth_v5"
 local AUTH_CHANNEL = 1
 local EXCHANGE_TIMEOUT = 8
 local PRECHECK_SECONDS = 2
@@ -162,7 +172,15 @@ local function requestAuth(modem, ourChannel, terminalId, username, password,
     if response.success ~= true then
         return false, nil, "credentials", nil
     end
-    return true, response.role or "guest", nil, nil
+    -- The server owns roles. A success with no usable role is not a login.
+    if response.role == nil then
+        return false, nil, "role", nil
+    end
+    local role = rolePolicy.normalize(response.role)
+    if not role then
+        return false, nil, "role", nil
+    end
+    return true, role, nil, nil
 end
 
 -- Full network authentication. Returns ok, role, error code, detail.
@@ -208,6 +226,8 @@ local function describeError(code, detail)
         return "[Error] salt signature invalid"
     elseif code == "credentials" then
         return "[Error] Invalid credentials"
+    elseif code == "role" then
+        return "[Error] Server returned no usable role."
     elseif code == "signature" then
         return "[Error] signature invalid"
     elseif code == "psk" then
@@ -231,7 +251,7 @@ function M.login()
     print("Authenticating...")
     local ok, role, code, detail = authenticate(username, password)
     if ok then
-        audit.log(username, "LOGIN_SUCCESS")
+        audit.log(username, role, "LOGIN_SUCCESS")
         return { name = username, role = role }
     end
 
@@ -239,10 +259,11 @@ function M.login()
         print(describeError(code, detail))
         return nil
     end
-    if code == "credentials" or code == "signature" or code == "salt_signature" then
-        audit.log(username, "LOGIN_FAIL")
+    if code == "credentials" or code == "signature" or code == "salt_signature"
+        or code == "role" then
+        audit.log(username, "", "LOGIN_FAIL")
     else
-        audit.log(username, "LOGIN_FAIL_TIMEOUT")
+        audit.log(username, "", "LOGIN_FAIL_TIMEOUT")
     end
     print(describeError(code, detail))
     return nil
@@ -253,6 +274,81 @@ function M.verifyPassword(username, password)
     if type(password) ~= "string" or password == "" then return false end
     local ok = authenticate(username, password)
     return ok == true
+end
+
+-- Ask the auth server to open the vault. The terminal cannot open it alone:
+-- the server re-reads the stored role and owns the door actuator.
+-- Returns ok, reason, code, detail.
+function M.requestOpen(username)
+    if type(username) ~= "string" or username == "" then
+        return false, "No username for the vault request.", "request", nil
+    end
+
+    local called, passed, ids, reason = pcall(netcheck.check, PRECHECK_SECONDS)
+    if not called then
+        passed = false
+        reason = "check interrupted"
+    end
+    if not passed then
+        return false, "Auth server unreachable", "network",
+            tostring(reason or "check interrupted")
+    end
+
+    local modem = findWiredModem()
+    if not modem then
+        return false, "Auth server unreachable", "network", "no wired modem"
+    end
+
+    local terminalId = readTerminalId()
+    local nonce = makeNonce()
+    local okSign, sig = pcall(psk.sign, terminalId .. "|" .. username .. "|" .. nonce)
+    if not okSign then
+        return false, "Cannot sign the vault request.", "psk", tostring(sig)
+    end
+
+    local ourChannel = math.random(REPLY_MIN, REPLY_MAX)
+    if not pcall(peripheral.call, modem, "open", ourChannel) then
+        return false, "Auth server unreachable", "network", "cannot open reply channel"
+    end
+
+    local request = {
+        protocol = PROTOCOL,
+        type = "open_request",
+        terminal_id = terminalId,
+        username = username,
+        nonce = nonce,
+        sig = sig,
+    }
+    local sent = pcall(peripheral.call, modem, "transmit", AUTH_CHANNEL, ourChannel, request)
+    local response = nil
+    if sent then
+        response = waitForReply(ourChannel, "open_response", terminalId, nonce)
+    end
+    pcall(peripheral.call, modem, "close", ourChannel)
+
+    if not sent then
+        return false, "Auth server unreachable", "network", "transmit failed"
+    end
+    if not response then
+        return false, "Auth server did not answer.", "timeout", nil
+    end
+    if type(response.server_id) ~= "string" or type(response.sig) ~= "string"
+        or type(response.ok) ~= "boolean" or type(response.reason) ~= "string" then
+        return false, "Invalid response from auth server.", "signature", nil
+    end
+
+    local signed = response.server_id .. "|" .. nonce .. "|"
+        .. tostring(response.ok) .. "|" .. response.reason
+    if not psk.verify(signed, response.sig) then
+        return false, "Invalid response signature.", "signature", nil
+    end
+
+    if response.ok == true then
+        return true, response.reason, nil, nil
+    end
+    -- The server sends the machine reason ("denied"); the menu wants a
+    -- sentence a person can read.
+    return false, "Access denied by auth server.", "denied", nil
 end
 
 return M

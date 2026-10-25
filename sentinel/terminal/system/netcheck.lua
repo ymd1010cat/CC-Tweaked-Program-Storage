@@ -7,7 +7,7 @@
 
 local M = {}
 
-local PROTOCOL = "secure_auth_v4"
+local PROTOCOL = "secure_auth_v5"
 local AUTH_CHANNEL = 1
 
 local function modemNames()

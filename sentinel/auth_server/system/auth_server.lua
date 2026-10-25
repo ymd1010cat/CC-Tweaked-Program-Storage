@@ -1,8 +1,12 @@
--- auth_server.lua -- Sentinel authentication service (protocol secure_auth_v4).
+-- auth_server.lua -- Sentinel authentication service (protocol secure_auth_v5).
 -- Deploy path: /system/auth_server.lua
 --
 -- Broadcasts a heartbeat on channel 1 once per second and answers
 -- salt_request / auth_request messages from registered terminals.
+--
+-- It also owns the door actuator: open_request messages are honoured only after
+-- the terminal signature verifies and the account role (re-read from users.db)
+-- satisfies role_policy "operator". A terminal can ask, never grant.
 --
 -- Trust model: the terminal id in a request is only believed once the request
 -- carries a valid signature made with that terminal's key, so an unknown id
@@ -12,7 +16,7 @@
 
 local M = {}
 
-local PROTOCOL = "secure_auth_v4"
+local PROTOCOL = "secure_auth_v5"
 local CHANNEL = 1
 local HEARTBEAT_INTERVAL = 1
 
@@ -20,6 +24,11 @@ local SERVER_ID_PATH = "/auth/server_id"
 local SERVER_ID_LENGTH = 24
 local CRYPTO_PATH = "/auth/server_crypto.lua"
 local USER_MANAGER_PATH = "/auth/user_manager.lua"
+local ROLE_POLICY_PATH = "/auth/role_policy.lua"
+
+-- The vault/door mechanism is wired to the auth server, not to the terminals.
+local OPEN_REDSTONE_SIDE = "left"
+local OPEN_PULSE_SECONDS = 1
 
 local FAKE_SALT = "ffffffffffffffff"
 local REPLAY_TTL_MS = 15000
@@ -35,6 +44,8 @@ local cryptoModule = nil
 local cryptoLoaded = false
 local userManagerModule = nil
 local userManagerLoaded = false
+local rolePolicyModule = nil
+local rolePolicyLoaded = false
 
 -- [terminalId] = array of { kind = "salt"|"auth", nonce = string, at = ms }
 -- The kind is part of the identity: a normal login reuses the same nonce_c for
@@ -145,6 +156,16 @@ local function getUserManager()
         userManagerModule = mod
     end
     return userManagerModule
+end
+
+local function getRolePolicy()
+    if rolePolicyLoaded then return rolePolicyModule end
+    rolePolicyLoaded = true
+    local ok, mod = pcall(dofile, ROLE_POLICY_PATH)
+    if ok and type(mod) == "table" then
+        rolePolicyModule = mod
+    end
+    return rolePolicyModule
 end
 
 -- Calls an optional user_manager function. A missing module or a thrown error
@@ -286,10 +307,20 @@ local function handleAuthRequest(message, replyChannel, now)
     if not crypto.verify(terminalId, expected, message.sig) then return end
     if not recordNonce(terminalId, "auth", nonceC, now) then return end
 
-    local passed, role = userManagerCall("verifyDerived", username, derived, nonceC, nonceS)
-    local success = passed == true
-    if success and not isFilledString(role) then
-        role = "guest"
+    local passed, storedRole = userManagerCall("verifyDerived", username, derived, nonceC, nonceS)
+    local policy = getRolePolicy()
+    local role = nil
+    -- Permissions follow the account: the role comes from users.db and is sent
+    -- verbatim (guest stays guest; the policy only decides whether it is a
+    -- known role). A missing/unknown role means the login itself fails; there
+    -- is no "or guest" default.
+    local success = passed == true and policy ~= nil
+    if success then
+        if type(storedRole) == "string" and policy.normalize(storedRole) ~= nil then
+            role = storedRole
+        else
+            success = false
+        end
     end
     local signed = serverId .. "|" .. nonceC .. "|" .. nonceS .. "|" .. tostring(success)
         .. "|" .. tostring(role or "")
@@ -309,6 +340,62 @@ local function handleAuthRequest(message, replyChannel, now)
     })
 end
 
+-- One second pulse on the door mechanism wired to this server's left side.
+local function pulseDoor()
+    if type(redstone) ~= "table" or type(redstone.setOutput) ~= "function" then
+        return false
+    end
+    local raised = pcall(redstone.setOutput, OPEN_REDSTONE_SIDE, 1)
+    if not raised then return false end
+    os.sleep(OPEN_PULSE_SECONDS)
+    pcall(redstone.setOutput, OPEN_REDSTONE_SIDE, 0)
+    return true
+end
+
+-- open_request: the terminal proves it holds a registered PSK, this server
+-- re-reads the account role and decides. Refusals are explicit (reason
+-- "denied"); an unregistered terminal gets no reply at all, like the login
+-- requests.
+local function handleOpenRequest(message, replyChannel, now)
+    local terminalId = message.terminal_id
+    local username = message.username
+    local nonce = message.nonce
+    if not isFilledString(terminalId) or not isFilledString(username)
+            or not isFilledString(nonce) then
+        return
+    end
+    local crypto = getCrypto()
+    if not crypto then return end
+    local expected = terminalId .. "|" .. username .. "|" .. nonce
+    if not crypto.verify(terminalId, expected, message.sig) then return end
+    if not recordNonce(terminalId, "open", nonce, now) then return end
+
+    local policy = getRolePolicy()
+    local storedRole = userManagerCall("getRole", username)
+    local allowed = policy ~= nil and policy.allows(storedRole, "operator") == true
+
+    local ok = false
+    local reason = "denied"
+    if allowed and pulseDoor() then
+        ok = true
+        reason = "granted"
+    end
+
+    local signed = serverId .. "|" .. nonce .. "|" .. tostring(ok) .. "|" .. reason
+    local sig = crypto.sign(terminalId, signed)
+    if not sig then return end
+    reply(replyChannel, {
+        protocol = PROTOCOL,
+        type = "open_response",
+        server_id = serverId,
+        terminal_id = terminalId,
+        nonce_c = nonce,
+        ok = ok,
+        reason = reason,
+        sig = sig,
+    })
+end
+
 local function heartbeatLoop()
     local beat = {
         protocol = PROTOCOL,
@@ -323,22 +410,45 @@ local function heartbeatLoop()
     end
 end
 
+--- Routes one protocol message that arrived on the auth channel.
+--- Exposed so the offline test suite can drive the handlers directly.
+function M.handleMessage(message, replyChannel)
+    if type(message) ~= "table" or message.protocol ~= PROTOCOL then
+        return false
+    end
+    local now = nowMs()
+    pruneReplay(now)
+    if message.type == "salt_request" then
+        handleSaltRequest(message, replyChannel, now)
+    elseif message.type == "auth_request" then
+        handleAuthRequest(message, replyChannel, now)
+    elseif message.type == "open_request" then
+        handleOpenRequest(message, replyChannel, now)
+    else
+        return false
+    end
+    return true
+end
+
 local function requestLoop()
     while true do
-        local now = nowMs()
-        pruneReplay(now)
         local event, _side, channel, replyChannel, message = os.pullEvent("modem_message")
         -- Named locals on purpose: ("modem_message", side, channel,
         -- replyChannel, message, distance).
-        if event == "modem_message" and channel == CHANNEL
-                and type(message) == "table" and message.protocol == PROTOCOL then
-            if message.type == "salt_request" then
-                handleSaltRequest(message, replyChannel, now)
-            elseif message.type == "auth_request" then
-                handleAuthRequest(message, replyChannel, now)
-            end
+        if event == "modem_message" and channel == CHANNEL then
+            M.handleMessage(message, replyChannel)
         end
     end
+end
+
+--- Test/bootstrap hook: fixes the server id and modem without starting loops.
+function M.init(options)
+    options = options or {}
+    serverId = options.server_id or ensureServerId()
+    if options.modem ~= nil then
+        modem = options.modem
+    end
+    return serverId
 end
 
 function M.run()
@@ -379,6 +489,10 @@ function M.run()
     parallel.waitForAny(heartbeatLoop, requestLoop)
 end
 
-M.run()
+-- The service starts itself when this file is run, but the offline test suite
+-- loads it with _G.SENTINEL_TEST set to drive the handlers directly.
+if not (type(_G) == "table" and _G.SENTINEL_TEST) then
+    M.run()
+end
 
 return M

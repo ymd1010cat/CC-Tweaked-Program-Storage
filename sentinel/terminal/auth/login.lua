@@ -1,42 +1,28 @@
--- Sentinel login dispatcher: network client or local standalone store.
+-- Sentinel login dispatcher: the auth server is the only credential authority.
 -- Deploy: /auth/login.lua
+--
+-- The offline (standalone) store is retired: every login, password re-check and
+-- vault request goes over the modem through /auth/login_client.lua.
 
 local M = {}
 
-local cachedMode = nil
-local cachedModule = nil
-
-local function readMode()
-    local ok, config = pcall(dofile, "/auth/mode.lua")
-    if ok and type(config) == "table" then
-        return config.mode or "client"
-    end
-    return "client"
+local ok, loginClient = pcall(dofile, "/auth/login_client.lua")
+if not ok or type(loginClient) ~= "table" then
+    error("cannot load /auth/login_client.lua", 0)
 end
-
-local function loadLogin(mode)
-    if cachedModule and cachedMode == mode then return cachedModule end
-    local path = "/auth/login_client.lua"
-    if mode == "standalone" then
-        path = "/auth/login_standalone.lua"
-    end
-    local ok, module = pcall(dofile, path)
-    if not ok or type(module) ~= "table" then
-        error("cannot load " .. path, 0)
-    end
-    cachedMode = mode
-    cachedModule = module
-    return module
-end
-
-local loginModule = loadLogin(readMode())
 
 function M.login()
-    return loginModule.login()
+    return loginClient.login()
 end
 
 function M.verifyPassword(username, password)
-    return loginModule.verifyPassword(username, password)
+    return loginClient.verifyPassword(username, password)
+end
+
+-- Ask the auth server to grant vault access for an authenticated account.
+-- Returns ok, reason, code, detail (see login_client.requestOpen).
+function M.requestOpen(username)
+    return loginClient.requestOpen(username)
 end
 
 return M

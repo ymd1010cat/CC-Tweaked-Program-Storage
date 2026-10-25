@@ -8,6 +8,7 @@
 
 local USER_MANAGER_PATH = "/auth/user_manager.lua"
 local TERMINAL_KEYS_PATH = "/auth/terminal_keys.lua"
+local ROLE_POLICY_PATH = "/auth/role_policy.lua"
 local SHA_PATH = "/sha256.lua"
 local USERS_DB_PATH = "/auth/users.db"
 local SERVER_ID_PATH = "/auth/server_id"
@@ -18,6 +19,7 @@ local IDLE_DELAY = 30
 
 local userManager = nil
 local terminalKeys = nil
+local rolePolicy = nil
 local sha = nil
 
 local function loadLibrary(path)
@@ -86,7 +88,7 @@ local function authenticate(name, password)
     if type(user.salt) ~= "string" or user.salt == "" then return nil end
     if type(user.hash) ~= "string" then return nil end
     if sha.hash(password .. user.salt) ~= user.hash then return nil end
-    return { name = name, role = user.role or "guest" }
+    return { name = name, role = user.role }
 end
 
 local function loginScreen()
@@ -105,6 +107,10 @@ local function loginScreen()
             print("WARNING: /auth/user_manager.lua is not loadable")
             print("")
         end
+        if not rolePolicy then
+            print("WARNING: /auth/role_policy.lua is not loadable")
+            print("")
+        end
         write("Username: ")
         local name = trim(readLine())
         if name == "" then return nil end
@@ -112,7 +118,7 @@ local function loginScreen()
         local password = readSecret()
         if password == "" then return nil end
         local user = authenticate(name, password)
-        if user and user.role == "root" then
+        if user and rolePolicy and rolePolicy.allows(user.role, "root") then
             return user
         end
         print("Access denied.")
@@ -175,7 +181,7 @@ local function addUserFlow()
         print("No password given.")
         return pause()
     end
-    write("Role (admin/operator/guest): ")
+    write("Role (admin/operator/user/guest): ")
     local role = trim(readLine())
     if role == "" then role = "guest" end
     local ok, message = callManager("addUser", name, password, role)
@@ -239,7 +245,7 @@ local function changeRoleFlow(actor)
         print("No user name given.")
         return pause()
     end
-    write("Role (admin/operator/guest): ")
+    write("Role (admin/operator/user/guest): ")
     local role = trim(readLine())
     if role == "" then role = "guest" end
     local ok, message = callManager("changeRole", name, role, actor.name)
@@ -388,6 +394,7 @@ end
 local function main()
     userManager = loadLibrary(USER_MANAGER_PATH)
     terminalKeys = loadLibrary(TERMINAL_KEYS_PATH)
+    rolePolicy = loadLibrary(ROLE_POLICY_PATH)
     sha = loadLibrary(SHA_PATH)
 
     if not sha then

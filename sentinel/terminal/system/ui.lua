@@ -4,6 +4,8 @@
 
 local token, session, sandbox, auth = ...
 
+local rolePolicy = dofile("/auth/role_policy.lua")
+
 local function loadUserManager()
     local ok, chunk = pcall(loadfile, "/auth/user_manager.lua")
     if not ok or type(chunk) ~= "function" then return nil end
@@ -28,7 +30,7 @@ end
 local function buildMenu(user)
     local items = { { id = "vault", label = "Open Vault" } }
     local manager = nil
-    if user.role == "root" then
+    if rolePolicy.allows(user.role, "root") then
         manager = loadUserManager()
         if manager then
             items[#items + 1] = { id = "add", label = "Add User" }
@@ -51,13 +53,25 @@ local function renderMenu(user, items)
     write("Select an option: ")
 end
 
--- One-second pulse on the left side, then the session ends.
-local function openVault()
-    print("Opening Vault...")
-    redstone.setOutput("left", 1)
-    sleep(1)
-    redstone.setOutput("left", 0)
-    return "break"
+-- The terminal has no door wiring: it asks the auth server, which owns the
+-- actuator, and ends the session only when the server grants access.
+local function openVault(user)
+    print("Requesting vault access from auth server...")
+    local ok, reason, code = auth.requestOpen(user.name)
+    if ok then
+        print("[OK] Vault opened by auth server.")
+        return "break"
+    end
+    if code == "network" then
+        print("[Error] Auth server unreachable.")
+    elseif code == "timeout" then
+        print("[Error] Auth server did not answer.")
+    else
+        print("[Denied] " .. tostring(reason or "denied"))
+    end
+    print("")
+    sleep(2)
+    return nil
 end
 
 -- Two-stage exit: write the anti flag, drop the sandbox, reboot. The next boot
@@ -90,13 +104,13 @@ local function exitToCraftOS(user)
 end
 
 local function promptRole()
-    local role = prompt("Role (admin/operator/guest): ")
-    if role == nil or role == "" then return "guest" end
-    if role == "admin" or role == "operator" or role == "guest" then
+    local role = prompt("Role (admin/operator/user/guest): ")
+    if role == nil or role == "" then return "user" end
+    if role == "admin" or role == "operator" or role == "user" or role == "guest" then
         return role
     end
     print("[Error] Invalid role: " .. tostring(role))
-    print("Allowed: admin, operator, guest")
+    print("Allowed: admin, operator, user, guest")
     if role == "root" then
         print("Root accounts cannot be created through UI.")
     end
@@ -194,7 +208,7 @@ while true do
     if item then
         local result = nil
         if item.id == "vault" then
-            result = openVault()
+            result = openVault(user)
         elseif item.id == "exit" then
             result = exitToCraftOS(user)
         elseif item.id == "logout" then

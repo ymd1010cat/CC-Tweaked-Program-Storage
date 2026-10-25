@@ -1,20 +1,27 @@
-# Sentinel 安全终端系统（协议 secure_auth_v4）
+# Sentinel 安全终端系统（协议 secure_auth_v5）
 
 > 本项目原名 HighSafe，现更名 Sentinel（目录 `sentinel/`）。
 
 ## 0. 摘要与数据流
 
-Sentinel 是给 ComputerCraft / CraftOS 用的一套门禁与用户管理方案：终端负责登录和开门，
-认证服务器负责校验口令，审计服务器负责把每一次登录与管理动作按哈希链落盘。三者只通过
-有线 modem 通信，终端与服务器共享一段 32 字符的预共享密钥（PSK），口令本身永不上线。
+Sentinel 是给 ComputerCraft / CraftOS 用的一套门禁与用户管理方案：终端负责登录与发起
+开门请求，认证服务器负责校验口令并**执行门禁动作**，审计服务器负责把每一次登录、开门与
+管理动作按哈希链落盘。三者只通过有线 modem 通信，终端与服务器共享一段 32 字符的预共享
+密钥（PSK），口令本身永不上线。
+
+权限跟随账户：角色保存在认证服务器的 `/auth/users.db`，终端只是持有 PSK 的合法请求方，
+它既不在本地校验账号，也没有任何本地授权或本地开门能力。角色权重由共享的纯模块
+`/auth/role_policy.lua` 统一解释（root=4、admin=3、operator=2、user=1；`guest` 是 `user`
+的历史别名）。终端每次登录都必须连上认证服务器，独立/离线模式已废弃。
 
 一次完整动作的数据流：
 
 ```
-终端 --(频道 1)--> salt_request / auth_request --------> 认证服务器
-认证服务器 --(回包频道)--> salt_response / auth_response --> 终端
+终端 --(频道 1)--> salt_request / auth_request / open_request --> 认证服务器
+认证服务器 --(回包频道)--> salt_response / auth_response / open_response --> 终端
 认证服务器 --(频道 1，每 1 秒)--> heartbeat 广播
-终端 --(频道 2)--> audit_event（带签名）---------------> 审计服务器
+认证服务器 --(左侧红石)--> 门/金库机构（同意 open_request 时 1 秒脉冲）
+终端 --(频道 2)--> audit_event（带签名，含 role）----------> 审计服务器
 审计服务器 --(频道 2)--> audit_ack（针对单个事件）
 审计服务器 --(频道 2，每 5 秒)--> audit_heartbeat 广播
 审计服务器 --(背面红石 + 驱动器)--> 软盘归档，成功后换盘
@@ -36,7 +43,9 @@ Sentinel 是给 ComputerCraft / CraftOS 用的一套门禁与用户管理方案�
 | `salt_response` | 认证服务器 -> 终端回包频道 | 回包频道 | `server_id\|username\|salt\|nonce_c\|nonce_s` |
 | `auth_request` | 终端 -> 认证服务器 | 1 | `terminal_id\|username\|derived\|nonce_c\|nonce_s` |
 | `auth_response` | 认证服务器 -> 终端回包频道 | 回包频道 | 见下方长串 |
-| `audit_event` | 终端 -> 审计服务器 | 2 | `terminal_id\|username\|action\|timestamp\|nonce` |
+| `open_request` | 终端 -> 认证服务器 | 1 | `terminal_id\|username\|nonce` |
+| `open_response` | 认证服务器 -> 终端回包频道 | 回包频道 | `server_id\|nonce\|tostring(ok)\|reason` |
+| `audit_event` | 终端 -> 审计服务器 | 2 | `terminal_id\|username\|role\|action\|timestamp\|nonce` |
 | `audit_ack` | 审计服务器 -> 终端 | 2 | `nonce\|terminal_id` |
 | `audit_heartbeat` | 审计服务器 -> 广播 | 2 | 不签名 |
 
@@ -46,21 +55,27 @@ Sentinel 是给 ComputerCraft / CraftOS 用的一套门禁与用户管理方案�
 auth_response: server_id|nonce_c|nonce_s|tostring(success)|tostring(role or "")
 ```
 
+`role` 是认证服务器当场从 `/auth/users.db` 读到的真实角色，原样参与签名（存的
+`guest` 就发 `guest`）；服务器不再把缺失角色回退成 `guest`，角色为空或未知时直接
+`success = false`。终端收到后会用 `/auth/role_policy.lua` 再校验一遍，并拒绝
+`success = true` 但角色缺失/未知的回包（见 6.3）。
+
 终端的回包频道是随机值（1000..9999）；`nonce_c`、`nonce_s` 由
 `tostring(math.random()) .. tostring(os.epoch("utc"))` 生成，审计 `nonce` 是
-`tostring(math.random()) .. timestamp`。盐与认证两段交换各给 8 秒超时，登录前预检 2 秒，
-开机自检 3 秒。协议层不自动重试：超时就重输口令。
+`tostring(math.random()) .. timestamp`。盐、认证与开门三段交换各给 8 秒超时，登录前
+预检 2 秒，开机自检 3 秒。协议层不自动重试：超时就重输口令。
 
 ## 1. 系统组成
 
 | 角色 | 数量 | 职责 | 频道 | 关键要求 |
 |---|---|---|---|---|
-| 认证服务器 | 1 台 | 广播心跳；处理取盐与认证；本机根控制台管理用户与终端密钥 | 1 | 同一有线网络里必须唯一 |
+| 认证服务器 | 1 台 | 广播心跳；处理取盐、认证与 `open_request`；本机根控制台管理用户与终端密钥；用左侧红石执行开门 | 1 | 同一有线网络里必须唯一；左侧红石接门禁 |
 | 审计服务器 | 1 台 | 验签、防重放、限速、去重、链式落盘、归档换盘、回执 | 2 | 需要终端密钥库副本与驱动器 |
-| 客户端终端 | 1 台起 | 登录、菜单、开门、退出；把动作写进审计队列 | 1（发送）、随机回包频道、2（审计/回执） | 需要有线 modem 与 PSK |
-| 独立终端 | 1 台起 | 用本机 `/auth/users.db` 校验，不联网、不写审计 | 无 | 与客户端终端是两种部署方式 |
+| 客户端终端 | 1 台起 | 登录、菜单、发起 `open_request`、退出；把动作写进审计队列 | 1（发送）、随机回包频道、2（审计/回执） | 需要有线 modem 与 PSK；没有门禁红石 |
 
-认证服务器和审计服务器可以同时在线，互不依赖；一台机器不会同时承担两种角色。
+认证服务器和审计服务器可以同时在线，互不依赖；一台机器不会同时承担两种角色。认证服务器
+与客户端终端都放同一份 `/auth/role_policy.lua`，让部署里的角色定义只有一份来源（审计
+服务器只校验签名字符串里的 `role`，不做角色判定，因此不需要它）。
 
 ## 2. 部署文件映射（仓库目录 -> 游戏内平铺路径）
 
@@ -76,6 +91,7 @@ auth_response: server_id|nonce_c|nonce_s|tostring(success)|tostring(role or "")
 | `/auth/server_crypto.lua` | `sentinel/auth_server/auth/server_crypto.lua` |
 | `/auth/terminal_keys.lua` | `sentinel/auth_server/auth/terminal_keys.lua` |
 | `/auth/user_manager.lua` | `sentinel/terminal/auth/user_manager.lua` |
+| `/auth/role_policy.lua` | `sentinel/common/role_policy.lua` |
 | `/system/auth_server.lua` | `sentinel/auth_server/system/auth_server.lua` |
 | `/system/user_admin.lua` | `sentinel/auth_server/system/user_admin.lua` |
 
@@ -103,9 +119,10 @@ auth_response: server_id|nonce_c|nonce_s|tostring(success)|tostring(role or "")
 |---|---|
 | `/sha256.lua` | `sentinel/common/sha256.lua` |
 | `/startup.lua` | `sentinel/terminal/startup.lua` |
-| `/auth/mode.lua` | `sentinel/terminal/auth/mode.lua`（内容 `mode = "client"`） |
+| `/auth/role_policy.lua` | `sentinel/common/role_policy.lua` |
 | `/auth/login.lua` | `sentinel/terminal/auth/login.lua` |
 | `/auth/login_client.lua` | `sentinel/terminal/auth/login_client.lua` |
+| `/auth/login_standalone.lua` | `sentinel/terminal/auth/login_standalone.lua`（仅作离线模式拒绝兜底） |
 | `/auth/psk.lua` | `sentinel/terminal/auth/psk.lua` |
 | `/auth/psk.txt` | `sentinel/terminal/auth/psk.txt`（换成控制台发给你的密钥） |
 | `/auth/terminal_id.txt` | `sentinel/terminal/auth/terminal_id.txt`（换成控制台登记的 ID） |
@@ -118,21 +135,23 @@ auth_response: server_id|nonce_c|nonce_s|tostring(success)|tostring(role or "")
 
 运行时生成：`/audit_queue/<nonce>.evt`（审计队列）、`/lock.flag`（自检失败时）、
 `/anti.txt`（退出 CraftOS 的两阶段标记）。客户端不部署 `/auth/users.db` 与
-`/auth/user_manager.lua`。
+`/auth/user_manager.lua`，也不再有 `/auth/mode.lua`（见 2.4）。
 
-### 2.4 独立终端
+### 2.4 独立终端（已废弃）
 
-在 2.3 的基础上去掉 `login_client.lua`、`psk.lua`、`psk.txt`、`terminal_id.txt`、
-`netcheck.lua`，加上：
+独立/离线终端模式在 stage-1 改造中退役：`/auth/mode.lua` 已从仓库删除，即使机器上还留着
+旧文件也会被忽略；`/auth/login.lua` 始终加载 `login_client.lua`。`login_standalone.lua`
+保留为拒绝模块，任何调用都会报：
 
-| 游戏内路径 | 仓库来源 |
-|---|---|
-| `/auth/login_standalone.lua` | `sentinel/terminal/auth/login_standalone.lua` |
-| `/auth/user_manager.lua` | `sentinel/terminal/auth/user_manager.lua` |
-| `/auth/users.db` | `sentinel/terminal/auth/users.db`（之后由 setup_root 写入） |
+```
+Offline mode is disabled. Connect to the auth server.
+```
 
-`/auth/mode.lua` 改成 `return { mode = "standalone" }`。独立终端没有 `/lock.flag`、
-`/audit_queue`、PSK 与 `terminal_id.txt`。
+所以不再有“独立终端”这第三种部署：不要往终端复制 `/auth/users.db` 或
+`/auth/user_manager.lua`，终端也不做任何本地账号校验或本地授权。原独立终端机器要改为
+2.3 的客户端部署（补 `/auth/psk.lua`、`/auth/psk.txt`、`/auth/terminal_id.txt`、
+`/system/netcheck.lua` 与 `/auth/role_policy.lua`），原有账号迁移到认证服务器的
+`/auth/users.db`（root 仍只由 `setup_root.lua` 创建）。
 
 ## 3. 前置条件与接线
 
@@ -141,10 +160,13 @@ auth_response: server_id|nonce_c|nonce_s|tostring(success)|tostring(role or "")
   内容，终端屏幕无法渲染中文文件名。
 - 网络：只支持**有线 modem**。无线 modem 会被明确拒绝（认证服务器打印
   `FATAL: wireless modem is not supported`，终端自检报 `wireless modem`）。
-- 认证服务器：至少一块有线 modem，接在与其他机器相同的物理有线网络上。
+- 认证服务器：至少一块有线 modem，接在与其他机器相同的物理有线网络上；**左侧**
+  `left` 红石输出接到门/金库机构（同意 `open_request` 时输出 1 秒脉冲）。必须部署
+  `/auth/role_policy.lua`：缺失时登录一律 `success = false`、开门一律拒绝，根控制台也会
+  拒绝 root 登录。
 - 审计服务器：至少一块有线 modem（同一网络）；一台 `drive` 外设（按名字排序取第一台）
   与配套软盘；红石输出接到换盘机构，默认背面 `back`。
-- 终端：至少一块有线 modem；红石输出接在**左侧** `left`，用于金库开门的 1 秒脉冲。
+- 终端：至少一块有线 modem 与 PSK；**不再需要门禁红石**，开门由认证服务器执行。
 - 建议给所有机器做世界内备份：`/auth/users.db`、`/auth/terminal_keys.db`、
   `/auth/server_id`、`/logs/chain.state` 丢失的代价各不相同，见第 11 节。
 
@@ -160,13 +182,14 @@ auth_response: server_id|nonce_c|nonce_s|tostring(success)|tostring(role or "")
 
 ```
 Auth Server
-Protocol:  secure_auth_v4
+Protocol:  secure_auth_v5
 Server ID: <24 位字母数字>
 ```
 
-之后服务每秒在频道 1 广播 `heartbeat`，并监听 `salt_request` / `auth_request`。
-缺 modem 时打印 `FATAL: no wired modem` / `Attach a wired modem and reboot.`，服务停机，
-但本机的根控制台仍随 `/startup.lua` 一起运行，不会掉回 shell。
+之后服务每秒在频道 1 广播 `heartbeat`，并监听 `salt_request`、`auth_request` 与
+`open_request`；同意开门时在本机左侧红石输出 1 秒脉冲。缺 modem 时打印
+`FATAL: no wired modem` / `Attach a wired modem and reboot.`，服务停机，但本机的根控制台
+仍随 `/startup.lua` 一起运行，不会掉回 shell。
 
 ### 4.2 创建第一个 root
 
@@ -195,8 +218,10 @@ Password: <口令>
 ### 4.3 根控制台与终端密钥
 
 用刚才的 root 账号登录控制台。登录时输入 `Username: ` 与 `Password: `（口令遮蔽）；
-用户名或口令留空会直接退出控制台，1 秒后自动重启控制台。口令错误打印 `Access denied.`，
-等待 1 秒后可重试。主菜单：
+用户名或口令留空会直接退出控制台，1 秒后自动重启控制台。只有
+`role_policy.allows(role, "root")` 通过的账号才能进入控制台（即 root 权重）；口令错误
+打印 `Access denied.`，等待 1 秒后可重试。`/auth/role_policy.lua` 缺失时登录界面会打印
+`WARNING: /auth/role_policy.lua is not loadable`，此时任何账号都会被拒绝。主菜单：
 
 ```
 User Admin (server only)
@@ -210,7 +235,9 @@ User: <name> (root)
 0. Exit
 ```
 
-- 增加用户、删除用户、修改角色都经过共享的 `/auth/user_manager.lua`；规则见第 11 节。
+- 增加用户、删除用户、修改角色都经过共享的 `/auth/user_manager.lua`；Add User 与
+  Change Role 的提示是 `Role (admin/operator/user/guest): `，直接回车默认 `guest`。
+  规则见第 11 节。
 - `5. Manage Terminal Keys` 的子菜单是 `1. List`、`2. Add / Show Key`、`3. Remove`、
   `0. Back`。给终端登记时选 `2`，输入 `Terminal ID: `，输出形如：
 
@@ -226,27 +253,79 @@ User: <name> (root)
   同一个 ID 再次执行 Add 会返回原来的密钥（不会换新）。`3. Remove` 需要输入字面量
   `yes` 确认。终端 ID 允许空格，不允许 `|` 与控制字符，最长 64 字符。
 
-### 4.4 `/auth/user_manager.lua` 是认证链路的一部分
+### 4.4 `/auth/user_manager.lua` 与 `/auth/role_policy.lua` 是认证链路的一部分
 
-服务通过这个文件的 `getSalt(name)` 与 `verifyDerived(name, derived, nonceC, nonceS)`
-完成取盐与校验。文件缺失或加载失败时：
+服务通过 `/auth/user_manager.lua` 的 `getSalt(name)`、`verifyDerived(name, derived,
+nonceC, nonceS)` 完成取盐与口令校验，并在每次 `open_request` 时用 `getRole(name)` 当场
+读出账号在 `users.db` 里的原始角色。角色**如何解释**不在 `user_manager` 里，而由
+`/auth/role_policy.lua` 决定：认证链路用 `normalize` 校验角色是否已知，然后把 `users.db`
+里的真实角色原样签进 `auth_response`；角色为空或未知时 `auth_response` 直接
+`success = false`。开门链路用 `allows(role, "operator")` 判断，未知角色一律不放行。
+
+文件缺失或加载失败时：
 
 - 取盐阶段仍然回包：返回固定假盐 `ffffffffffffffff` 并正常签名，避免把
   “用户不存在”暴露成超时。
 - 认证阶段一律返回 `success = false` / `message = "Invalid credentials"`，即所有登录
   都会失败，但服务不会崩溃。
+- `open_request` 一律按拒绝回包（`open_response` 的 `ok = false`、`reason = "denied"`），
+  不会触发红石。
 - 控制台启动时会打印 `WARNING: /auth/user_manager.lua is not loadable`；列表用户等
-  操作会打印 `[Error] /auth/user_manager.lua is not loadable`。
+  操作会打印 `[Error] /auth/user_manager.lua is not loadable`。缺 `role_policy.lua` 时
+  登录界面打印 `WARNING: /auth/role_policy.lua is not loadable`，任何账号都进不了控制台。
 
-所以部署认证服务器时，务必把 `sentinel/terminal/auth/user_manager.lua` 一起放到
-`/auth/user_manager.lua`。
+所以部署认证服务器时，务必把 `sentinel/terminal/auth/user_manager.lua` 放到
+`/auth/user_manager.lua`，并把 `sentinel/common/role_policy.lua` 放到
+`/auth/role_policy.lua`。
 
 ### 4.5 重放保护
 
-服务按“终端 + 阶段 + nonce”记录最近 15 秒内见过的 `nonce_c`（每个终端最多保留 32 条，
-超过 64 个终端时淘汰最久没出现的）。`salt_request` 与 `auth_request` 分别记录，因此
-正常登录中两段使用相同 nonce 不会被误判；但同一阶段的同名请求在窗口内再次出现会被
-直接忽略（不回包）。窗口外的重放不在防护范围内。
+服务按“终端 + 阶段 + nonce”记录最近 15 秒内见过的 nonce（每个终端最多保留 32 条，
+超过 64 个终端时淘汰最久没出现的）。取盐（`salt`）、认证（`auth`）与开门（`open`）三个
+阶段分别记录：正常登录中取盐与认证可以复用同一个 `nonce_c`，不会被误判；但同一阶段的
+同名请求在窗口内再次出现会被直接忽略（不回包）。`open_request` 用的是它自己的 `nonce`
+字段。窗口外的重放不在防护范围内。
+
+### 4.6 开门请求 `open_request`
+
+开门动作只发生在认证服务器：终端只能“申请”，不能自己给红石。完整流程：
+
+1. 已登录的终端在菜单里选 `Open Vault`，用当前会话用户名生成一次性 `nonce`，发送
+   `open_request`（频道 1，回包频道随机）：
+
+   ```
+   terminal_id, username, nonce, sig = sha256(PSK .. "|" .. terminal_id .. "|" .. username .. "|" .. nonce)
+   ```
+
+2. 认证服务器先用 `/auth/terminal_keys.db` 验证签名。未登记/未知终端**不会收到任何
+   回包**（服务器没有它的密钥，无法签回包），终端侧表现为超时。
+3. 签名通过后，服务器当场从 `/auth/users.db` 读取 `username` 的角色，调用
+   `/auth/role_policy.lua` 的 `allows(role, "operator")`。因此 operator、admin、root
+   都可以开门，user（含历史别名 guest）不行，未知角色一律不行。
+4. 通过则在本机**左侧红石**输出 1 秒脉冲，然后回包：
+
+   ```
+   open_response: ok = true, reason = "granted"
+   ```
+
+   不通过则只回包、不脉冲红石：
+
+   ```
+   open_response: ok = false, reason = "denied"
+   ```
+
+5. `open_response` 的字段是 `protocol / type / server_id / terminal_id / nonce_c / ok /
+   reason / sig`，签名字符串为：
+
+   ```
+   open_response: server_id|nonce|tostring(ok)|reason
+   ```
+
+   终端校验 `protocol`、`type`、`terminal_id`、`nonce` 与签名后才采信结果。
+
+服务器不校验口令，只校验“这台终端是否合法”以及“该用户名当前的角色是否够用”。用户名
+来自终端会话，终端软件负责只把它自己的登录用户放进请求；能改终端程序的人本来就能读到
+本机 PSK（见第 11 节）。同一个 `nonce` 在 15 秒重放窗口内再次到达会被静默忽略。
 
 ## 5. 审计服务器
 
@@ -279,8 +358,8 @@ Ready.
 
 每条 `modem_message` 先过频道、`protocol`、`type = "audit_event"` 三道门，再依次：
 
-1. 字段与时间戳检查（`timestamp` 必须是可转为非负数字的字符串）。
-2. 验签：`sha256(PSK .. "|" .. terminal_id .. "|" .. username .. "|" .. action .. "|" .. timestamp .. "|" .. nonce)`。
+1. 字段与时间戳检查（`role` 必须是字符串；`timestamp` 必须是可转为非负数字的字符串）。
+2. 验签：`sha256(PSK .. "|" .. terminal_id .. "|" .. username .. "|" .. role .. "|" .. action .. "|" .. timestamp .. "|" .. nonce)`。
 3. 重放检查：同一终端、同一 `nonce` 已在窗口内 → 视为重复，重发同一份 `audit_ack`，
    **不再写日志**。
 4. 限速：每终端 1 秒固定窗口，最多 `rate_per_sec` 条。
@@ -299,11 +378,11 @@ Ready.
 - 每行格式（UTC 时间，来自事件里的 `timestamp`）：
 
   ```
-  [YYYY-MM-DD HH:MM:SS] TERMINAL=<id> USER=<user> ACTION=<action> PREV=<64 hex> HASH=<64 hex>
+  [YYYY-MM-DD HH:MM:SS] TERMINAL=<id> USER=<user> ROLE=<role> ACTION=<action> PREV=<64 hex> HASH=<64 hex>
   ```
 
 - `HASH = sha256(PREV .. "|" .. body)`，其中 `body` 是不含 `PREV=`/`HASH=` 的前缀
-  `[time] TERMINAL=... USER=... ACTION=...`。新链的起点 `PREV=GENESIS`。
+  `[time] TERMINAL=... USER=... ROLE=... ACTION=...`。新链的起点 `PREV=GENESIS`。
 - `/logs/chain.state` 保存当前链头（64 位十六进制，无换行）。文件缺失或内容不是 64 位
   十六进制时，链从 `GENESIS` 重新开始。
 - 每次写入后屏幕顶行显示 `seg_NNNN  hash=<链头前 12 位>`。
@@ -388,14 +467,18 @@ print("chain ok, head " .. prev)
 
 ## 6. 客户端终端
 
-### 6.1 三个数据文件
+### 6.1 两个数据文件
 
-- `/auth/mode.lua`：`return { mode = "client" }`。缺失或语法错误按 client 处理。
 - `/auth/psk.txt`：一行 32 字符密钥；读取时去掉所有空白字符。与控制台 `Add / Show Key`
   给出的 `Key` 必须完全一致。
 - `/auth/terminal_id.txt`：一行终端 ID；读取时去掉所有空白。文件缺失或为空时依次回退
   到 `os.getComputerLabel()`，再回退到 `computer_<computerID>`。建议始终显式写文件，
   与控制台登记的 ID 一致。
+
+终端还部署纯模块 `/auth/role_policy.lua`（`sentinel/common/role_policy.lua`）：它不含
+任何账号数据，只负责规范化服务器发回的角色（`normalize`/`weight`）和菜单授权判断
+（`allows`）。终端上没有 `/auth/mode.lua`、`/auth/users.db`，也没有
+`/auth/user_manager.lua`。
 
 ### 6.2 开机自检（netcheck）
 
@@ -403,17 +486,16 @@ print("chain ok, head " .. prev)
 
 1. 加载 `/system/sandbox.lua`；失败打印 `FATAL: cannot load sandbox` 并停机。
 2. `os.pullEvent = os.pullEventRaw`，屏蔽 Ctrl+T。
-3. 读取 `mode.lua`（缺省 client）。
-4. client 模式加载 `/system/netcheck.lua`（失败写 `/lock.flag` = `cannot load netcheck`
-   并停机），然后调用 `check(3)`：在有线 modem 上打开频道 1，3 秒窗口内统计
-   `heartbeat` 里不同 `server_id` 的个数。
-5. 判定规则：
+3. 加载 `/system/netcheck.lua`（失败写 `/lock.flag` = `cannot load netcheck` 并停机），
+   然后调用 `check(3)`：在有线 modem 上打开频道 1，3 秒窗口内统计 `heartbeat` 里不同
+   `server_id` 的个数。
+4. 判定规则：
    - 恰好 1 个服务器：通过，删除 `/lock.flag`（只有通过才会删）。
    - 0 个：`no server detected`。
    - 2 个及以上：`multiple servers: N`。
    - 没有 modem：`no modem`；只有无线 modem：`wireless modem`。
    - 自检过程抛错/打开频道失败：`check interrupted`。
-6. 不通过时把原因写入 `/lock.flag`，屏幕打印：
+5. 不通过时把原因写入 `/lock.flag`，屏幕打印：
 
    ```
    NETWORK SECURITY CHECK FAILED
@@ -423,7 +505,7 @@ print("chain ok, head " .. prev)
    ```
 
    然后停机等待，不进入登录。
-7. `/anti.txt` 两阶段处理（见 6.6），最后才进入 `/system/kernel.lua`。
+6. `/anti.txt` 两阶段处理（见 6.6），最后才进入 `/system/kernel.lua`。
 
 ### 6.3 登录
 
@@ -443,7 +525,9 @@ Authenticating...
 2. 等 `salt_response` 最多 8 秒，校验 `channel` 等于自己的回包频道、`protocol`、
    `type`、`terminal_id`，再用本地 `nonce_c` 验证签名（服务器回包不强制带 `nonce_c`）。
 3. 计算 `H'` 并发送 `auth_request`，再等 8 秒，校验 `auth_response`（含
-   `success`/`role`/`message`）的签名。
+   `success`/`role`/`message`）的签名：签名覆盖 `success` 与 `role`，服务端角色必须存在，
+   客户端还要用 `/auth/role_policy.lua` 的 `normalize` 验证；`success = true` 但角色
+   缺失/未知的回包按登录失败处理，绝不默认成 `guest`。
 4. 成功返回 `{ name, role }` 并让内核建立会话；失败按原因打印：
 
    | 情况 | 屏幕输出 |
@@ -453,11 +537,13 @@ Authenticating...
    | 认证 8 秒无回包 | `[Error] Server timeout.` |
    | 认证回包验签失败 | `[Error] signature invalid` |
    | 服务器返回 success=false | `[Error] Invalid credentials` |
+   | success=true 但没有合法角色 | `[Error] Server returned no usable role.` |
    | 预检失败 | `[Error] network check: <原因>` |
    | PSK 文件缺失/为空 | `[Error] PSK file not found: /auth/psk.txt` 或 `[Error] PSK is empty.` |
 
-登录成功、失败、超时分别写审计动作 `LOGIN_SUCCESS`、`LOGIN_FAIL`、
-`LOGIN_FAIL_TIMEOUT`。协议层不重试，用户看到错误后重新输入。
+登录成功写审计动作 `LOGIN_SUCCESS`（带服务器下发的 role）；凭据错误、验签失败与角色异常
+写 `LOGIN_FAIL`（role 记为空串）；超时写 `LOGIN_FAIL_TIMEOUT`（role 为空串）。协议层
+不重试，用户看到错误后重新输入。
 
 会话只存在内存里，令牌有效期 1 小时；`Logout` 会销毁令牌。
 
@@ -479,21 +565,23 @@ Select an option:
 | 序号 | 条目 | 可见条件 |
 |---|---|---|
 | 1 | `Open Vault` | 所有人 |
-| 2..4 | `Add User`、`Delete User`、`Change Role` | 仅 `role == "root"` 且 `/auth/user_manager.lua` 可加载 |
-| 最后 | `Exit to CraftOS` | 仅 root |
+| 2..4 | `Add User`、`Delete User`、`Change Role` | `role_policy.allows(role, "root")` 通过且 `/auth/user_manager.lua` 可加载 |
+| 最后 | `Exit to CraftOS` | `role_policy.allows(role, "root")` 通过 |
 | 末条 | `Logout` | 所有人 |
 
 `0` 是 `Logout (shortcut)`，始终存在。客户端终端不部署 `user_manager.lua`，所以即使
-是 root，在客户端也只会看到 `Open Vault`、`Exit to CraftOS`、`Logout` 三项；独立终端
-才是完整的管理菜单。
+是 root，在客户端也只会看到 `Open Vault`、`Exit to CraftOS`、`Logout` 三项；
+Add/Delete/Change Role 只有在机器上额外部署了 `/auth/user_manager.lua` 时才会出现。
+角色判断统一走 `/auth/role_policy.lua`，不再有硬编码的 `role == "root"`。
 
 输入数字选择；非法输入被静默忽略并重新显示菜单。条目执行后等待 0.5 秒再回到菜单。
 
 子菜单与提示：
 
 - Add User：`=== Add User ===`，依次问 `Username: `、`Password: `、
-  `Role (admin/operator/guest): `（直接回车 = guest）。角色非法时打印
-  `[Error] Invalid role: <r>`、`Allowed: admin, operator, guest`；填 `root` 时额外打印
+  `Role (admin/operator/user/guest): `（直接回车 = `user`；`guest` 仍接受，是 `user` 的
+  历史别名）。角色非法时打印 `[Error] Invalid role: <r>`、
+  `Allowed: admin, operator, user, guest`；填 `root` 时额外打印
   `Root accounts cannot be created through UI.`。
 - Delete User：`=== Delete User ===`，问 `Confirm delete '<u>'? (yes/no): `，只有字面量
   `yes` 才会执行，其他输入静默取消。
@@ -502,15 +590,27 @@ Select an option:
 
 ### 6.5 Open Vault
 
-打印 `Opening Vault...`，把左侧红石输出设为 1，等待 1 秒，再设回 0，然后结束本次会话
-（回到登录）。注意这是一个 1 秒脉冲，不会保持红石常亮。
+打印 `Requesting vault access from auth server...`，先做 2 秒网络预检，再向认证服务器发送
+带签名的 `open_request`（见 4.6），然后只按服务器回包显示结果：
+
+| 结果 | 屏幕输出 | 后续 |
+|---|---|---|
+| 服务器 `ok = true` | `[OK] Vault opened by auth server.` | 结束本次会话，回到登录 |
+| 服务器拒绝（`ok = false`） | `[Denied] Access denied by auth server.` | 等待 2 秒回到菜单 |
+| 网络预检失败/无 modem | `[Error] Auth server unreachable.` | 等待 2 秒回到菜单 |
+| 8 秒内没有回包 | `[Error] Auth server did not answer.` | 等待 2 秒回到菜单 |
+| 回包字段/签名不合法 | `[Denied] Invalid response ...` | 等待 2 秒回到菜单 |
+
+终端**不接门禁红石、也不输出任何开门信号**；1 秒脉冲由认证服务器在本机左侧执行。服务器
+对未登记终端根本不回包，所以那种情况在终端上表现为
+`[Error] Auth server did not answer.`，而不是明确的拒绝。
 
 ### 6.6 Exit to CraftOS 与 `/anti.txt`
 
-只有 root 能选。流程是两阶段的：
+只有 `role_policy.allows(role, "root")` 通过的账号能选。流程是两阶段的：
 
 1. 菜单中选退出：打印 `Security Check Required` 与 `Enter password: `，重新走一次完整
-   认证（client 模式走网络，独立终端走本地库）。
+   网络认证（由认证服务器校验）。
 2. 口令错误：打印 `Incorrect password.`，等待 2 秒，回到菜单。
 3. 口令正确：打印 `Password correct. Exiting to CraftOS...`，把 `/anti.txt` 写成
    `anti=1`，等待 1 秒，恢复沙箱（把砍掉的函数装回去），然后 `os.reboot()`。
@@ -536,11 +636,11 @@ Select an option:
 内核在另一个协程里运行审计：
 
 - `audit.start()` 要求有 PSK、有有线 modem，并在频道 2 上 `open` 后才开始循环；
-  失败原因 `no psk` / `no modem` / `wireless modem` 会每 5 秒重试（独立终端返回
-  `false, "standalone"`，内核改为每 60 秒空转一次）。
-- `log(username, action)` 生成 `timestamp` 与 `nonce`，签名后把**完整事件表**序列化到
-  `/audit_queue/<nonce>.evt`，然后尽力发送一次。没有 PSK 时它不会入队（返回 false），
-  因为无法签名的事件永远不会被审计服务器接受。
+  失败原因 `no psk` / `no modem` / `wireless modem` 由内核每 5 秒重试。
+- `log(username, role, action)` 生成 `timestamp` 与 `nonce`，签名串为
+  `terminal_id|username|role|action|timestamp|nonce`，把**完整事件表**（含 `role` 字段）
+  序列化到 `/audit_queue/<nonce>.evt`，然后尽力发送一次。登录失败时 `role` 记为空串。
+  没有 PSK 时它不会入队（返回 false），因为无法签名的事件永远不会被审计服务器接受。
 - 每 10 秒扫描一次队列，把所有 `.evt` 重新发到频道 2。
 - 收到 `audit_ack` 时校验：`protocol`、`type`、`terminal_id` 等于自己、签名
   `nonce|terminal_id` 用本机 PSK 验证通过；只有通过才删除对应队列文件。签名错误、
@@ -548,35 +648,32 @@ Select an option:
 - 队列文件跨重启保留，下次启动会继续重发；重复事件由审计服务器的幂等回执兜底，不会
   写重复日志。
 
-## 7. 独立终端
+## 7. 独立终端（已退役）
 
-### 7.1 文件差异
+stage-1 改造后只有一种终端部署：必须连接认证服务器的客户端终端（2.3）。离线校验在本机
+完成、开门也在本机授权的那套独立终端已从架构中删除，原因很直接：
 
-- 去掉：`/auth/login_client.lua`、`/auth/psk.lua`、`/auth/psk.txt`、
-  `/auth/terminal_id.txt`、`/system/netcheck.lua`。
-- 加上：`/auth/login_standalone.lua`、`/auth/user_manager.lua`、`/auth/users.db`。
-- `/auth/mode.lua` 内容改成 `return { mode = "standalone" }`。
+- 终端持有对称 PSK，能在本地伪造任意 role 的 `auth_response`；
+- 终端在本机执行红石，所以“终端侧权限门”只能防误操作，挡不住改程序的人。
 
-### 7.2 创建本地 root
+改造后的边界是：权限跟随账户（角色只在认证服务器的 `/auth/users.db`），终端只用 PSK
+证明自己是合法终端，开门由认证服务器执行。具体变化：
 
-独立终端的 root 也由 `setup_root.lua` 创建（同样是一次性工具，拒绝在已有 root 时运行），
-只是写入本机的 `/auth/users.db`。之后 root 登录本机即可在 UI 里用 Add User /
-Delete User / Change Role 管理用户（独立终端部署了 `user_manager.lua`）。
-
-### 7.3 行为差异
-
-| 项目 | 客户端终端 | 独立终端 |
+| 项目 | 旧独立终端 | 现在 |
 |---|---|---|
-| 登录校验 | 网络挑战-响应 | 本地 `users.db` 比较 `sha256(password .. salt)` |
-| 开机自检 | 3 秒 netcheck，失败锁机 | 不做，也不读写 `/lock.flag` |
-| 失败提示 | 网络/签名/凭据多种错误 | `[Error] Invalid credentials` |
-| 审计 | 入队并发往审计服务器 | 不写队列、不联网 |
-| `/audit_queue` | 有 | 无 |
-| Exit to CraftOS | 走网络重验证 | 走本地库重验证 |
-| 管理菜单 | 隐藏（没有 user_manager） | root 可见 |
+| 登录模块 | `/auth/login_standalone.lua` 本地比对 | `login.lua` 始终加载 `login_client.lua`；`login_standalone.lua` 只负责报 `Offline mode is disabled. Connect to the auth server.` |
+| `/auth/mode.lua` | 切换 client/standalone | 已删除；旧文件被忽略 |
+| 本地账号库 | 终端 `/auth/users.db` + `user_manager.lua` | 终端不部署；账号只在认证服务器 |
+| 开机自检 | 不做 | 始终做 3 秒 netcheck，失败锁机 |
+| 审计 | 不写队列、不联网 | 始终签名入队并发往审计服务器 |
+| 开门 | 本机 left 红石 | 发 `open_request`，由认证服务器脉冲 |
+| Exit to CraftOS 复核 | 本地库 | 网络重认证 |
 
-独立终端的口令与盐值都在本机 `/auth/users.db`，物理接触这台机器的人可以直接改库，
-这是这种部署方式的固有限制。
+把旧独立终端改为客户端部署的步骤：删掉本机 `/auth/users.db`、`/auth/user_manager.lua`
+与 `/auth/mode.lua`；按 2.3 补齐 `/auth/psk.lua`、`/auth/psk.txt`、
+`/auth/terminal_id.txt`、`/system/netcheck.lua` 与 `/auth/role_policy.lua`；在认证服务器
+控制台登记该终端（见 4.3），并把原有账号重建到认证服务器的 `/auth/users.db`（没有自动
+迁移工具；root 仍只由 `setup_root.lua` 创建）。
 
 ## 8. `/auth/audit_config.lua` 全量参考
 
@@ -586,7 +683,7 @@ Delete User / Change Role 管理用户（独立终端部署了 `user_manager.lua
 | 键 | 默认值 | 含义 |
 |---|---|---|
 | `main_channel` | `2` | 审计频道（收发都用它） |
-| `protocol` | `"secure_auth_v4"` | 协议字符串，必须与终端一致 |
+| `protocol` | `"secure_auth_v5"` | 协议字符串，必须与终端一致 |
 | `main_modem_side` | `nil` | 指定 modem 侧；`nil` 表示自动取排序后第一块有线 modem |
 | `heartbeat_interval` | `5` | `audit_heartbeat` 广播间隔（秒） |
 | `logs_dir` | `"/logs"` | 日志目录 |
@@ -597,7 +694,7 @@ Delete User / Change Role 管理用户（独立终端部署了 `user_manager.lua
 | `rate_per_sec` | `5` | 每终端 1 秒窗口内允许的事件数 |
 | `nonce_window` | `10000` | 每终端 nonce 记忆条数上限，超过后丢最旧一半 |
 | `dedup_window_ms` | `2000` | 去重窗口（毫秒） |
-| `dedup_burst_max` | `5` | 去重窗口内同一 `terminal_id|username|action` 的最大条数 |
+| `dedup_burst_max` | `5` | 去重窗口内同一 `terminal_id\|username\|action` 的最大条数 |
 | `dedup_cleanup_interval` | `10000` | 去重表清理间隔（毫秒） |
 | `redstone_side` | `"back"` | 换盘信号输出侧 |
 | `pulse_seconds` | `2` | 换盘脉冲高电平持续时间（秒） |
@@ -620,7 +717,7 @@ Delete User / Change Role 管理用户（独立终端部署了 `user_manager.lua
                             |
 [客户端终端 1..N]---有线 modem---+
 
-[终端 left 红石] ---> 金库/门禁机构（Open Vault 时 1 秒脉冲）
+[认证服务器 left 红石] ---> 门/金库机构（同意 open_request 时 1 秒脉冲）
 [审计服务器 back 红石] ---> 换盘机构（信号 1 = 换盘脉冲，信号 2 = 故障）
 [审计服务器 drive] <--- 软盘（插入后出现 /disk* 挂载点）
 ```
@@ -629,8 +726,11 @@ Delete User / Change Role 管理用户（独立终端部署了 `user_manager.lua
 
 - 所有 modem 都是**有线** modem，且在同一物理有线网络里。
 - 认证服务器只有一台在广播；多台会让终端自检报 `multiple servers: N`。
+- 认证服务器的左侧红石确实接到门禁；`Open Vault` 只是 1 秒脉冲，不会保持常亮。
 - 审计服务器的 `redstone_side` 与实际接线一致；驱动器与换盘机构可用。
-- 终端左侧红石确实接到门禁；`Open Vault` 只是 1 秒脉冲。
+- 终端不需要、也不应该接门禁红石；它的开门能力只来自认证服务器的回包。
+- 认证服务器与客户端终端都放了同一份 `/auth/role_policy.lua`，且认证服务器的
+  `/auth/users.db` 里每个账号都有合法角色。
 - 所有文件名、路径为 ASCII；CraftOS 屏幕不显示中文文件名。
 - 认证服务器与审计服务器的时间不必同步，但日志时间取自终端上报的 `timestamp`。
 
@@ -645,7 +745,13 @@ Delete User / Change Role 管理用户（独立终端部署了 `user_manager.lua
 | `Reason: check interrupted` | 打开频道失败或自检被打断 | 重启终端；检查 modem 是否被其它程序占用 |
 | 登录总是 `[Error] salt timeout` | `terminal_id` 未登记，或 PSK 与服务器登记不一致（验签失败不回包） | 控制台 `Manage Terminal Keys` 核对后重写两个文件 |
 | `[Error] Server timeout.` | 认证请求 8 秒内无回包 | 检查网络与服务器负载；重启认证服务器 |
-| `[Error] Invalid credentials` | 口令错误；或服务器缺 `/auth/user_manager.lua` | 先确认口令；再检查服务器该文件是否存在 |
+| `[Error] Invalid credentials` | 口令错误；服务器缺 `/auth/user_manager.lua`；或账号角色缺失/未知导致服务端 `success = false` | 先确认口令与账号角色；再检查服务器文件与 `/auth/role_policy.lua` |
+| `[Error] Server returned no usable role.` | 服务器回了 `success = true`，但 role 为空或不在合法集合内；常见于 `users.db` 角色字段拼错/缺失，或终端缺 `/auth/role_policy.lua` | 在认证服务器用 `Change Role` 写成 admin/operator/user/guest；确认终端部署了 `role_policy.lua` |
+| 终端报 `Offline mode is disabled. Connect to the auth server.` | 旧部署仍调用 `login_standalone.lua`（例如未更新 `login.lua`）；终端已没有本地账号库 | 按 2.3 更新登录模块，删除 `/auth/mode.lua`、`/auth/users.db` 与 `/auth/user_manager.lua` |
+| `Open Vault` 显示 `[Denied] Access denied by auth server.` | 账号角色低于 operator（user/guest）；角色未知；或认证服务器缺 `/auth/role_policy.lua` | 用 root 控制台把账号改成 operator/admin；确认服务器部署了 role_policy |
+| `Open Vault` 显示 `[Error] Auth server did not answer.` | 认证服务器离线/频道不对；或该终端未登记、PSK 不匹配（服务器无法验签就不回包） | 查认证服务器横幅与 `Manage Terminal Keys`；核对 `terminal_id.txt` 与 `psk.txt` |
+| 有权限但门禁不动，终端显示 `[Denied]` | 认证服务器脉冲失败：没有 `redstone` API 或左侧被占用/接线错，服务器会按 denied 回包 | 检查认证服务器左侧红石接线后重试 |
+| 控制台 `WARNING: /auth/role_policy.lua is not loadable` | 认证服务器缺 `role_policy.lua` | 按 2.1 部署 `/auth/role_policy.lua` |
 | `[Error] salt signature invalid` / `[Error] signature invalid` | 服务器登记的密钥与终端 `psk.txt` 不一致 | 用控制台显示的原密钥重写 psk.txt |
 | `[Error] network check: ...` | 登录前 2 秒预检失败 | 按冒号后的原因处理，同上面的自检原因 |
 | `[Error] PSK file not found: /auth/psk.txt` | 客户端部署缺 psk.txt | 补文件并写入正确密钥 |
@@ -666,7 +772,7 @@ Delete User / Change Role 管理用户（独立终端部署了 `user_manager.lua
 需要如实了解：
 
 1. modem 是广播介质。同一有线网络上的任何计算机都能收到频道 1 与频道 2 的报文；协议
-   不做加密。口令从不上线，但用户名、动作、时间、结果、`H'`、签名都是明文可见的。
+   不做加密。口令从不上线，但用户名、角色、动作、时间、结果、`H'`、签名都是明文可见的。
 2. PSK 以明文保存：终端 `/auth/psk.txt`、服务器 `/auth/terminal_keys.db`。拿到任意一份
    就能冒充对应终端签名，因此**物理安全就是系统的安全上限**；终端失窃等价于密钥泄露。
 3. 纯 Lua 的 SHA-256 实现能通过行为测试，但没有常数时间/侧信道加固，也不与系统密码学
@@ -694,9 +800,21 @@ Delete User / Change Role 管理用户（独立终端部署了 `user_manager.lua
     恢复换盘失败（包括启动时没有驱动器在内的任何原因），都会把 `redstone_side` 输出
     置为 2 并保持 `swap_fault = 1`，机器留在故障模式直到维护人员按提示清除；成功换盘
     或恢复成功时红石为低电平、`swap_fault = 0`。故障细节以 `/auth/audit_fault.flag` 为准。
+14. 权限跟随账户而不是终端：角色只存在于认证服务器的 `/auth/users.db`，由
+    `/auth/role_policy.lua` 解释；终端上报/回显的角色不被采信，未知角色一律拒绝
+    （fail-closed）。
+15. 开门执行机构在认证服务器：终端连门禁红石都没有。`open_request` 只证明“这台终端
+    持有登记的 PSK”和“它声称的用户名”；服务器不校验口令，用户名由终端软件从当前会话
+    填入。能改终端程序的人本来就能读本机 PSK，所以物理安全仍是系统的安全上限（第 2 条）。
+16. 离线模式是明确拒绝而不是静默降级：`login.lua` 不读 `/auth/mode.lua`，
+    `login_standalone.lua` 只会报 `Offline mode is disabled. Connect to the auth server.`。
 
 相对旧实现的刻意改进（都已在代码里）：
 
+- 认证响应里的角色来自 `users.db` 的真实值，不再回退 `guest`；角色缺失/未知时登录失败。
+- 开门从终端本地红石改为认证服务器执行，终端侧无法自行授权或开门。
+- 角色比较统一走 `/auth/role_policy.lua` 的权重，未知角色 fail-closed。
+- 独立/离线模式退役，终端不再部署本地账号库。
 - 认证服务器按终端与阶段记忆 nonce，15 秒内拒绝重复请求（旧实现没有重放保护）。
 - 认证心跳改为 1 秒，2..3 秒的自检窗口能稳定看到心跳。
 - 审计日志携带完整 64 位 `PREV`/`HASH`，哈希链真正可验证。
@@ -711,52 +829,59 @@ Delete User / Change Role 管理用户（独立终端部署了 `user_manager.lua
 | 仓库文件 | 部署路径 | 所属机器 | 作用 |
 |---|---|---|---|
 | `sentinel/common/sha256.lua` | `/sha256.lua` | 全部 | 纯 Lua SHA-256，`hash(s)` |
-| `sentinel/terminal/startup.lua` | `/startup.lua` | 客户端/独立终端 | 启动、沙箱、自检、anti 两阶段 |
-| `sentinel/terminal/auth/mode.lua` | `/auth/mode.lua` | 客户端/独立终端 | client / standalone 开关 |
-| `sentinel/terminal/auth/login.lua` | `/auth/login.lua` | 客户端/独立终端 | 按模式分派登录模块 |
-| `sentinel/terminal/auth/login_client.lua` | `/auth/login_client.lua` | 客户端 | 网络挑战-响应登录 |
-| `sentinel/terminal/auth/login_standalone.lua` | `/auth/login_standalone.lua` | 独立终端 | 本地 users.db 登录 |
-| `sentinel/terminal/auth/psk.lua` | `/auth/psk.lua` | 客户端 | 读取 PSK、签名、验签 |
-| `sentinel/terminal/auth/psk.txt` | `/auth/psk.txt` | 客户端 | 32 字符 PSK（需替换） |
-| `sentinel/terminal/auth/terminal_id.txt` | `/auth/terminal_id.txt` | 客户端 | 终端 ID（需替换） |
-| `sentinel/terminal/auth/session.lua` | `/auth/session.lua` | 客户端/独立终端 | 内存会话令牌，TTL 1 小时 |
-| `sentinel/terminal/auth/user_manager.lua` | `/auth/user_manager.lua` | 认证服务器/独立终端 | 用户库与 `getSalt`/`verifyDerived` |
-| `sentinel/terminal/auth/users.db` | `/auth/users.db` | 独立终端（认证服务器由 setup_root 生成） | 用户库 |
-| `sentinel/terminal/system/sandbox.lua` | `/system/sandbox.lua` | 客户端/独立终端 | 事件锁与危险函数屏蔽 |
-| `sentinel/terminal/system/netcheck.lua` | `/system/netcheck.lua` | 客户端 | 3 秒网络自检 |
-| `sentinel/terminal/system/audit.lua` | `/system/audit.lua` | 客户端/独立终端 | 审计队列、重发、ack 删除 |
-| `sentinel/terminal/system/kernel.lua` | `/system/kernel.lua` | 客户端/独立终端 | 登录/菜单循环与审计循环 |
-| `sentinel/terminal/system/ui.lua` | `/system/ui.lua` | 客户端/独立终端 | 菜单、金库、退出、用户管理 |
-| `sentinel/setup_root.lua` | `/setup_root.lua`（临时） | 认证服务器/独立终端 | 一次性创建 root |
+| `sentinel/common/role_policy.lua` | `/auth/role_policy.lua` | 认证服务器/客户端终端 | 角色规范化、权重与 `allows` |
+| `sentinel/terminal/startup.lua` | `/startup.lua` | 客户端终端 | 启动、沙箱、自检、anti 两阶段 |
+| `sentinel/terminal/auth/login.lua` | `/auth/login.lua` | 客户端终端 | 始终加载 login_client（登录/复核/开门请求） |
+| `sentinel/terminal/auth/login_client.lua` | `/auth/login_client.lua` | 客户端终端 | 网络挑战-响应、角色校验、`open_request` |
+| `sentinel/terminal/auth/login_standalone.lua` | `/auth/login_standalone.lua` | 客户端终端 | 旧部署兜底：只报离线模式已禁用 |
+| `sentinel/terminal/auth/psk.lua` | `/auth/psk.lua` | 客户端终端 | 读取 PSK、签名、验签 |
+| `sentinel/terminal/auth/psk.txt` | `/auth/psk.txt` | 客户端终端 | 32 字符 PSK（需替换） |
+| `sentinel/terminal/auth/terminal_id.txt` | `/auth/terminal_id.txt` | 客户端终端 | 终端 ID（需替换） |
+| `sentinel/terminal/auth/session.lua` | `/auth/session.lua` | 客户端终端 | 内存会话令牌，TTL 1 小时 |
+| `sentinel/terminal/auth/user_manager.lua` | `/auth/user_manager.lua` | 认证服务器 | 用户库与 `getSalt`/`verifyDerived`/`getRole` |
+| `sentinel/terminal/system/sandbox.lua` | `/system/sandbox.lua` | 客户端终端 | 事件锁与危险函数屏蔽 |
+| `sentinel/terminal/system/netcheck.lua` | `/system/netcheck.lua` | 客户端终端 | 3 秒网络自检 |
+| `sentinel/terminal/system/audit.lua` | `/system/audit.lua` | 客户端终端 | 审计队列（含 role）、重发、ack 删除 |
+| `sentinel/terminal/system/kernel.lua` | `/system/kernel.lua` | 客户端终端 | 登录/菜单循环与审计循环 |
+| `sentinel/terminal/system/ui.lua` | `/system/ui.lua` | 客户端终端 | 菜单、开门请求、退出、用户管理 |
+| `sentinel/setup_root.lua` | `/setup_root.lua`（临时） | 认证服务器 | 一次性创建 root |
 | `sentinel/auth_server/startup.lua` | `/startup.lua` | 认证服务器 | 服务 + 控制台并行启动 |
 | `sentinel/auth_server/auth/server_crypto.lua` | `/auth/server_crypto.lua` | 认证/审计服务器 | 服务器侧签名与验签 |
 | `sentinel/auth_server/auth/terminal_keys.lua` | `/auth/terminal_keys.lua` | 认证/审计服务器 | 终端密钥库读写 |
-| `sentinel/auth_server/system/auth_server.lua` | `/system/auth_server.lua` | 认证服务器 | 心跳、取盐、认证 |
+| `sentinel/auth_server/system/auth_server.lua` | `/system/auth_server.lua` | 认证服务器 | 心跳、取盐、认证、`open_request` 与门禁红石 |
 | `sentinel/auth_server/system/user_admin.lua` | `/system/user_admin.lua` | 认证服务器 | 根控制台 |
 | `sentinel/audit_server/startup.lua` | `/startup.lua` | 审计服务器 | 加载并运行审计服务器 |
 | `sentinel/audit_server/auth/audit_config.lua` | `/auth/audit_config.lua` | 审计服务器 | 审计配置 |
 | `sentinel/audit_server/system/audit_server.lua` | `/system/audit_server.lua` | 审计服务器 | 验签、日志、归档、换盘 |
 
-部署时不需要附带测试文件；`dist/.rewrite/tests/` 下的自测与集成测试只存在于仓库里。
+部署时不需要附带测试文件；`sentinel/tests/`（`run.lua`、`run-tests.ps1`）只存在于仓库里。
 
 ## 13. 部署顺序清单
 
-1. 把 `sentinel/common/sha256.lua` 复制成每台机器根目录的 `/sha256.lua`。
-2. 认证服务器：按 2.1 放好 7 个文件，重启，确认横幅与服务 ID。
+1. 把 `sentinel/common/sha256.lua` 复制成每台机器根目录的 `/sha256.lua`，把
+   `sentinel/common/role_policy.lua` 复制成认证服务器与客户端终端的
+   `/auth/role_policy.lua`。
+2. 认证服务器：按 2.1 放好 8 个文件（含 `role_policy.lua`），重启，确认横幅里的
+   `Protocol:  secure_auth_v5` 与服务 ID。
 3. 认证服务器：把 `setup_root.lua` 临时放到根目录运行一次，创建 root，然后删除。
 4. 认证服务器：用 root 登录控制台，`5. Manage Terminal Keys` → `2. Add / Show Key`，
    登记每台终端，记下 ID 与 Key。
-5. 终端：把 ID 写进 `/auth/terminal_id.txt`，把 Key 写进 `/auth/psk.txt`
-   （`mode.lua` 保持 client），按 2.3 放好其余文件。
-6. 审计服务器：按 2.2 放好文件，**从认证服务器复制 `/auth/terminal_keys.db`**，按现场
-   修改 `/auth/audit_config.lua`，重启，确认 `Ready.` 与频道 2。
-7. 接好红石：终端左侧接门禁，审计服务器 `back` 接换盘机构；插好软盘，确认 `/disk*` 出现。
-8. 开机一台终端：应通过 3 秒自检并出现登录界面；登录后确认审计服务器写入了
-   `LOGIN_SUCCESS` 日志行与正确的哈希链。
-9. 用 root 在终端或控制台测试一次 `Open Vault`（1 秒脉冲）与 `Exit to CraftOS`
-   （两次重启后落到 shell，再重启回到登录）。
+5. 终端：把 ID 写进 `/auth/terminal_id.txt`，把 Key 写进 `/auth/psk.txt`，按 2.3 放好
+   其余文件（含 `role_policy.lua`）。从旧独立终端迁移时先删掉 `/auth/mode.lua`、
+   `/auth/users.db` 与 `/auth/user_manager.lua`。
+6. 审计服务器：按 2.2 放好文件，**从认证服务器复制
+   `/auth/terminal_keys.db`**，按现场修改 `/auth/audit_config.lua`（`protocol` 保持
+   `secure_auth_v5`），重启，确认 `Ready.` 与频道 2。
+7. 接好红石：认证服务器**左侧**接门禁/金库机构，审计服务器 `back` 接换盘机构；终端不接
+   门禁红石。插好软盘，确认 `/disk*` 出现。
+8. 开机一台终端：应通过 3 秒自检并出现登录界面；登录后确认审计服务器写入了带
+   `ROLE=<role>` 的 `LOGIN_SUCCESS` 日志行与正确的哈希链。
+9. 用 root（或 operator/admin）在终端测试一次 `Open Vault`（由认证服务器脉冲 1 秒），
+   再用一个 user 账号确认会被拒绝；顺带测 `Exit to CraftOS`（两次重启后落到 shell，
+   再重启回到登录）。
 10. 备份 `/auth/users.db`、`/auth/terminal_keys.db`、`/auth/server_id` 与
-    `/logs/chain.state`；终端密钥库变更后重新同步到审计服务器。
+    `/logs/chain.state`；终端密钥库变更后重新同步到审计服务器。角色修改由认证服务器
+    实时读取，不需要重启终端。
 
 ## 许可证
 

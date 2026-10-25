@@ -1,31 +1,20 @@
 -- Sentinel terminal side of the audit trail.
 -- Deploy: /system/audit.lua
 --
--- Client mode: every event is signed and serialised to
--- /audit_queue/<nonce>.evt, then retransmitted every RESEND_INTERVAL seconds
--- until a valid audit_ack for that nonce arrives. An event that cannot be
--- signed is never queued (it could never be accepted).
--- Standalone mode: there is no audit server and no PSK; log() is a no-op.
+-- Every event is signed and serialised to /audit_queue/<nonce>.evt, then
+-- retransmitted every RESEND_INTERVAL seconds until a valid audit_ack for that
+-- nonce arrives. An event that cannot be signed is never queued (it could
+-- never be accepted).
 
 local M = {}
 
-local PROTOCOL = "secure_auth_v4"
+local PROTOCOL = "secure_auth_v5"
 local AUDIT_CHANNEL = 2
 local RESEND_INTERVAL = 10
 local QUEUE_DIR = "/audit_queue"
 
-local function currentMode()
-    local ok, config = pcall(dofile, "/auth/mode.lua")
-    if ok and type(config) == "table" then
-        return config.mode or "client"
-    end
-    return "client"
-end
-
-local mode = currentMode()
-
--- The PSK module (and its file) only exists on client terminals, so it is
--- loaded on first use and never required in standalone mode.
+-- The PSK module is loaded on first use: without a usable key every event is
+-- unverifiable, so log() fails closed and never queues.
 local pskModule = nil
 local pskTried = false
 
@@ -93,9 +82,9 @@ local function transmit(modem, event)
     return pcall(peripheral.call, modem, "transmit", AUDIT_CHANNEL, 0, event)
 end
 
-function M.log(username, action)
-    if mode == "standalone" then return true end
-
+-- role is part of the signed payload and of the stored event; failed logins
+-- pass "" because no role was issued.
+function M.log(username, role, action)
     -- A missing PSK makes the event unverifiable, so it must not be queued.
     local psk = getPsk()
     if not psk then return false end
@@ -105,8 +94,9 @@ function M.log(username, action)
     local terminalId = readTerminalId()
     local timestamp = tostring(os.epoch("utc"))
     local nonce = tostring(math.random()) .. timestamp
-    local signed = terminalId .. "|" .. tostring(username) .. "|" .. tostring(action)
-        .. "|" .. timestamp .. "|" .. nonce
+    local roleText = role or ""
+    local signed = terminalId .. "|" .. tostring(username) .. "|" .. roleText
+        .. "|" .. tostring(action) .. "|" .. timestamp .. "|" .. nonce
 
     local okSign, sig = pcall(psk.sign, signed)
     if not okSign then return false end
@@ -116,6 +106,7 @@ function M.log(username, action)
         type = "audit_event",
         terminal_id = terminalId,
         username = username,
+        role = roleText,
         action = action,
         timestamp = timestamp,
         nonce = nonce,
@@ -206,10 +197,6 @@ local function ackLoop()
 end
 
 function M.start()
-    if mode == "standalone" then
-        return false, "standalone"
-    end
-
     local psk = getPsk()
     if not psk then return false, "no psk" end
     local okKey = pcall(psk.get)

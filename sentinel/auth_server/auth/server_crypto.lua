@@ -1,4 +1,4 @@
--- server_crypto.lua -- server-side signatures for the secure_auth_v4 protocol.
+-- server_crypto.lua -- server-side signatures for the secure_auth_v5 protocol.
 -- Deploy path: /auth/server_crypto.lua
 --
 -- A signature is sha256(terminal_key .. "|" .. data). The terminal key lives in

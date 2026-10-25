@@ -37,41 +37,38 @@ local function safeLoad(path)
     return nil
 end
 
-local modeConfig = safeLoad("/auth/mode.lua") or { mode = "client" }
-local mode = modeConfig.mode or "client"
+-- There is no offline mode: the terminal never boots without a reachable
+-- auth server, so the presence check always runs.
+local netcheck = safeLoad("/system/netcheck.lua")
+if not netcheck or type(netcheck.check) ~= "function" then
+    writeFile("/lock.flag", "cannot load netcheck")
+    print("NETWORK SECURITY CHECK FAILED")
+    print("Reason: cannot load netcheck")
+    print("")
+    print("Fix the network and reboot.")
+    halt()
+end
 
-if mode == "client" then
-    local netcheck = safeLoad("/system/netcheck.lua")
-    if not netcheck or type(netcheck.check) ~= "function" then
-        writeFile("/lock.flag", "cannot load netcheck")
-        print("NETWORK SECURITY CHECK FAILED")
-        print("Reason: cannot load netcheck")
-        print("")
-        print("Fix the network and reboot.")
-        halt()
-    end
-
-    local called, passed, ids, reason = pcall(netcheck.check, 3)
-    if not called then
-        passed = false
+local called, passed, ids, reason = pcall(netcheck.check, 3)
+if not called then
+    passed = false
+    reason = "check interrupted"
+end
+if not passed then
+    if type(reason) ~= "string" or reason == "" then
         reason = "check interrupted"
     end
-    if not passed then
-        if type(reason) ~= "string" or reason == "" then
-            reason = "check interrupted"
-        end
-        writeFile("/lock.flag", reason)
-        print("NETWORK SECURITY CHECK FAILED")
-        print("Reason: " .. reason)
-        print("")
-        print("Fix the network and reboot.")
-        halt()
-    end
+    writeFile("/lock.flag", reason)
+    print("NETWORK SECURITY CHECK FAILED")
+    print("Reason: " .. reason)
+    print("")
+    print("Fix the network and reboot.")
+    halt()
+end
 
-    -- Only a passing check may clear a previous lock.
-    if fs.exists("/lock.flag") then
-        fs.delete("/lock.flag")
-    end
+-- Only a passing check may clear a previous lock.
+if fs.exists("/lock.flag") then
+    fs.delete("/lock.flag")
 end
 
 local anti = readFile("/anti.txt")

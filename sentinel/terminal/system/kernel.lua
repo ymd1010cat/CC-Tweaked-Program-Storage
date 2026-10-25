@@ -1,12 +1,6 @@
 -- Sentinel terminal kernel: login/menu cycle plus the audit queue.
 -- Deploy: /system/kernel.lua
 
-local mode = "client"
-local okMode, modeConfig = pcall(dofile, "/auth/mode.lua")
-if okMode and type(modeConfig) == "table" then
-    mode = modeConfig.mode or "client"
-end
-
 local sandbox = dofile("/system/sandbox.lua")
 sandbox.init()
 
@@ -40,14 +34,12 @@ local function mainLoop()
     end
 end
 
+-- The audit server is the only sink: a failed start (no modem, no PSK) is
+-- retried on the same short interval.
 local function auditLoop()
     while true do
-        local ok, result, reason = pcall(audit.start)
-        local waitSeconds = 5
-        if ok and result == false and reason == "standalone" then
-            waitSeconds = 60
-        end
-        sleep(waitSeconds)
+        pcall(audit.start)
+        sleep(5)
     end
 end
 

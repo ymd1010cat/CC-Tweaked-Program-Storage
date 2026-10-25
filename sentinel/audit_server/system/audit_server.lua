@@ -14,7 +14,7 @@ local RETRY_MARKER = "/swap.retry"
 -- Boot defaults. /auth/audit_config.lua overrides any of these keys.
 local DEFAULTS = {
     main_channel = 2,
-    protocol = "secure_auth_v4",
+    protocol = "secure_auth_v5",
     main_modem_side = nil,
     heartbeat_interval = 5,
     logs_dir = "/logs",
@@ -717,6 +717,7 @@ function M.handleEvent(channel, message)
 
     local terminalId = message.terminal_id
     local username = message.username
+    local role = message.role
     local action = message.action
     local nonce = message.nonce
     local stamp = message.timestamp
@@ -724,6 +725,7 @@ function M.handleEvent(channel, message)
         stamp = tostring(stamp)
     end
     if type(terminalId) ~= "string" or type(username) ~= "string"
+        or type(role) ~= "string"
         or type(action) ~= "string" or type(nonce) ~= "string"
         or type(stamp) ~= "string" then
         return false, "malformed"
@@ -735,8 +737,8 @@ function M.handleEvent(channel, message)
 
     -- Signature first: sha256(key .. "|" .. data) is checked by the crypto
     -- module, which owns the terminal key store.
-    local data = terminalId .. "|" .. username .. "|" .. action .. "|"
-        .. stamp .. "|" .. nonce
+    local data = terminalId .. "|" .. username .. "|" .. role .. "|"
+        .. action .. "|" .. stamp .. "|" .. nonce
     local ok, valid = pcall(state.crypto.verify, terminalId, data, message.sig)
     if not ok or valid ~= true then
         return false, "signature"
@@ -760,7 +762,7 @@ function M.handleEvent(channel, message)
 
     local body = "[" .. utcStamp(timestampMs) .. "] TERMINAL="
         .. cleanField(terminalId) .. " USER=" .. cleanField(username)
-        .. " ACTION=" .. cleanField(action)
+        .. " ROLE=" .. cleanField(role) .. " ACTION=" .. cleanField(action)
     appendBody(body)
     nonceRecord(terminalId, nonce, now)
     sendAck(terminalId, nonce)

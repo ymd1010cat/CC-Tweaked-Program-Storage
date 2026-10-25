@@ -7,7 +7,7 @@
 
 return {
     main_channel = 2,
-    protocol = "secure_auth_v4",
+    protocol = "secure_auth_v5",
     main_modem_side = nil,
     heartbeat_interval = 5,
     logs_dir = "/logs",

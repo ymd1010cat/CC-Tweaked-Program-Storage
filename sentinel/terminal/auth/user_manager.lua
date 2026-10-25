@@ -7,8 +7,8 @@
 --   derived = sha256(hash .. "|" .. nonce_c .. "|" .. nonce_s).
 --
 -- Rules: no root creation through this API, names <= 32, passwords <= 128,
--- roles in {admin, operator, guest}, no self deletion, the last root cannot be
--- deleted, and root accounts cannot be modified.
+-- roles in {admin, operator, user, guest}, no self deletion, the last root
+-- cannot be deleted, and root accounts cannot be modified.
 
 local sha256 = dofile("/sha256.lua")
 
@@ -19,7 +19,7 @@ local SALT_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 local SALT_LENGTH = 16
 local MAX_NAME = 32
 local MAX_PASSWORD = 128
-local ROLES = { admin = true, operator = true, guest = true }
+local ROLES = { admin = true, operator = true, user = true, guest = true }
 
 local function loadUsers()
     if not fs.exists(USERS_PATH) then return {} end
@@ -175,6 +175,18 @@ function M.getSalt(name)
         return nil
     end
     return record.salt
+end
+
+-- Role of an account, straight from users.db. Used by the auth server when it
+-- authorises an open_request: the stored value is the only authority, and the
+-- caller decides what to do with an unknown role.
+function M.getRole(name)
+    if type(name) ~= "string" or name == "" then return nil end
+    local users = loadUsers()
+    local record = users[name]
+    if type(record) ~= "table" then return nil end
+    if type(record.role) ~= "string" or record.role == "" then return nil end
+    return record.role
 end
 
 function M.verifyDerived(name, derived, nonceC, nonceS)
