@@ -122,15 +122,17 @@ function M.node_new(path)    local n = {
         if M.reasm_expire(self.reasm) > 0 then self:log("REASM_EXPIRED some") end
         if self.fabric then M.fabric_tick(self, self.fabric) end
         if self.wan then M.wan_tick(self, self.wan) end
-        -- hot reload of routes.txt / role.txt / hosts.txt (checked at most every 2 s)
+        -- hot reload of routes.txt / role.txt / hosts_file (checked at most every 2 s)
         if fs.attributes and (self.route_check or 0) < os.clock() then
             self.route_check = os.clock() + 2
             if mtime_of("routes.txt") ~= self.routes_mtime then self:reload_routes("file change") end
             if mtime_of("role.txt") ~= self.cfg_mtime then self:reload_cfg("file change") end
-            if M.hosts_load and mtime_of("hosts.txt") ~= self.hosts_mtime then
-                M.hosts_load(self, "hosts.txt")
-                self.hosts_mtime = mtime_of("hosts.txt")
-                self:log("HOSTS_RELOADED path=hosts.txt (file change)")
+            -- watch the file services_setup actually loads, not a hard-coded default
+            local hosts_path = self.cfg.hosts_file or "hosts.txt"
+            if M.hosts_load and mtime_of(hosts_path) ~= self.hosts_mtime then
+                M.hosts_load(self, hosts_path)
+                self.hosts_mtime = mtime_of(hosts_path)
+                self:log("HOSTS_RELOADED path=%s (file change)", hosts_path)
             end
         end
         self:after(0.25, function() self:tick() end)
@@ -447,8 +449,9 @@ function M.node_new(path)    local n = {
         if fs.exists("routes.txt") then self:reload_routes("boot") end
 
         -- remember the config/hosts timestamps so the watcher only reports real changes
+        -- (the hosts baseline must be the file services_setup loads below)
         self.cfg_mtime = mtime_of("role.txt")
-        self.hosts_mtime = mtime_of("hosts.txt")
+        self.hosts_mtime = mtime_of(self.cfg.hosts_file or "hosts.txt")
 
         -- channel namespace arbitration: LAN channels vs fabric vs rednet space
         M.channel_audit(self)

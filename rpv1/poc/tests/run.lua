@@ -27,7 +27,7 @@ local M = { RPV_VERSION = "RPV1", tests = {} }
 -- the library is loaded exactly like node2/startup.lua does it, minus the network
 for _, mod in ipairs({ "crypto", "util", "ip", "route", "arp", "link", "icmp", "udp",
                        "conn", "fabric", "wan", "services", "dv", "nat", "mcast", "qos",
-                       "wansec", "compat", "topo" }) do
+                       "wansec", "compat", "topo", "node" }) do
     local ok, err = pcall(load_module, "rpv/" .. mod .. ".lua", M)
     if not ok then
         print("TEST_FAIL module:" .. mod .. " err=" .. tostring(err))
@@ -91,7 +91,7 @@ end
 local files = {
     "tests/t_util.lua", "tests/t_ip.lua", "tests/t_route.lua", "tests/t_crypto.lua",
     "tests/t_conn.lua", "tests/t_wansec.lua", "tests/t_nat.lua", "tests/t_mcast.lua",
-    "tests/t_qos.lua", "tests/t_topo.lua", "tests/t_scale.lua", "tests/t_services.lua", "tests/t_addr.lua", "tests/t_compat.lua",
+    "tests/t_qos.lua", "tests/t_topo.lua", "tests/t_scale.lua", "tests/t_services.lua", "tests/t_services_hosts.lua", "tests/t_addr.lua", "tests/t_compat.lua",
     "tests/t_http_common.lua", "tests/t_http_server.lua", "tests/t_http_client.lua",
     "tests/t_http_secure.lua", "tests/t_http_integration.lua", "tests/t_http_hardening.lua",
     "tests/t_hosts.lua", "tests/t_wan_acl.lua",
