@@ -143,7 +143,7 @@ end
 
 -- ── headless 控制台 ────────────────────────────────────────────────────
 -- 与 Console 同一套方法，但不碰 term：日志追加到文件，prompt 只让出时间片。
--- unixshell 包里 `dcnet master --headless` / `dcnet worker --headless` 用它。
+-- Pyromputer OS 包里 `dcnet master --headless` / `dcnet worker --headless` 用它。
 local Null = {}
 Null.__index = Null
 

@@ -3073,7 +3073,7 @@ function M.run(opts)
                     ui:log("language: " .. lang.get() .. " (persisted)", col("lime", 32))
 
                     if lang.get() == "zh" and rawget(_G, "DCNET_CJK_READY") ~= true then
-                        ui:log("zh needs the CJK font medium (insert the unixshell font disks + enable the ush-cjk-font resource pack); text stays English",
+                        ui:log("zh needs the CJK font medium (insert the Pyromputer OS font disks + enable the psh-cjk-font resource pack); text stays English",
                             col("orange", 2))
                     end
                     if PN:attached() then PN:redraw(S, CL, true) end

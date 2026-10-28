@@ -11,9 +11,9 @@
 local util = dc_require("dc.util")
 local crypto = dc_require("dc.crypto")
 
--- 传输后端：默认 rednet；unixshell 里若装了 lib/rpvnet.lua，可以把
+-- 传输后端：默认 rednet；Pyromputer OS 里若装了 lib/rpvnet.lua，可以把
 -- DCNET_TRANSPORT 设成 "rpv" 或 "auto" 走 RPV1（rednet 形状的 API）。
--- 独立运行（没有 ush）时仍是 rednet，行为不变。
+-- 独立运行（没有 psh）时仍是 rednet，行为不变。
 local function select_netlib()
     local want = tostring(rawget(_G, "DCNET_TRANSPORT") or "rednet"):lower()
     if want == "rednet" then return rednet, "rednet" end

@@ -152,7 +152,7 @@ end
 
 > **界面语言**：dcnet 的游戏内界面、日志与作业结果默认是**英文**（ASCII），
 > 原版 CC 字体即可正常显示，不需要中文字体资源包；需要中文时用 §4.7 的 `lang zh` 切换
-> （需要 unixshell 字体盘 + 自建的 `ush-cjk-font.zip` 资源包）。本文档为了说明方便仍用
+> （需要 Pyromputer OS 字体盘 + 自建的 `psh-cjk-font.zip` 资源包）。本文档为了说明方便仍用
 > 中文，部分示例输出可能是旧版界面。
 
 **每台运算机：**
@@ -310,7 +310,7 @@ mon net unblock 12     # 解除屏蔽（下一次心跳就自动重连；also �
 只想让屏幕暂时断开、还要它自己回来时，用 `mon net off` 再 `on`，不要用 `kick`。
 
 屏幕文件的来源：`install.lua screen`（或 `install.lua all`）会写到
-`/dccomp/screen.lua`；也可以把 `dist/screen.lua` 直接拷到屏幕电脑；unixshell 下用
+`/dccomp/screen.lua`；也可以把 `dist/screen.lua` 直接拷到屏幕电脑；Pyromputer OS 下用
 `dcnet screen`。屏幕端和主控之间同样有消息签名：集群设了 `setkey` 时，屏幕电脑也要
 `set dcnet.key <同一个密钥>`（或 `screen.lua --key=<密钥>`），否则会被丢弃。
 
@@ -404,15 +404,15 @@ lang zh         # 切换为中文并持久化
 lang en         # 切回英文
 ```
 
-中文显示复用了 unixshell 的 CJK 模块（`cjk.lua` / `cjk_fonts.lua` / `cjk_shards.lua`，
+中文显示复用了 Pyromputer OS 的 CJK 模块（`cjk.lua` / `cjk_fonts.lua` / `cjk_shards.lua`，
 原名 `cc_chinese.lua` / `cc_fonts.lua` / `cc_font_shards.lua`）。需要准备两样东西：
 
-1. **字形介质**：把 unixshell 的字体盘（release 资产
-   `unixshell-fonts-size12-two-disks.zip` 里的两张盘）插到主控电脑的磁盘驱动器上；
+1. **字形介质**：把 Pyromputer OS 的字体盘（release 资产
+   `pyromputer-os-fonts-size12-two-disks.zip` 里的两张盘）插到主控电脑的磁盘驱动器上；
    模块按 `cc_fonts.marker` 自动找盘，大小 8/12/16 按优先级自动选。
-2. **客户端字体资源包**：直接下载 dcnet release 里的 `ush-cjk-font.zip`（pack_format 15，
+2. **客户端字体资源包**：直接下载 dcnet release 里的 `psh-cjk-font.zip`（pack_format 15，
    适用于 1.20.1；其他 Minecraft 版本可用 `--pack-format` 重新生成），或按
-   [unixshell/tools/respack/README.md](../unixshell/tools/respack/README.md) 自己生成
+   [pyromputer-os/tools/respack/README.md](../pyromputer-os/tools/respack/README.md) 自己生成
    （standalone 模式不再需要 CC:Tweaked 的贴图）。放进 `<minecraft>/resourcepacks/` 并启用。
 
 - 缺任一项时：`lang zh` 仍可切换并持久化，但**文字保持英文**（不会乱码），`lang` 命令会
@@ -844,20 +844,20 @@ CraftOS-PC 是宿主配置），所以界面文字不占电脑空间。
 
 ---
 
-## 12. 在 unixshell 下运行（可选）
+## 12. 在 Pyromputer OS 下运行（可选）
 
-dcnet 也可以作为 [unixshell](../unixshell/) 的一个包运行。包源在
-`unixshell/tools/pkgs/dcnet/`，由本项目的源码生成：
+dcnet 也可以作为 [Pyromputer OS](../pyromputer-os/) 的一个包运行。包源在
+`pyromputer-os/tools/pkgs/dcnet/`，由本项目的源码生成：
 
 ```bash
-cd unixshell
+cd pyromputer-os
 python tools/build_dcnet_pkg.py
 ```
 
 构建脚本会复制 `dcnet/src/lib/*.lua`、`dcnet/src/jobs/*.lua` 和
 `dcnet/dist/worker.lua`，并重建 `dist/`，所以包内容与源码始终一致。
 
-安装到一台 ush 机器（包存储器的 `usr/pkgs/dcnet`，或通过 `pkg install dcnet`）后：
+安装到一台 psh 机器（包存储器的 `usr/pkgs/dcnet`，或通过 `pkg install dcnet`）后：
 
 | 命令 | 作用 |
 | --- | --- |
@@ -871,31 +871,31 @@ python tools/build_dcnet_pkg.py
 配置在 `/etc/dcnet.conf`（样例见包内 `etc/dcnet.conf.example`）：
 
 - `root=`：可写数据目录；root 缺省 `/var/lib/dcnet`，普通用户缺省 `$HOME/.dcnet`
-- `transport=rednet|rpv|auto`：`rpv` 走 unixshell 的 RPV1，所有节点必须一致
+- `transport=rednet|rpv|auto`：`rpv` 走 Pyromputer OS 的 RPV1，所有节点必须一致
 - `key=`：集群共享的 HMAC 密钥
 - 其余键按 `sched.lua` / `worker.lua` 的默认配置项覆盖
 
 包入口用 `dc_require` 风格的直连加载器从包自己的 `lib/dcnet/` 读模块，不依赖
 `package.path`；所以包放在哪个存储器的 `usr/pkgs/dcnet` 都能启动。
 
-**启动与多线程**：`/etc/dcnet.conf` 的 `boot=master|worker` 让 `unixshell/startup.lua`
+**启动与多线程**：`/etc/dcnet.conf` 的 `boot=master|worker` 让 `pyromputer-os/startup.lua`
 在第一次提示符前启动角色。Advanced Computer 默认走 **multishell**：`/usr/dcnet-tabs.lua`
-把 dcnet 放进 tab 1、ush 放进 tab 2，dcnet 先加载，ush 只作为命令控制台；`forward=1`
-时 ush 的每一行写入 `<root>/ctl`，由常驻主控执行，`dcnet log` 看输出。非 Advanced
+把 dcnet 放进 tab 1、psh 放进 tab 2，dcnet 先加载，psh 只作为命令控制台；`forward=1`
+时 psh 的每一行写入 `<root>/ctl`，由常驻主控执行，`dcnet log` 看输出。非 Advanced
 机器或 `multishell=0` 退回 `dcnet ROLE --headless` 后台作业。
 
-**计算端精简镜像**：在 unixshell 仓库运行
+**计算端精简镜像**：在 Pyromputer OS 仓库运行
 
 ```bash
 python tools/build_worker.py
 ```
 
-得到 `unixshell/dist/worker-image/`（15 文件，约 127 KB）：只有 `startup.lua` 和 dcnet
-包的 worker 所需模块，循环执行 `dcnet worker --headless`。镜像里**没有** ush、firstboot、
+得到 `pyromputer-os/dist/worker-image/`（15 文件，约 127 KB）：只有 `startup.lua` 和 dcnet
+包的 worker 所需模块，循环执行 `dcnet worker --headless`。镜像里**没有** psh、firstboot、
 BIOS、man/usr/cmd、`fontdata/`、`lib/cc_chinese.lua`/`cc_font*` 或桌面包——计算端没有
-中文字体支持和交互界面。主控端保留完整 unixshell + multishell。
+中文字体支持和交互界面。主控端保留完整 Pyromputer OS + multishell。
 
-unixshell 仓库里的 `python tools/dcnet_pkg_verify.py` 会在真 CraftOS-PC 上部署 ush +
+Pyromputer OS 仓库里的 `python tools/dcnet_pkg_verify.py` 会在真 CraftOS-PC 上部署 psh +
 dcnet 包，并跑 `dcnet version` / `dcnet config` 做端到端验收。
 
 版本：1.3.2 · 协议版本：1 · 适用 CC:Tweaked 1.16+（含 1.20/1.21 系列）

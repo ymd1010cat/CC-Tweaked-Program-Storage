@@ -1,4 +1,4 @@
--- dc.cjk — 从 unixshell/lib/cc_chinese.lua 复制（作者同意跨项目复用）
+-- dc.cjk — 从 pyromputer-os/lib/cc_chinese.lua 复制（作者同意跨项目复用）
 -- 只改模块名与 require 目标；文件末尾的 say() 是 dcnet 的混合行渲染器。
 -- cjk.lua - draw CJK text on a CC:Tweaked screen from bitmap glyphs
 --
@@ -449,7 +449,7 @@ end
 
 -- ── say：一行/多行混合文本的渲染器（dcnet 的 console 用） ───────────────
 --
--- 与 unixshell 的 lang.say 同源：CJK 字符按 ceil(size/2) x ceil(size/3) 格的
+-- 与 Pyromputer OS 的 lang.say 同源：CJK 字符按 ceil(size/2) x ceil(size/3) 格的
 -- 字形块 blit，其余字符走 term.write，所以「中文行占几行、英文行只占一行」
 -- 的换行行为和 print 一致。
 --

@@ -1,6 +1,6 @@
 # python 解释器导出件（来自 Marvis「lua开发」会话）
 
-用途：这是一个**独立导出**，**不参与 unixshell 项目**；之后再打成包管理服务器的包。
+用途：这是一个**独立导出**，**不参与 Pyromputer OS 项目**；之后再打成包管理服务器的包。
 导出对象是原 CC:Tweaked 会话里手写的 Python 子集解释器及其配套模块。
 
 ## 内容
@@ -8,7 +8,7 @@
     pkg/                        按会话最终文件树还原的包内容
         pylib/pythonlib.lua     解释器本体（Lua 手写，3647 行）
         pylib/*.py              解释器 import 的 Python 模块（15 个）
-        pyrepl.lua              REPL 前端（会话里写好但尚未集成进 ush）
+        pyrepl.lua              REPL 前端（会话里写好但尚未集成进 psh）
         legacy-py.lua           被 pythonlib.lua 取代的早期解释器（仅留档）
         manifest                本项目包管理器格式的清单（name/version/bin/file）
     MANIFEST.md                 还原说明：每个文件的字节数、行数、块位置、修订数
@@ -36,7 +36,7 @@
 
 ## 已知限制（交付时请留意）
 
-- 14 项"未完成"里的 Python 相关项：会话末尾明确列着 **REPL 尚未集成进 ush**、
+- 14 项"未完成"里的 Python 相关项：会话末尾明确列着 **REPL 尚未集成进 psh**、
   **性能槽位化未做**（AST 缓存与常量折叠已做）。
 - 用子集解释器 `import` 导出的 pylib 模块时，个别模块会触发子集解析器的语法限制
   （例如 `json.py` 第 175 行的下标里出现 `:`），说明这些 `.py` 用的是比解释器当前

@@ -28,7 +28,7 @@ local cjk     = dc_require("dc.cjk")
 -- 节点与网络屏幕保持英文，dist 体积也更小。
 _G.DCNET_TR = function(text) return lang.tr(text) end
 
--- CJK 字形钩子：字体介质（unixshell 的字体盘 + 客户端的 ush-cjk-font 资源包）
+-- CJK 字形钩子：字体介质（Pyromputer OS 的字体盘 + 客户端的 psh-cjk-font 资源包）
 -- 在的时候，console 的中文日志改走逐字形渲染（一个汉字 6x4 格），而不是让
 -- 原版字体把 UTF-8 字节画成乱码。介质不在时什么也不挂，界面保持英文
 -- （lang.tr 也会因为 DCNET_CJK_READY 不是 true 而原样返回英文）。
@@ -74,7 +74,7 @@ function M.run(opts)
     local created = jobs.installDefaults(opts.defaultJobs)
 
     -- ── 界面 ─────────────────────────────────────────────────────────
-    -- headless：ush 包可以用 `dcnet master --headless` 当后台服务跑，
+    -- headless：psh 包可以用 `dcnet master --headless` 当后台服务跑，
     -- 日志落到 <root>/logs/master.log，不碰终端。
     local ui
     if opts.headless then
@@ -738,7 +738,7 @@ function M.run(opts)
                     -- 切到 zh 但本机没有字形介质：汉字画不出来，界面会继续英文。
                     -- 这里必须说清楚缺的是什么，否则用户只会看到「切了没反应」。
                     if lang.get() == "zh" and rawget(_G, "DCNET_CJK_READY") ~= true then
-                        ui:log("zh needs the CJK font medium (insert the unixshell font disks + enable the ush-cjk-font resource pack); text stays English",
+                        ui:log("zh needs the CJK font medium (insert the Pyromputer OS font disks + enable the psh-cjk-font resource pack); text stays English",
                             col("orange", 2))
                     end
                     if PN:attached() then PN:redraw(S, CL, true) end
@@ -1254,7 +1254,7 @@ function M.run(opts)
         broadcastBeat()
     end
 
-    -- 外壳转交命令的队列：<root>/ctl/*.cmd。ush 只把命令行写进这个目录，
+    -- 外壳转交命令的队列：<root>/ctl/*.cmd。psh 只把命令行写进这个目录，
     -- master 在后台（通常 --headless）按文件名顺序取走并执行。这样系统外壳
     -- 不需要自己成为 dcnet 的进程，只负责传话。
     local function pollControl()

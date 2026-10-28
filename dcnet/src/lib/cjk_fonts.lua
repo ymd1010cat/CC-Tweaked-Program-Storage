@@ -1,5 +1,5 @@
--- dc.cjk_fonts — 从 unixshell/lib/cc_fonts.lua 复制（作者同意跨项目复用）
--- 只改模块名；字体介质的标记文件仍是 cc_fonts.marker（与 unixshell 字体盘兼容）。
+-- dc.cjk_fonts — 从 pyromputer-os/lib/cc_fonts.lua 复制（作者同意跨项目复用）
+-- 只改模块名；字体介质的标记文件仍是 cc_fonts.marker（与 Pyromputer OS 字体盘兼容）。
 -- cjk_fonts.lua - find the media that carry the glyphs, and the set they make
 --
 -- WHY THE GLYPHS ARE NOT ON THE COMPUTER, AND WHY FINDING THEM IS A MODULE

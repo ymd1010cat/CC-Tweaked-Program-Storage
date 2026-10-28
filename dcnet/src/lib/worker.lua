@@ -65,7 +65,7 @@ local function runOnce(opts)
         return false, "no modem detected"
     end
 
-    -- headless（ush 包）：不占终端，日志只写文件；交互终端下仍是原来的三区界面。
+    -- headless（psh 包）：不占终端，日志只写文件；交互终端下仍是原来的三区界面。
     local ui
     if opts.headless then
         ui = console.null({ title = "dcnet worker", hasPrompt = false, logFile = LOG })

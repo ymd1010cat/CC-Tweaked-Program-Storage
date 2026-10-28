@@ -1,4 +1,4 @@
--- dc.cjk_shards — 从 unixshell/lib/cc_font_shards.lua 复制（作者同意跨项目复用）
+-- dc.cjk_shards — 从 pyromputer-os/lib/cc_font_shards.lua 复制（作者同意跨项目复用）
 -- 只改模块名与 require 目标。
 -- cjk_shards.lua - read glyph shards from the font media, on demand
 --

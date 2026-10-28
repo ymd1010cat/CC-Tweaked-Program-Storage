@@ -38,7 +38,7 @@ if not _G.dc_require then
 end
 
 local argv = { ... }
--- unixshell 的命令块拿到的是 (args_table, stage)；独立运行时才是逐个字符串。
+-- Pyromputer OS 的命令块拿到的是 (args_table, stage)；独立运行时才是逐个字符串。
 if type(argv[1]) == "table" then argv = argv[1] end
 
 local worker = dc_require("dc.worker")
