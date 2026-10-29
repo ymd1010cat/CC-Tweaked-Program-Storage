@@ -218,7 +218,7 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-                                                   3.154                                              3.154                                              3.154 [20/host]                                    3.154 [20/host]                                    3.154 [20/host] CFG_SUMMARY                        3.154 [20/host] CFG_SUMMARY                        3.154 [20/host] CFG_SUMMARY warnings=0             
+                                                   3.048                                              3.048                                              3.048 [20/host]                                    3.048 [20/host]                                    3.048 [20/host] CFG_SUMMARY                        3.048 [20/host] CFG_SUMMARY                        3.048 [20/host] CFG_SUMMARY warnings=0             
 https://www.craftos-pc.cc/bugreport.               
                                                    
 TEST util ok=true                                  
@@ -236,8 +236,8 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-                                                   3.156                                              3.156                                              3.156 [20/host]                                    3.156 [20/host]                                    3.156 [20/host] COMPAT                             3.156 [20/host] COMPAT                             3.156 [20/host] COMPAT ok=true                     3.156 [20/host] COMPAT ok=true                     3.156 [20/host] COMPAT ok=true os=CraftOS          3.156 [20/host] COMPAT ok=true os=CraftOS          3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+                                                   3.050                                              3.050                                              3.050 [20/host]                                    3.050 [20/host]                                    3.050 [20/host] COMPAT                             3.050 [20/host] COMPAT                             3.050 [20/host] COMPAT ok=true                     3.050 [20/host] COMPAT ok=true                     3.050 [20/host] COMPAT ok=true os=CraftOS          3.050 [20/host] COMPAT ok=true os=CraftOS          3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
                                                    
 TEST util ok=true                                  
 TEST ip ok=true                                    
@@ -254,8 +254,8 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
                                                    missing=-                                          missing=-                                          missing=- optional=rednet,commands,shell           
 TEST util ok=true                                  
 TEST ip ok=true                                    
@@ -272,10 +272,10 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-                                                   3.159                                              3.159                                              3.159 [20/host]                                    3.159 [20/host]                                    3.159 [20/host] ADDR_WARN_SUMMARY                  3.159 [20/host] ADDR_WARN_SUMMARY                  3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+                                                   3.053                                              3.053                                              3.053 [20/host]                                    3.053 [20/host]                                    3.053 [20/host] ADDR_WARN_SUMMARY                  3.053 [20/host] ADDR_WARN_SUMMARY                  3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 TEST ip ok=true                                    
 TEST route ok=true                                 
 TEST crypto ok=true                                
@@ -290,10 +290,10 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
                                                    loopback=127.0.0.1                                 loopback=127.0.0.1                                 loopback=127.0.0.1 class_private=false             
 TEST route ok=true                                 
 TEST crypto ok=true                                
@@ -308,12 +308,12 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-                                                   3.163                                              3.163                                              3.163 [20/host]                                    3.163 [20/host]                                    3.163 [20/host] NODE                               3.163 [20/host] NODE                               3.163 [20/host] NODE id=20                         3.163 [20/host] NODE id=20                         3.163 [20/host] NODE id=20 mac=20                  3.163 [20/host] NODE id=20 mac=20                  3.163 [20/host] NODE id=20 mac=20 role=host        3.163 [20/host] NODE id=20 mac=20 role=host        
+                                                   3.056                                              3.056                                              3.056 [20/host]                                    3.056 [20/host]                                    3.056 [20/host] NODE                               3.056 [20/host] NODE                               3.056 [20/host] NODE id=20                         3.056 [20/host] NODE id=20                         3.056 [20/host] NODE id=20 mac=20                  3.056 [20/host] NODE id=20 mac=20                  3.056 [20/host] NODE id=20 mac=20 role=host        3.056 [20/host] NODE id=20 mac=20 role=host        
 TEST crypto ok=true                                
 TEST conn ok=true                                  
 TEST wansec ok=true                                
@@ -326,12 +326,12 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
                                                    ifaces=0                                           ifaces=0                                           ifaces=0 routes=1                                  ifaces=0 routes=1                                  ifaces=0 routes=1 version=RPV1                     
 TEST conn ok=true                                  
 TEST wansec ok=true                                
@@ -344,14 +344,14 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-                                                   3.168                                              3.168                                              3.168 [20/host]                                    3.168 [20/host]                                    3.168 [20/host] CHANNEL_POLICY                     3.168 [20/host] CHANNEL_POLICY                     3.168 [20/host] CHANNEL_POLICY lan=[]              3.168 [20/host] CHANNEL_POLICY lan=[]              
+                                                   3.060                                              3.060                                              3.060 [20/host]                                    3.060 [20/host]                                    3.060 [20/host] CHANNEL_POLICY                     3.060 [20/host] CHANNEL_POLICY                     3.060 [20/host] CHANNEL_POLICY lan=[]              3.060 [20/host] CHANNEL_POLICY lan=[]              
 TEST wansec ok=true                                
 TEST nat ok=true                                   
 TEST mcast ok=true                                 
@@ -362,14 +362,14 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
                                                    fabric_bcast=nil                                   fabric_bcast=nil                                   fabric_bcast=nil fabric_ucast=nil                  fabric_bcast=nil fabric_ucast=nil                  
 TEST nat ok=true                                   
 TEST mcast ok=true                                 
@@ -380,14 +380,14 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
                                                    rednet_reserved=65533-65535,0-65499                
 TEST mcast ok=true                                 
@@ -398,17 +398,17 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-                                                   3.173                                              3.173                                              3.173 [20/host]                                    3.173 [20/host]                                    3.173 [20/host] CHANNEL_AUDIT                      3.173 [20/host] CHANNEL_AUDIT                      3.173 [20/host] CHANNEL_AUDIT conflicts=0          
+                                                   3.065                                              3.065                                              3.065 [20/host]                                    3.065 [20/host]                                    3.065 [20/host] CHANNEL_AUDIT                      3.065 [20/host] CHANNEL_AUDIT                      3.065 [20/host] CHANNEL_AUDIT conflicts=0          
 TEST qos ok=true                                   
 TEST topo ok=true                                  
 SCALE_TOPO nodes=100 links=180 merge_ms=32         
@@ -416,144 +416,144 @@ SCALE_DV nodes=100 links=100 diameter=7 rounds=8
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-                                                   3.175                                              3.175                                              3.175 [20/host]                                    3.175 [20/host]                                    3.175 [20/host] HOSTS_LOADED                       3.175 [20/host] HOSTS_LOADED                       3.175 [20/host] HOSTS_LOADED n=1                   3.175 [20/host] HOSTS_LOADED n=1                   3.175 [20/host] HOSTS_LOADED n=1 bad=0             3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+                                                   3.068                                              3.068                                              3.068 [20/host]                                    3.068 [20/host]                                    3.068 [20/host] HOSTS_LOADED                       3.068 [20/host] HOSTS_LOADED                       3.068 [20/host] HOSTS_LOADED n=1                   3.068 [20/host] HOSTS_LOADED n=1                   3.068 [20/host] HOSTS_LOADED n=1 bad=0             3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 TEST topo ok=true                                  
 SCALE_TOPO nodes=100 links=180 merge_ms=32         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
                                                    path=t_hosts_custom.txt                            
 SCALE_TOPO nodes=100 links=180 merge_ms=32         
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
                                                    TEST                                               TEST                                               TEST services_hosts                                TEST services_hosts                                TEST services_hosts ok=true                        
 SCALE_DV nodes=100 links=100 diameter=7 rounds=8   
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
                                                    TEST                                               TEST                                               TEST addr                                          TEST addr                                          TEST addr ok=true                                  
 max_metric=7 dv_ms=16                              
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
                                                    TEST                                               TEST                                               TEST compat                                        TEST compat                                        TEST compat ok=true                                
 TEST scale ok=true                                 
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
 TEST compat ok=true                                
                                                    TEST                                               TEST                                               TEST http_common                                   TEST http_common                                   TEST http_common ok=true                           
 TEST services ok=true                              
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
 TEST compat ok=true                                
 TEST http_common ok=true                           
                                                    TEST                                               TEST                                               TEST http_server                                   TEST http_server                                   TEST http_server ok=true                           
-3.154 [20/host] CFG_SUMMARY warnings=0             
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.048 [20/host] CFG_SUMMARY warnings=0             
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
@@ -561,17 +561,17 @@ TEST compat ok=true
 TEST http_common ok=true                           
 TEST http_server ok=true                           
                                                    TEST                                               TEST                                               TEST http_client                                   TEST http_client                                   TEST http_client ok=true                           
-3.156 [20/host] COMPAT ok=true os=CraftOS 1.9      
+3.050 [20/host] COMPAT ok=true os=CraftOS 1.9      
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
@@ -581,15 +581,15 @@ TEST http_server ok=true
 TEST http_client ok=true                           
                                                    TEST                                               TEST                                               TEST http_secure                                   TEST http_secure                                   TEST http_secure ok=true                           
 missing=- optional=rednet,commands,shell           
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
@@ -599,15 +599,15 @@ TEST http_server ok=true
 TEST http_client ok=true                           
 TEST http_secure ok=true                           
                                                    TEST                                               TEST                                               TEST http_integration                              TEST http_integration                              TEST http_integration ok=true                      
-3.159 [20/host] ADDR_WARN_SUMMARY warnings=0       
+3.053 [20/host] ADDR_WARN_SUMMARY warnings=0       
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
@@ -619,13 +619,13 @@ TEST http_secure ok=true
 TEST http_integration ok=true                      
                                                    TEST                                               TEST                                               TEST http_hardening                                TEST http_hardening                                TEST http_hardening ok=true                        
 loopback=127.0.0.1 class_private=false             
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
@@ -637,13 +637,13 @@ TEST http_secure ok=true
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
                                                    TEST                                               TEST                                               TEST hosts                                         TEST hosts                                         TEST hosts ok=true                                 
-3.163 [20/host] NODE id=20 mac=20 role=host        
+3.056 [20/host] NODE id=20 mac=20 role=host        
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
@@ -657,11 +657,11 @@ TEST http_hardening ok=true
 TEST hosts ok=true                                 
                                                    TEST                                               TEST                                               TEST wan_acl                                       TEST wan_acl                                       TEST wan_acl ok=true                               
 ifaces=0 routes=1 version=RPV1                     
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
@@ -675,11 +675,11 @@ TEST http_hardening ok=true
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
                                                    TEST                                               TEST                                               TEST router                                        TEST router                                        TEST router ok=true                                
-3.168 [20/host] CHANNEL_POLICY lan=[]              
+3.060 [20/host] CHANNEL_POLICY lan=[]              
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
@@ -693,11 +693,11 @@ TEST http_hardening ok=true
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-                                                   OFFLINE_RESULT                                     OFFLINE_RESULT                                     OFFLINE_RESULT pass=1568                           OFFLINE_RESULT pass=1568                           OFFLINE_RESULT pass=1568 fail=0                    OFFLINE_RESULT pass=1568 fail=0                    OFFLINE_RESULT pass=1568 fail=0 groups=24          
+                                                   TEST                                               TEST                                               TEST rhtp_server                                   TEST rhtp_server                                   TEST rhtp_server ok=true                           
 fabric_bcast=nil fabric_ucast=nil                  
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
@@ -711,11 +711,11 @@ TEST http_hardening ok=true
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-                                                   OFFLINE_PASS                                       OFFLINE_PASS                                       OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+                                                   TEST                                               TEST                                               TEST backup_router                                 TEST backup_router                                 TEST backup_router ok=true                         
 rednet_reserved=65533-65535,0-65499                
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
 path=t_hosts_custom.txt                            
 TEST services_hosts ok=true                        
 TEST addr ok=true                                  
@@ -729,13 +729,85 @@ TEST http_hardening ok=true
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+                                                   TEST                                               TEST                                               TEST core_router_ha                                TEST core_router_ha                                TEST core_router_ha ok=true                        
+3.065 [20/host] CHANNEL_AUDIT conflicts=0          
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
+path=t_hosts_custom.txt                            
+TEST services_hosts ok=true                        
+TEST addr ok=true                                  
+TEST compat ok=true                                
+TEST http_common ok=true                           
+TEST http_server ok=true                           
+TEST http_client ok=true                           
+TEST http_secure ok=true                           
+TEST http_integration ok=true                      
+TEST http_hardening ok=true                        
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+TEST router ok=true                                
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+                                                   TEST                                               TEST                                               TEST ha_e2e                                        TEST ha_e2e                                        TEST ha_e2e ok=true                                
+3.068 [20/host] HOSTS_LOADED n=1 bad=0             
+path=t_hosts_custom.txt                            
+TEST services_hosts ok=true                        
+TEST addr ok=true                                  
+TEST compat ok=true                                
+TEST http_common ok=true                           
+TEST http_server ok=true                           
+TEST http_client ok=true                           
+TEST http_secure ok=true                           
+TEST http_integration ok=true                      
+TEST http_hardening ok=true                        
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+TEST router ok=true                                
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+                                                   OFFLINE_RESULT                                     OFFLINE_RESULT                                     OFFLINE_RESULT pass=2413                           OFFLINE_RESULT pass=2413                           OFFLINE_RESULT pass=2413 fail=0                    OFFLINE_RESULT pass=2413 fail=0                    OFFLINE_RESULT pass=2413 fail=0 groups=28          
+path=t_hosts_custom.txt                            
+TEST services_hosts ok=true                        
+TEST addr ok=true                                  
+TEST compat ok=true                                
+TEST http_common ok=true                           
+TEST http_server ok=true                           
+TEST http_client ok=true                           
+TEST http_secure ok=true                           
+TEST http_integration ok=true                      
+TEST http_hardening ok=true                        
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+TEST router ok=true                                
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+                                                   OFFLINE_PASS                                       OFFLINE_PASS                                       OFFLINE_PASS 2413                                  
+TEST services_hosts ok=true                        
+TEST addr ok=true                                  
+TEST compat ok=true                                
+TEST http_common ok=true                           
+TEST http_server ok=true                           
+TEST http_client ok=true                           
+TEST http_secure ok=true                           
+TEST http_integration ok=true                      
+TEST http_hardening ok=true                        
+TEST hosts ok=true                                 
+TEST wan_acl ok=true                               
+TEST router ok=true                                
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
                                                    OFFLINE_FAIL                                       OFFLINE_FAIL                                       OFFLINE_FAIL 0                                     
-3.173 [20/host] CHANNEL_AUDIT conflicts=0          
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
-path=t_hosts_custom.txt                            
-TEST services_hosts ok=true                        
 TEST addr ok=true                                  
 TEST compat ok=true                                
 TEST http_common ok=true                           
@@ -747,14 +819,14 @@ TEST http_hardening ok=true
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-                                                   OFFLINE_GROUPS                                     OFFLINE_GROUPS                                     OFFLINE_GROUPS 24                                  
-3.175 [20/host] HOSTS_LOADED n=1 bad=0             
-path=t_hosts_custom.txt                            
-TEST services_hosts ok=true                        
-TEST addr ok=true                                  
+                                                   OFFLINE_GROUPS                                     OFFLINE_GROUPS                                     OFFLINE_GROUPS 28                                  
 TEST compat ok=true                                
 TEST http_common ok=true                           
 TEST http_server ok=true                           
@@ -765,15 +837,15 @@ TEST http_hardening ok=true
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua rule=global?           LINT_WARN file=rpv/conn.lua rule=global?           
-path=t_hosts_custom.txt                            
-TEST services_hosts ok=true                        
-TEST addr ok=true                                  
-TEST compat ok=true                                
 TEST http_common ok=true                           
 TEST http_server ok=true                           
 TEST http_client ok=true                           
@@ -783,16 +855,16 @@ TEST http_hardening ok=true
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
                                                    detail=line                                        detail=line                                        detail=line 39:                                    detail=line 39:                                    detail=line 39: k_ctrl                             detail=line 39: k_ctrl                             detail=line 39: k_ctrl assigned                    detail=line 39: k_ctrl assigned                    detail=line 39: k_ctrl assigned without            detail=line 39: k_ctrl assigned without            detail=line 39: k_ctrl assigned without `local`    
-TEST services_hosts ok=true                        
-TEST addr ok=true                                  
-TEST compat ok=true                                
-TEST http_common ok=true                           
 TEST http_server ok=true                           
 TEST http_client ok=true                           
 TEST http_secure ok=true                           
@@ -801,17 +873,17 @@ TEST http_hardening ok=true
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua                        LINT_WARN file=rpv/conn.lua rule=global?           LINT_WARN file=rpv/conn.lua rule=global?           
-TEST addr ok=true                                  
-TEST compat ok=true                                
-TEST http_common ok=true                           
-TEST http_server ok=true                           
 TEST http_client ok=true                           
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
@@ -819,64 +891,68 @@ TEST http_hardening ok=true
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
                                                    detail=line                                        detail=line                                        detail=line 1250:                                  detail=line 1250:                                  detail=line 1250: opts                             detail=line 1250: opts                             detail=line 1250: opts assigned                    detail=line 1250: opts assigned                    detail=line 1250: opts assigned without            detail=line 1250: opts assigned without            detail=line 1250: opts assigned without `local`    
-TEST compat ok=true                                
-TEST http_common ok=true                           
-TEST http_server ok=true                           
-TEST http_client ok=true                           
 TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 1250: opts assigned without `local`    
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
-TEST http_common ok=true                           
-TEST http_server ok=true                           
-TEST http_client ok=true                           
-TEST http_secure ok=true                           
 TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 1250: opts assigned without `local`    
 LINT_WARN file=rpv/crypto.lua rule=global?         
                                                    detail=line                                        detail=line                                        detail=line 255:                                   detail=line 255:                                   detail=line 255: salt                              detail=line 255: salt                              detail=line 255: salt assigned                     detail=line 255: salt assigned                     detail=line 255: salt assigned without             detail=line 255: salt assigned without             detail=line 255: salt assigned without `local`     
-TEST http_server ok=true                           
-TEST http_client ok=true                           
-TEST http_secure ok=true                           
-TEST http_integration ok=true                      
 TEST http_hardening ok=true                        
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -884,17 +960,17 @@ detail=line 1250: opts assigned without `local`
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 255: salt assigned without `local`     
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
-TEST http_client ok=true                           
-TEST http_secure ok=true                           
-TEST http_integration ok=true                      
-TEST http_hardening ok=true                        
 TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -903,16 +979,16 @@ LINT_WARN file=rpv/crypto.lua rule=global?
 detail=line 255: salt assigned without `local`     
 LINT_WARN file=rpv/crypto.lua rule=global?         
                                                    detail=line                                        detail=line                                        detail=line 257:                                   detail=line 257:                                   detail=line 257: info                              detail=line 257: info                              detail=line 257: info assigned                     detail=line 257: info assigned                     detail=line 257: info assigned without             detail=line 257: info assigned without             detail=line 257: info assigned without `local`     
-TEST http_secure ok=true                           
-TEST http_integration ok=true                      
-TEST http_hardening ok=true                        
-TEST hosts ok=true                                 
 TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -922,15 +998,15 @@ detail=line 255: salt assigned without `local`
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 257: info assigned without `local`     
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
-TEST http_integration ok=true                      
-TEST http_hardening ok=true                        
-TEST hosts ok=true                                 
-TEST wan_acl ok=true                               
 TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -941,14 +1017,14 @@ LINT_WARN file=rpv/crypto.lua rule=global?
 detail=line 257: info assigned without `local`     
 LINT_WARN file=rpv/crypto.lua rule=global?         
                                                    detail=line                                        detail=line                                        detail=line 286:                                   detail=line 286:                                   detail=line 286: iters                             detail=line 286: iters                             detail=line 286: iters assigned                    detail=line 286: iters assigned                    detail=line 286: iters assigned without            detail=line 286: iters assigned without            detail=line 286: iters assigned without `local`    
-TEST http_hardening ok=true                        
-TEST hosts ok=true                                 
-TEST wan_acl ok=true                               
-TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST rhtp_server ok=true                           
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -960,13 +1036,13 @@ detail=line 257: info assigned without `local`
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 286: iters assigned without `local`    
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua                      LINT_WARN file=rpv/crypto.lua rule=global?         LINT_WARN file=rpv/crypto.lua rule=global?         
-TEST hosts ok=true                                 
-TEST wan_acl ok=true                               
-TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST backup_router ok=true                         
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -979,12 +1055,12 @@ LINT_WARN file=rpv/crypto.lua rule=global?
 detail=line 286: iters assigned without `local`    
 LINT_WARN file=rpv/crypto.lua rule=global?         
                                                    detail=line                                        detail=line                                        detail=line 288:                                   detail=line 288:                                   detail=line 288: dklen                             detail=line 288: dklen                             detail=line 288: dklen assigned                    detail=line 288: dklen assigned                    detail=line 288: dklen assigned without            detail=line 288: dklen assigned without            detail=line 288: dklen assigned without `local`    
-TEST wan_acl ok=true                               
-TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST core_router_ha ok=true                        
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -1000,11 +1076,11 @@ detail=line 288: dklen assigned without `local`
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
  
 
-TEST router ok=true                                
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+TEST ha_e2e ok=true                                
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -1019,10 +1095,10 @@ LINT_WARN file=rpv/crypto.lua rule=global?
 detail=line 288: dklen assigned without `local`    
 LINT_WARN file=rpv/dv.lua rule=global? detail=line 
                                                    49:                                                49:                                                49: dv_port                                        49: dv_port                                        49: dv_port assigned                               49: dv_port assigned                               49: dv_port assigned without                       49: dv_port assigned without                       49: dv_port assigned without `local`               
-OFFLINE_RESULT pass=1568 fail=0 groups=24          
-OFFLINE_PASS 1568                                  
+OFFLINE_RESULT pass=2413 fail=0 groups=28          
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -1040,9 +1116,9 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
  
 
-OFFLINE_PASS 1568                                  
+OFFLINE_PASS 2413                                  
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -1060,7 +1136,7 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 LINT_WARN file=rpv/dv.lua rule=global? detail=line 
                                                    51:                                                51:                                                51: dv_interval                                    51: dv_interval                                    51: dv_interval assigned                           51: dv_interval assigned                           51: dv_interval assigned without                   51: dv_interval assigned without                   51: dv_interval assigned without `local`           
 OFFLINE_FAIL 0                                     
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -1080,7 +1156,7 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
                                                    LINT_WARN                                          LINT_WARN                                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua                          LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global?             LINT_WARN file=rpv/dv.lua rule=global? detail=line LINT_WARN file=rpv/dv.lua rule=global? detail=line 
  
 
-OFFLINE_GROUPS 24                                  
+OFFLINE_GROUPS 28                                  
 LINT_WARN file=rpv/conn.lua rule=global?           
 detail=line 39: k_ctrl assigned without `local`    
 LINT_WARN file=rpv/conn.lua rule=global?           
@@ -1235,7 +1311,7 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-                                                   LINT_RESULT                                        LINT_RESULT                                        LINT_RESULT errors=0                               LINT_RESULT errors=0                               LINT_RESULT errors=0 warnings=51                   LINT_RESULT errors=0 warnings=51                   LINT_RESULT errors=0 warnings=51 files=55          
+                                                   LINT_RESULT                                        LINT_RESULT                                        LINT_RESULT errors=0                               LINT_RESULT errors=0                               LINT_RESULT errors=0 warnings=51                   LINT_RESULT errors=0 warnings=51                   LINT_RESULT errors=0 warnings=51 files=62          
 detail=line 257: info assigned without `local`     
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 286: iters assigned without `local`    
@@ -1253,7 +1329,7 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-LINT_RESULT errors=0 warnings=51 files=55          
+LINT_RESULT errors=0 warnings=51 files=62          
                                                    LINT_ERRORS                                        LINT_ERRORS                                        LINT_ERRORS 0                                      
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 286: iters assigned without `local`    
@@ -1271,7 +1347,7 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-LINT_RESULT errors=0 warnings=51 files=55          
+LINT_RESULT errors=0 warnings=51 files=62          
 LINT_ERRORS 0                                      
                                                    LINT_WARNINGS                                      LINT_WARNINGS                                      LINT_WARNINGS 51                                   
 detail=line 286: iters assigned without `local`    
@@ -1289,10 +1365,10 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-LINT_RESULT errors=0 warnings=51 files=55          
+LINT_RESULT errors=0 warnings=51 files=62          
 LINT_ERRORS 0                                      
 LINT_WARNINGS 51                                   
-                                                   LINT_FILES                                         LINT_FILES                                         LINT_FILES 55                                      
+                                                   LINT_FILES                                         LINT_FILES                                         LINT_FILES 62                                      
 LINT_WARN file=rpv/crypto.lua rule=global?         
 detail=line 288: dklen assigned without `local`    
 LINT_WARN file=rpv/dv.lua rule=global? detail=line 
@@ -1307,10 +1383,10 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-LINT_RESULT errors=0 warnings=51 files=55          
+LINT_RESULT errors=0 warnings=51 files=62          
 LINT_ERRORS 0                                      
 LINT_WARNINGS 51                                   
-LINT_FILES 55                                      
+LINT_FILES 62                                      
                                                    TEST_DONE                                          
 detail=line 288: dklen assigned without `local`    
 LINT_WARN file=rpv/dv.lua rule=global? detail=line 
@@ -1325,9 +1401,9 @@ LINT_WARN file=rpv/dv.lua rule=global? detail=line
 120: opts assigned without `local`                 
 LINT_WARN file=rpv/mcast.lua rule=global?          
 detail=line 26: mcast assigned without `local`     
-LINT_RESULT errors=0 warnings=51 files=55          
+LINT_RESULT errors=0 warnings=51 files=62          
 LINT_ERRORS 0                                      
 LINT_WARNINGS 51                                   
-LINT_FILES 55                                      
+LINT_FILES 62                                      
 TEST_DONE                                          
                                                    >                                                  >                                                  >                                                  

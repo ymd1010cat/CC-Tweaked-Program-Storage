@@ -36,7 +36,8 @@ end
 
 -- app-layer modules are plain tables, so each one is loaded on its own
 for _, mod in ipairs({ "http_common", "http_server", "http_client", "http_secure",
-                       "hosts", "wan_acl", "router" }) do
+                       "hosts", "wan_acl", "router", "rhtp_server", "backup_router",
+                       "core_router" }) do
     if fs.exists("apps/" .. mod .. ".lua") then
         local ok, ret = pcall(load_module, "apps/" .. mod .. ".lua", M)
         if ok and type(ret) == "table" then
@@ -95,6 +96,8 @@ local files = {
     "tests/t_http_common.lua", "tests/t_http_server.lua", "tests/t_http_client.lua",
     "tests/t_http_secure.lua", "tests/t_http_integration.lua", "tests/t_http_hardening.lua",
     "tests/t_hosts.lua", "tests/t_wan_acl.lua", "tests/t_router.lua",
+    "tests/t_rhtp_server.lua", "tests/t_backup_router.lua", "tests/t_core_router_ha.lua",
+    "tests/t_ha_e2e.lua",
 }
 local groups = 0
 for _, path in ipairs(files) do

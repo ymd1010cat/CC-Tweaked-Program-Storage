@@ -2,7 +2,7 @@
 
 What this file is
   A single-file, pure Lua 5.1 startup template for an RPV1 node. It performs
-  four jobs, in this order:
+  five jobs, in this order:
 
   1. Startup lock. setup_router() spins on the redstone signal of the BOTTOM
      face. While the signal is off it yields with os.sleep(0.5); nothing below
@@ -21,6 +21,16 @@ What this file is
      10.200.0.0/24 and whose DESTINATION is in the internal zone
      192.168.1.0/24. The hook then chains to the original rpv NAT hook, so
      normal NAT translation keeps working.
+   5. HA configuration sync. After the lock the node binds UDP 6710 and answers
+      the RPV1-HA/1 SYNC requests a hot-standby switch sends: the reply is the
+      CFG datagram apps/backup_router.lua builds (master/to/nonce plus
+      pool_start/pool_end/lease_time/gateway/dns/prefix/dhcp_port/uptime), so a
+      backup can start the very same DHCP service after a takeover. Values come
+      from the live node.dhcp_server, then from the role.txt dhcp_pool keys, then
+      from M.DEFAULT_DHCP_CONFIG. The responder never sends a request itself,
+      stays silent while node.ha_taken_over or node.ha_dhcp_active is set, caps
+      one datagram at 512 bytes and drops a source that sends more than five
+      requests per second.
 
 Usage
   local core = dofile("apps/core_router.lua")
@@ -30,8 +40,19 @@ Usage
   -- setup_router also finds the rpv table in node.rpv, _G.rpv or
   -- package.loaded.rpv (for example after `local rpv = require("rpv")`).
 
-  The global setup_router(node[, rpv]) is installed as a convenience so a
+  The third argument is optional and only tunes the template, so the two
+  argument call keeps working:
+  core.setup_router(node, rpv, { ha_sync = false })   -- no HA responder
+  core.setup_router(node, rpv, { ha_port = 6711 })     -- another sync port
+  core.setup_router(node, rpv, { ha_primary_client = true }) -- log every reply
+
+  The global setup_router(node[, rpv, opts]) is installed as a convenience so a
   startup script can call it without keeping the returned table.
+
+HA log tags (all lines are ASCII)
+  CORE_ROUTER_HA_READY CORE_ROUTER_HA_OFF CORE_ROUTER_HA_UNAVAILABLE
+  CORE_ROUTER_HA_REPLY CORE_ROUTER_HA_SILENT CORE_ROUTER_HA_RATE
+  CORE_ROUTER_HA_BAD CORE_ROUTER_HA_SEND_FAIL
 
 /disk/static_ip.conf
   ASCII, one `MAC,IP` pair per line, blank lines and `#` comments ignored:
@@ -62,6 +83,25 @@ M.STATIC_IP_PATH = "/disk/static_ip.conf"
 M.RELOAD_INTERVAL = 5          -- seconds between mtime checks
 M.REDSTONE_SIDE = "bottom"
 M.REDSTONE_POLL = 0.5          -- os.sleep while the lock is closed
+
+-- HA configuration sync responder (RPV1-HA/1, wire-compatible with backup_router)
+M.HA_PROTO = "RPV1-HA/1"
+M.HA_PORT = 6710               -- UDP port of the HA protocol
+M.HA_MAX_BYTES = 512           -- one datagram; larger packets are never parsed
+M.HA_MAX_TOKENS = 32           -- fields per datagram
+M.HA_RATE_LIMIT = 5            -- requests accepted per source per window
+M.HA_RATE_WINDOW = 1           -- seconds of that window
+
+-- what the switch reports when it has neither a DHCP server nor a pool spec
+M.DEFAULT_DHCP_CONFIG = {
+    pool_start = "10.200.0.50",
+    pool_end = "10.200.0.150",
+    lease_time = 600,
+    gateway = "10.200.0.1",
+    dns = "10.200.0.1",
+    prefix = 24,
+    dhcp_port = 6700,
+}
 
 -- zone rule: source in the public zone AND destination in the internal zone
 M.PUBLIC_NET = "10.200.0.0"
@@ -196,11 +236,11 @@ end
 function M.in_subnet(ip, net, prefix)
     local i = to_ip_int(ip)
     local n = to_ip_int(net)
-    prefix = tonumber(prefix)
-    if not i or not n or not prefix then return false end
-    if prefix <= 0 then return true end
-    if prefix >= 32 then return i == n end
-    local size = 2 ^ (32 - prefix)
+    local bits = tonumber(prefix)
+    if not i or not n or not bits then return false end
+    if bits <= 0 then return true end
+    if bits >= 32 then return i == n end
+    local size = 2 ^ (32 - bits)
     return (i - (i % size)) == n
 end
 
@@ -286,8 +326,8 @@ end
 
 -- read /disk/static_ip.conf and commit a fully valid map in one step. On any
 -- error the previous M.static_ips / M.by_ip stay untouched.
-function M.load_static_ips(path)
-    path = path or M.STATIC_IP_PATH
+function M.load_static_ips(source)
+    local path = source or M.STATIC_IP_PATH
     if type(fs) ~= "table" then
         M.stats.failures = M.stats.failures + 1
         M.last_error = "fs API is unavailable"
@@ -446,8 +486,8 @@ end
 
 -- background coroutine task: poll mtime every M.RELOAD_INTERVAL seconds and
 -- apply a changed file. Parse failures are logged and keep the old map.
-function M.start_watcher(node, path)
-    path = path or M.path or M.STATIC_IP_PATH
+function M.start_watcher(node, watch_path)
+    local path = watch_path or M.path or M.STATIC_IP_PATH
     if type(node) ~= "table" or type(node.add_task) ~= "function" then
         return nil, "node.add_task is missing"
     end
@@ -500,8 +540,8 @@ end
 
 -- block until the bottom face is powered. This is intentionally a hard lock:
 -- there is no timeout and no override.
-function M.wait_for_redstone(node, side)
-    side = side or M.REDSTONE_SIDE
+function M.wait_for_redstone(node, lock_side)
+    local side = lock_side or M.REDSTONE_SIDE
     local start = os.clock()
     local announced = false
 
@@ -622,17 +662,307 @@ local function find_rpv(node, explicit)
     return nil
 end
 
+-- ===== HA configuration sync responder ======================================
+-- Wire-compatible subset of apps/backup_router.lua. A hot-standby switch sends
+--   RPV1-HA/1 SYNC id=<id> nonce=<n>
+-- to UDP 6710 and this node answers
+--   RPV1-HA/1 CFG master=<id> to=<id> nonce=<n> pool_start=... ... uptime=<n>
+-- with exactly the field set and order backup_router builds, so its
+-- parse_message/parse_config/on_sync_reply accept the reply unchanged. The
+-- primary only answers: it never sends a SYNC request of its own.
+--
+-- The two files must not drift apart, so the parser below keeps the backup
+-- parser's rules: protocol token, SYNC or CFG kind, `key=value` fields,
+-- no duplicate key, no more than M.HA_MAX_TOKENS fields, no packet above
+-- M.HA_MAX_BYTES bytes.
+
+function M.ha_copy_config(cfg)
+    return {
+        pool_start = cfg.pool_start, pool_end = cfg.pool_end,
+        lease_time = cfg.lease_time, gateway = cfg.gateway, dns = cfg.dns,
+        prefix = cfg.prefix, dhcp_port = cfg.dhcp_port,
+    }
+end
+
+-- Values reported to a backup, in the same priority order backup_router uses:
+--   1. the live DHCP server (the truth: it is what clients are served now)
+--   2. the role.txt pool keys (a configured but not yet started server; using
+--      the live pool keeps both switches on one address range)
+--   3. M.DEFAULT_DHCP_CONFIG verbatim. Like the backup, the defaults are used
+--      as written; unlike it, the gateway is not replaced by the first
+--      interface address, because on the core switch that interface may be the
+--      LAN side, and a backup that takes over must inherit the public gateway.
+function M.ha_config_from_node(node)
+    local d = M.DEFAULT_DHCP_CONFIG
+    if type(node) ~= "table" then return M.ha_copy_config(d) end
+
+    local srv = node.dhcp_server
+    if type(srv) == "table" and type(srv.lo) == "number" then
+        return {
+            pool_start = M.int_to_ip(srv.lo),
+            pool_end = M.int_to_ip(srv.hi),
+            lease_time = tonumber(srv.lease) or d.lease_time,
+            gateway = M.int_to_ip(srv.gw),
+            dns = M.int_to_ip(srv.dns),
+            prefix = tonumber(srv.prefix) or d.prefix,
+            dhcp_port = tonumber(srv.port) or d.dhcp_port,
+        }
+    end
+
+    local cfg = type(node.cfg) == "table" and node.cfg or {}
+    local pool = tostring(cfg.dhcp_pool or "")
+    local lo, hi = pool:match("^%s*([%d%.]+)%s*%-%s*([%d%.]+)%s*$")
+    if lo and M.parse_ipv4(lo) and M.parse_ipv4(hi) then
+        local gw = cfg.dhcp_gw or d.gateway
+        return {
+            pool_start = lo,
+            pool_end = hi,
+            lease_time = tonumber(cfg.dhcp_lease) or d.lease_time,
+            gateway = gw,
+            dns = cfg.dhcp_dns or gw,
+            prefix = tonumber(cfg.dhcp_prefix) or d.prefix,
+            dhcp_port = tonumber(cfg.dhcp_port) or d.dhcp_port,
+        }
+    end
+
+    return M.ha_copy_config(d)
+end
+
+function M.ha_config_text(cfg)
+    return string.format("pool=%s-%s lease=%ds gw=%s dns=%s prefix=%d port=%d",
+        tostring(cfg.pool_start), tostring(cfg.pool_end), floor(cfg.lease_time or 0),
+        tostring(cfg.gateway), tostring(cfg.dns), floor(cfg.prefix or 0),
+        floor(cfg.dhcp_port or 0))
+end
+
+-- the reply text, byte for byte what backup_router.build_reply() produces
+function M.ha_build_reply(cfg, to_id, nonce, master_id)
+    return table.concat({
+        M.HA_PROTO,
+        "CFG",
+        "master=" .. tostring(floor(master_id or 0)),
+        "to=" .. tostring(floor(to_id or 0)),
+        "nonce=" .. tostring(floor(nonce or 0)),
+        "pool_start=" .. tostring(cfg.pool_start),
+        "pool_end=" .. tostring(cfg.pool_end),
+        "lease_time=" .. tostring(floor(cfg.lease_time or 600)),
+        "gateway=" .. tostring(cfg.gateway),
+        "dns=" .. tostring(cfg.dns),
+        "prefix=" .. tostring(floor(cfg.prefix or 24)),
+        "dhcp_port=" .. tostring(floor(cfg.dhcp_port or 6700)),
+        "uptime=" .. tostring(floor(os.clock())),
+    }, " ")
+end
+
+-- same acceptance rules as backup_router.parse_message()
+function M.ha_parse(text)
+    if type(text) ~= "string" or text == "" then return nil, "empty datagram" end
+    if #text > M.HA_MAX_BYTES then return nil, "datagram too large" end
+
+    local tokens = {}
+    for token in text:gmatch("%S+") do
+        tokens[#tokens + 1] = token
+        if #tokens > M.HA_MAX_TOKENS then return nil, "too many fields" end
+    end
+    if tokens[1] ~= M.HA_PROTO then return nil, "protocol mismatch" end
+    if tokens[2] ~= "SYNC" and tokens[2] ~= "CFG" then
+        return nil, "unknown message kind " .. tostring(tokens[2])
+    end
+
+    local msg = { kind = tokens[2], fields = {} }
+    for i = 3, #tokens do
+        local key, value = tokens[i]:match("^([%w_]+)=(.+)$")
+        if not key then return nil, "malformed field " .. tostring(tokens[i]) end
+        if msg.fields[key] then return nil, "duplicate field " .. key end
+        msg.fields[key] = value
+    end
+    return msg
+end
+
+-- is this one of our own addresses? rpv delivers a datagram addressed to an
+-- address the node owns to the node itself (rpv/node.lua send_ip), so a reply to
+-- a peer that shares the VIP would never leave the box.
+function M.ha_is_local_ip(node, ip)
+    if type(node) ~= "table" or type(ip) ~= "number" then return false end
+    if type(node.ifaces) == "table" then
+        for _, iface in ipairs(node.ifaces) do
+            if type(iface) == "table" and iface.ip == ip then return true end
+        end
+    end
+    if type(node.lo) == "table" and node.lo.ip == ip then return true end
+    return false
+end
+
+-- answer on the limited broadcast when the requester shares our address,
+-- exactly the shared-VIP case backup_router documents
+function M.ha_reply_dst(rt, src)
+    if type(src) ~= "number" then return src end
+    if not M.ha_is_local_ip(rt.node, src) then return src end
+    local bcast = type(rt.rpv) == "table" and rt.rpv.IP_BCAST or nil
+    if type(bcast) == "number" then return bcast end
+    return src
+end
+
+-- why the responder must stay mute right now, or nil when it may answer.
+-- Both flags exist in the fleet: backup_router raises ha_dhcp_active while its
+-- own DHCP server runs, a takeover wrapper may raise ha_taken_over.
+function M.ha_answer_blocked(node)
+    if type(node) ~= "table" then return "node_is_not_a_table" end
+    if node.ha_taken_over == true then return "ha_taken_over" end
+    if node.ha_dhcp_active == true then return "ha_dhcp_active" end
+    return nil
+end
+
+-- One datagram. Returns the decision as a string ("replied", "silent",
+-- "rate", "bad", "ignored", "send_fail") so callers and tests do not have to
+-- infer it from the log.
+function M.ha_handle(rt, data, src, sport)
+    if type(rt) ~= "table" or type(rt.node) ~= "table" then return "bad" end
+    local node = rt.node
+    local stats = rt.stats
+    stats.requests = stats.requests + 1
+
+    local reason = M.ha_answer_blocked(node)
+    if reason then
+        stats.silent = stats.silent + 1
+        log(node, "CORE_ROUTER_HA_SILENT src=%s reason=%s (responder is muted)",
+            ip_text(src), reason)
+        return "silent"
+    end
+
+    if type(data) ~= "string" or data == "" then
+        stats.bad = stats.bad + 1
+        log(node, "CORE_ROUTER_HA_BAD src=%s reason=empty_datagram", ip_text(src))
+        return "bad"
+    end
+    if #data > M.HA_MAX_BYTES then
+        stats.bad = stats.bad + 1
+        log(node, "CORE_ROUTER_HA_BAD src=%s reason=datagram_too_large bytes=%d max=%d",
+            ip_text(src), #data, M.HA_MAX_BYTES)
+        return "bad"
+    end
+
+    local now = rt.clock and rt.clock() or os.clock()
+    local key = tostring(src)
+    local bucket = rt.rates[key]
+    if type(bucket) ~= "table" or (now - bucket.started) >= M.HA_RATE_WINDOW then
+        bucket = { started = now, count = 0 }
+        rt.rates[key] = bucket
+    end
+    bucket.count = bucket.count + 1
+    if bucket.count > M.HA_RATE_LIMIT then
+        stats.rate_limited = stats.rate_limited + 1
+        log(node, "CORE_ROUTER_HA_RATE src=%s count=%d window=%ds limit=%d (dropped)",
+            ip_text(src), bucket.count, M.HA_RATE_WINDOW, M.HA_RATE_LIMIT)
+        return "rate"
+    end
+
+    local msg, err = M.ha_parse(data)
+    if not msg then
+        stats.bad = stats.bad + 1
+        log(node, "CORE_ROUTER_HA_BAD src=%s reason=%s", ip_text(src), tostring(err))
+        return "bad"
+    end
+    if msg.kind ~= "SYNC" then return "ignored" end
+
+    local want = tonumber(msg.fields.id)
+    if not want then
+        stats.bad = stats.bad + 1
+        log(node, "CORE_ROUTER_HA_BAD src=%s reason=id_is_missing", ip_text(src))
+        return "bad"
+    end
+    want = floor(want)
+    if want == node.id then return "ignored" end
+
+    -- the nonce must be echoed, so a request without one cannot be answered
+    local nonce = tonumber(msg.fields.nonce)
+    if not nonce then
+        stats.bad = stats.bad + 1
+        log(node, "CORE_ROUTER_HA_BAD src=%s reason=nonce_is_missing", ip_text(src))
+        return "bad"
+    end
+
+    local cfg = M.ha_config_from_node(node)
+    local reply = M.ha_build_reply(cfg, want, floor(nonce), node.id)
+    local port = rt.port
+    local dst = M.ha_reply_dst(rt, src)
+    local ok, send_err = pcall(rt.rpv.udp_send, node, dst, port, sport or port, reply)
+    if not ok then
+        stats.send_fail = stats.send_fail + 1
+        log(node, "CORE_ROUTER_HA_SEND_FAIL to=%d err=%s", want, tostring(send_err))
+        return "send_fail"
+    end
+
+    stats.replies = stats.replies + 1
+    if rt.primary_client or stats.replies == 1 or stats.replies % 12 == 0 then
+        log(node, "CORE_ROUTER_HA_REPLY to=%d nonce=%d %s",
+            want, floor(nonce), M.ha_config_text(cfg))
+    end
+    return "replied"
+end
+
+-- bind the responder. Idempotent for one node; the socket is kept on the
+-- runtime so a takeover wrapper can close it. rt.clock may be replaced by tests.
+function M.start_ha(node, rpv, opts)
+    if type(node) ~= "table" then return nil, "node is required" end
+    if type(node.core_router_ha) == "table" and node.core_router_ha.started then
+        return node.core_router_ha
+    end
+
+    local base = type(opts) == "table" and opts or {}
+    local port = tonumber(base.ha_port) or M.HA_PORT
+    if not port or port < 1 or port > 65535 then
+        return nil, "bad ha_port " .. tostring(base.ha_port)
+    end
+    port = floor(port)
+
+    if type(node.bind) ~= "function" then return nil, "node:bind is missing" end
+    local target = rpv
+    if type(target) ~= "table" or type(target.udp_send) ~= "function" then
+        target = find_rpv(node, rpv)
+    end
+    if type(target) ~= "table" or type(target.udp_send) ~= "function" then
+        return nil, "rpv.udp_send is required to answer"
+    end
+
+    local rt = {
+        node = node, rpv = target, port = port,
+        primary_client = (base.ha_primary_client == true),
+        started = false, socket = nil, clock = nil, rates = {},
+        stats = { requests = 0, replies = 0, bad = 0, rate_limited = 0,
+                  silent = 0, send_fail = 0 },
+    }
+    node.core_router_ha = rt
+
+    local ok, socket = pcall(node.bind, node, port, function(data, src, sport)
+        M.ha_handle(rt, data, src, sport)
+    end)
+    if not ok or type(socket) ~= "table" then
+        node.core_router_ha = nil
+        return nil, "cannot bind HA port " .. tostring(port) .. ": " .. tostring(socket)
+    end
+
+    rt.socket = socket
+    rt.started = true
+    log(node, "CORE_ROUTER_HA_READY port=%d proto=%s primary_client=%s",
+        port, M.HA_PROTO, tostring(rt.primary_client))
+    return rt
+end
+
 -- ===== public entry point ===================================================
 
 -- Call this as the first thing in the boot script. It blocks on the redstone
--- lock, then loads the static map, starts the 5 s watcher and installs the
--- isolation hook. rpv is optional; it is auto-detected when possible.
-function M.setup_router(node, rpv)
+-- lock, then loads the static map, starts the 5 s watcher, installs the
+-- isolation hook and (unless opts.ha_sync == false) binds the HA responder.
+-- rpv is optional; it is auto-detected when possible. opts is optional too.
+function M.setup_router(node, rpv, opts)
     if type(node) ~= "table" then return nil, "node is required" end
     if node.core_router_started then
         log(node, "CORE_ROUTER_ALREADY_SETUP")
         return node.core_router_runtime
     end
+
+    local base = type(opts) == "table" and opts or {}
 
     log(node, "CORE_ROUTER_BOOT static_ip=%s redstone=%s",
         M.STATIC_IP_PATH, M.REDSTONE_SIDE)
@@ -695,12 +1025,29 @@ function M.setup_router(node, rpv)
         log(node, "CORE_ROUTER_NAT_HOOK mode=%s", mode)
     end
 
+    -- 5. HA configuration sync responder, always after the redstone lock, so a
+    -- locked switch answers nothing at all
+    local ha, ha_port = nil, nil
+    if base.ha_sync == false then
+        log(node, "CORE_ROUTER_HA_OFF")
+    else
+        local ha_err
+        ha, ha_err = M.start_ha(node, target, base)
+        if ha then
+            ha_port = ha.port
+        else
+            log(node, "CORE_ROUTER_HA_UNAVAILABLE err=%s", tostring(ha_err))
+        end
+    end
+
     local runtime = {
         ok = mode ~= "none",
         path = M.STATIC_IP_PATH,
         redstone = M.REDSTONE_SIDE,
         mappings = applied,
         hook = mode,
+        ha = ha,
+        ha_port = ha_port,
     }
 
     node.core_router = M
@@ -715,10 +1062,10 @@ end
 -- optional table-module form for the node2/startup.lua app loader, so
 -- role.txt can use `app=core_router` as well as `dofile("apps/core_router.lua")`
 function M.new(opts)
-    opts = opts or {}
-    local app = { node = opts.node, rpv = opts.rpv }
+    local base = type(opts) == "table" and opts or {}
+    local app = { node = base.node, rpv = base.rpv, opts = base }
     function app:start()
-        local runtime, err = M.setup_router(self.node, self.rpv)
+        local runtime, err = M.setup_router(self.node, self.rpv, self.opts)
         if not runtime then return false, err end
         return true
     end

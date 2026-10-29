@@ -9,7 +9,9 @@ datagram in, one response datagram out, no keep-alive and no pipelining.
 Routes (exact paths; a "?query" or "#fragment" suffix is stripped first):
 
     GET /                "Welcome to InterTeamNet"
-    GET /api/dns_mirror  dns_db.txt with an X-DNS-Hash header (SHA-256 of the body)
+    GET /api/dns_mirror  dns_db.txt with an X-DNS-Hash header (SHA-256 of the body,
+                         encoded as 64 lowercase hex characters so the header can
+                         never contain a raw CR or LF byte)
     GET /api/directory   ip_directory.txt, or the built-in fallback directory
     anything else        404 Page Not Found
 
@@ -42,7 +44,10 @@ local function usable(t)
     return type(t) == "table" and type(t.udp_send) == "function"
 end
 
-local RP = nil
+-- Resolution order: the table passed to start_rhtp -> the load-time vararg ->
+-- _G.rpv -> require("rpv"). It runs once per server instance and is stored in
+-- that instance: the transport belongs to the server, not to the file, so two
+-- servers in one process may speak through two different rpv tables.
 local function resolve_rpv(explicit)
     if usable(explicit) then return explicit end
     if usable(ARGV) then return ARGV end
@@ -54,27 +59,64 @@ local function resolve_rpv(explicit)
     return nil
 end
 
--- rpv.sha256 comes from rpv/crypto.lua; when the library table is not reachable
--- the module is loaded directly (module files are `local M = ...`, so an empty
--- table is enough to own one instance)
-local sha = nil
-local function sha256(msg)
-    if not sha then
-        if type(RP) == "table" and type(RP.sha256) == "function" then sha = RP.sha256 end
-        for _, path in ipairs({ "rpv/crypto.lua", "crypto.lua" }) do
-            if not sha then
-                local loaded, chunk = pcall(loadfile, path)
-                if loaded and type(chunk) == "function" then
-                    local ok, mod = pcall(chunk, {})
-                    if ok and type(mod) == "table" and type(mod.sha256) == "function" then
-                        sha = mod.sha256
-                    end
+-- "%02x" on every byte (the digest is binary, the header is text)
+local function hex_encode(s)
+    local out = {}
+    for i = 1, #s do out[i] = string.format("%02x", string.byte(s, i)) end
+    return table.concat(out)
+end
+
+-- last resort when no rpv table is reachable: load the module directly (module
+-- files are `local M = ...`, so an empty table is enough to own one instance)
+local fallback_crypto = nil
+local function load_crypto()
+    if fallback_crypto then return fallback_crypto end
+    for _, path in ipairs({ "rpv/crypto.lua", "crypto.lua" }) do
+        if not fallback_crypto then
+            local loaded, chunk = pcall(loadfile, path)
+            if loaded and type(chunk) == "function" then
+                local ok, mod = pcall(chunk, {})
+                if ok and type(mod) == "table" and type(mod.sha256) == "function" then
+                    fallback_crypto = { sha256 = mod.sha256, hex = mod.hex }
                 end
             end
         end
     end
-    if not sha then error("rhtp_server: rpv.sha256 not available", 0) end
-    return sha(msg)
+    return fallback_crypto
+end
+
+-- one hash function per server instance. rpv.hex is handy but optional: a plain
+-- transport stub that only has udp_send still gets a hex header through the
+-- inline encoder (a raw 32-byte digest can contain CR or LF and would cut the
+-- header block short in a strict client)
+local function make_hash(rp)
+    local hash_fn = nil
+    local hex_fn = nil
+    if type(rp) == "table" then
+        if type(rp.sha256) == "function" then hash_fn = rp.sha256 end
+        if type(rp.hex) == "function" then hex_fn = rp.hex end
+    end
+    return function(msg)
+        if not hash_fn then
+            local crypto = load_crypto()
+            if crypto then
+                hash_fn = crypto.sha256
+                if not hex_fn then hex_fn = crypto.hex end
+            end
+        end
+        if not hash_fn then error("rhtp_server: rpv.sha256 not available", 0) end
+        local digest = hash_fn(msg)
+        if hex_fn then return hex_fn(digest) end
+        return hex_encode(digest)
+    end
+end
+
+-- the direct M.handle_request() entry has no instance, so it resolves its own
+-- library lazily (still no file-level cache of the *transport*)
+local module_hash = nil
+local function default_hash()
+    if not module_hash then module_hash = make_hash(resolve_rpv(nil)) end
+    return module_hash
 end
 
 -- ===== request parsing and routing =========================================
@@ -97,7 +139,7 @@ local function parse_request(data)
     return method, (target:gsub("[?#].*$", ""))
 end
 
-local function route(data)
+local function route(data, hash)
     local method, path = parse_request(data)
     if method ~= "GET" or not path then return NOT_FOUND end
     if path == "/" then
@@ -106,7 +148,8 @@ local function route(data)
     if path == "/api/dns_mirror" then
         local body = read_file(M.DNS_DB)
         if not body then return DNS_NOT_FOUND end
-        return "RHTP/1.0 200 OK\r\nX-DNS-Hash: " .. sha256(body) .. "\r\n\r\n" .. body
+        local fn = hash or default_hash()
+        return "RHTP/1.0 200 OK\r\nX-DNS-Hash: " .. fn(body) .. "\r\n\r\n" .. body
     end
     if path == "/api/directory" then
         local body = read_file(M.DIRECTORY)
@@ -118,8 +161,8 @@ end
 
 -- one request datagram -> one response datagram; never throws, an error inside
 -- the routing becomes the 500 response (log is the optional node:log wrapper)
-function M.handle_request(data, log)
-    local ok, response = pcall(route, data)
+local function handle(data, log, hash)
+    local ok, response = pcall(route, data, hash)
     if not ok then
         if type(log) == "function" then log("RHTP_ERROR %s", tostring(response)) end
         return SERVER_ERROR
@@ -128,12 +171,19 @@ function M.handle_request(data, log)
     return response
 end
 
+function M.handle_request(data, log)
+    return handle(data, log, nil)
+end
+
 -- ===== socket server ======================================================
 -- start_rhtp(node, port[, rpv]) -> socket. Without the library table the reply
 -- falls back to the socket's own sendto(), which calls rpv.udp_send internally.
 function M.start_rhtp(node, port, rpv_lib)
     local bind_port = tonumber(port) or M.DEFAULT_PORT
-    RP = RP or resolve_rpv(rpv_lib)
+    -- per-instance state: two servers started from the same module table keep
+    -- their own transport (and the explicit argument always wins)
+    local RP = resolve_rpv(rpv_lib)
+    local hash = make_hash(RP)
 
     local function log(fmt, ...)
         if type(node.log) == "function" then node:log(fmt, ...) end
@@ -141,7 +191,7 @@ function M.start_rhtp(node, port, rpv_lib)
 
     local sock
     sock = node:bind(bind_port, function(data, src, sport)
-        local response = M.handle_request(data, log)
+        local response = handle(data, log, hash)
         local ok, err
         if RP then
             ok, err = pcall(RP.udp_send, node, src, bind_port, sport, response)

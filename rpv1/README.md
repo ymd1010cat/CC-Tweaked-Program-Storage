@@ -171,6 +171,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File poc\run-offline.ps1
 - 日志只记计数：`check()` 只累加 `allowed`/`denied`，可选 `opts.log` 只收到 `"WAN_ACL_DENY"` 事件词，拿不到包内容。
 - `acl:load(path)` 是**追加**语义：只把文件里的频道/频段并入当前策略，不撤销已有规则；重复 load 同一文件不改变 `check()` 结果，但会把频段重复追加进内部区间表（上限 `MAX_RANGES = 128`），所以启动时 load 一次即可。要整表刷新就重建实例（`wan_acl.new(...)`），要撤销某频道用 `acl:deny(ch)`（deny 优先于 allow/band）。
 
+## 高可用主备交换机（HA）
+
+`poc/apps/core_router.lua`（133 主交换机，内置 `RPV1-HA/1` 应答器，UDP 6710）与
+`poc/apps/backup_router.lua`（灰羊总署备机，共享 VIP `10.200.0.1/24` 热备，5 s 同步 / 3 次未响应且
+≥15 s 接管 / 主恢复即回切）组成一对主备交换机。两者都是**独立应用层模块**，不被 `rpv.lua` 加载，
+用 `dofile`/`loadfile` 或 `role.txt` 的 `app=` 装载；定向测试在 `poc/tests/t_backup_router.lua`、
+`poc/tests/t_core_router_ha.lua`（未并入 `run-offline.ps1`）。
+
+**交接与部署文档**：[docs/HANDOFF-backup-router.md](docs/HANDOFF-backup-router.md)
+（角色与地址规划、`RPV1-HA/1` 字段表、状态机与防脑裂、部署 SOP 与日志验收清单、故障演练脚本、
+已知限制与回滚）。
+
+一行入口：把 `poc/node2/startup.lua` 装成电脑的 `startup.lua`，`role.txt` 写
+`app=core_router`（133）或 `app=backup_router`（备机）；库包用 `pwsh -File poc\build-dist.ps1` 生成，
+`apps/*.lua` 需单独拷贝（构建产物不含 `apps/`）。
+
 ## API 速查
 
 ```lua
