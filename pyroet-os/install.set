@@ -1,0 +1,137 @@
+# pyroet-os/install.set
+#
+# One repo-root-relative path per line: a file, or a directory (walked
+# recursively). '#' starts a comment, blank lines are ignored. Trailing
+# slashes are tolerated.
+#
+# This file is the single source of truth for the shipped byte count:
+#     python pyroet-os/tools/sizecheck.py
+#
+# Rule: only paths that EXIST in the work tree are counted, and a listed path
+# that does not exist is an ERROR (exit 2). So keep planned files commented
+# out until they are actually created - the gate must never lie.
+#
+# ---------------------------------------------------------------------
+# UPDATE MODEL - see pyroet-os/DECISIONS.md section 13 (P6-design.md)
+# ---------------------------------------------------------------------
+# This gate measures ONE shipped system tree. On-device steady state is the
+# single /system tree plus the global commit marker /boot.ok and the trial
+# counter /boot.tries; a file-set update keeps /update.journal.<seq> and the
+# old bytes it replaces in /update.backup, capped at BACKUP_CAP. The
+# update-window rule (sizecheck.py --backup-cap, DECISIONS.md 8.4) is
+#     image + BACKUP_CAP (default 200,000) <= 900,000
+# so the current 401,640 B image plus a 200,000 B backup stays 298,360 B
+# under the window and 398,360 B under the 1,000,000 B device quota.
+# /update.journal.*, /update.backup, /boot.ok and /boot.tries are runtime
+# state on the target machine, not paths in this install set.
+#
+# Since P6-3 every path below is under pyroet-os/system/, except the one
+# computer-root file the ROM runs at boot: pyroet-os/startup.lua (the starter
+# that loads /system/startup.lua). The system apps live in system/system/.
+#
+# =====================================================================
+# PLANNED LAYOUT - uncomment one line per path as it is created
+# =====================================================================
+# -- boot chain -------------------------------------------------------
+# pyroet-os/startup.lua
+# pyroet-os/boot/bootloader.lua
+# pyroet-os/boot/image.lua
+# pyroet-os/boot/slots.lua   (pointer /boot.slot, /boot.ok marker, .tries)
+# pyroet-os/boot/update.lua
+# -- kernel + service manager -----------------------------------------
+# pyroet-os/kernel/kernel.lua
+# pyroet-os/kernel/services.lua
+# pyroet-os/kernel/caps.lua
+# pyroet-os/kernel/sched.lua
+# pyroet-os/kernel/log.lua
+# -- app runtime ------------------------------------------------------
+# pyroet-os/runtime/app.lua
+# pyroet-os/runtime/manifest.lua
+# pyroet-os/runtime/quota.lua
+# -- ui toolkit -------------------------------------------------------
+# pyroet-os/ui/screen.lua
+# pyroet-os/ui/draw.lua
+# pyroet-os/ui/widgets.lua
+# pyroet-os/ui/input.lua
+# -- system apps (same .app format as user apps) ----------------------
+# pyroet-os/system/launcher.app
+# pyroet-os/system/settings.app
+# pyroet-os/system/net.app
+# pyroet-os/system/files.app
+# -- rpv subset (P1: copy 9 modules, then edit loader MODULES) --------
+# pyroet-os/rpv/loader.lua
+# pyroet-os/rpv/node.lua
+# pyroet-os/rpv/conn.lua
+# pyroet-os/rpv/crypto.lua
+# pyroet-os/rpv/ip.lua
+# pyroet-os/rpv/arp.lua
+# pyroet-os/rpv/udp.lua
+# pyroet-os/rpv/route.lua
+# pyroet-os/rpv/util.lua
+# pyroet-os/rpv/link.lua
+# -- lib slim + config ------------------------------------------------
+# pyroet-os/lib/
+# pyroet-os/cfg/
+#
+# =====================================================================
+# ACTIVE ENTRIES
+# =====================================================================
+# P1: vendored rpv subset, 10 files = 9 modules + loader.lua (DECISIONS.md
+# section 3). DECISIONS.md is documentation, not image payload, so it is no
+# longer counted; add build outputs here one line at a time as P2 lands.
+pyroet-os/system/rpv/loader.lua
+pyroet-os/system/rpv/node.lua
+pyroet-os/system/rpv/conn.lua
+pyroet-os/system/rpv/crypto.lua
+pyroet-os/system/rpv/ip.lua
+pyroet-os/system/rpv/arp.lua
+pyroet-os/system/rpv/udp.lua
+pyroet-os/system/rpv/route.lua
+pyroet-os/system/rpv/util.lua
+pyroet-os/system/rpv/link.lua
+# P2: boot chain + service manager + app runtime (DECISIONS.md sections 1.1,
+# 2.3-2.8, 5). Tests under pyroet-os/tests/ are development material and are
+# deliberately NOT part of the image, so they are not listed here.
+# P6-3: the computer root keeps exactly one file, the starter that loads
+# /system/startup.lua. It ships with the image but is NOT part of the OTA file
+# set (OTA relpaths are relative to /system/), so no update can rewrite it.
+pyroet-os/startup.lua
+pyroet-os/system/startup.lua
+pyroet-os/system/boot.lua
+pyroet-os/system/kernel/init.lua
+pyroet-os/system/kernel/apps.lua
+# P3: network service layer + static hosts (DECISIONS.md section 9). Tests
+# under pyroet-os/tests are still development material and are not part of the
+# image. P5b had moved the Net app out to examples/net.app as an
+# installable example; G1 put it back under pyroet-os/system/net.app because
+# the widened hard gate (3/5 MiB, DECISIONS.md 7.1/8.4) no longer needs that
+# trim, so it is image payload again (listed in the G1 block below).
+pyroet-os/system/net/hosts.lua
+pyroet-os/system/net/service.lua
+# P4: launcher + settings + the first-start permission table (DECISIONS.md
+# 8.4/8.5). The desktop packages are listed file by file on purpose: a directory
+# entry would sweep in whatever development material ends up next to them.
+pyroet-os/system/kernel/permissions.lua
+pyroet-os/system/system/launcher.app/manifest.lua
+pyroet-os/system/system/launcher.app/main.lua
+pyroet-os/system/system/settings.app/manifest.lua
+pyroet-os/system/system/settings.app/main.lua
+# G1: the Net system app is image payload again (P5b had moved it out to
+# examples/net.app as an installable example). 15,930 B = main.lua
+# 15,493 + manifest.lua 437, which is where the extra bytes of TOTAL 359,305
+# come from versus the P5b reading of 343,375. Listed file by file for the same
+# reason as the desktop packages: a directory entry would sweep in whatever
+# development material ends up next to them.
+pyroet-os/system/system/net.app/manifest.lua
+pyroet-os/system/system/net.app/main.lua
+# P5a/P5b: application installer + system OTA client (DECISIONS.md 11). The pair
+# measures 26,165 B (installer 13,253 + ota 12,912). P5b paid for it by moving
+# system/net.app (15,930 B) out to examples/net.app; G1 reversed that
+# move (see the G1 block above) and instead restated the gate as three tiers
+# (hard 629,145 B = 3/5 MiB, target line 349,525 B = 1/3 MiB, update window
+# image + 200,000 <= 900,000 - DECISIONS.md 7.1/8.4), so the trim is no longer
+# needed and both sizes are under the hard gate.
+# The two lines belong together: one without the other ships an image that can
+# install apps but never update itself.
+pyroet-os/system/kernel/installer.lua
+pyroet-os/system/kernel/ota.lua
