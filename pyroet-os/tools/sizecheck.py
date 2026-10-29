@@ -23,7 +23,7 @@ still prints its WINDOW line):
 backup_cap defaults to 200,000 B (the copy an OTA keeps while swapping slots),
 so the widest image the gate can ever bless (629,145) plus that copy (200,000)
 sums to 829,145: 70,855 B of headroom under the 900,000 window and 170,855 B
-under the 1,000,000 B device quota (/boot.slot, logs, app data).
+under the 1,000,000 B device quota (/boot.ok, logs, app data).
 
 Component naming: by default the leading container segment ("pyroet-os", i.e.
 the directory that holds the install set) is stripped, then the first remaining

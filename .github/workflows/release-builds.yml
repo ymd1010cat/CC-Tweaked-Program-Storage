@@ -20,6 +20,7 @@ on:
           - cardkey
           - pylib
           - itn-pass
+          - pyroet-os
           - rpv1
           - pyromputer-os
           - dcnet
@@ -38,7 +39,7 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.project != 'rpv1')
       || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/'))
-      || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && contains(fromJSON('["sentinel","cardkey","pylib","itn-pass","pyromputer-os","dcnet","pyromputer-os-no-craftos"]'), github.ref_name))
+      || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && contains(fromJSON('["sentinel","cardkey","pylib","itn-pass","pyroet-os","pyromputer-os","dcnet","pyromputer-os-no-craftos"]'), github.ref_name))
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,7 +53,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist/release
           if [ "${{ github.event_name }}" = "push" ] && [[ "$GITHUB_REF" == refs/heads/* ]]; then
-            for project in sentinel cardkey pylib itn-pass; do
+            for project in sentinel cardkey pylib itn-pass pyroet-os; do
               python3 tools/build_release.py --project "$project" --out dist/release
             done
             python3 pyromputer-os/tools/release.py --out dist/release
@@ -66,7 +67,7 @@ jobs:
             project="${{ github.event.inputs.project || github.ref_name }}"
             out=dist/release
             case "$project" in
-              sentinel|cardkey|pylib|itn-pass)
+              sentinel|cardkey|pylib|itn-pass|pyroet-os)
                 python3 tools/build_release.py --project "$project" --out dist/release
                 ;;
               pyromputer-os)

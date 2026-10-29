@@ -92,8 +92,7 @@ local function machine(opts)
     local o = opts or {}
     return fake_api({
         files = o.files or {
-            ["/boot.slot"] = "a\n",
-            ["/slots/a/boot.ok"] = "PYROET-BOOT-OK-1 slot=a version=2.0.0 sha256="
+            ["/boot.ok"] = "PYROET-BOOT-OK-2 version=2.0.0 manifest_sha="
                 .. string.rep("ef", 32) .. " ts=1700000000000\n",
             ["/etc/network.conf"] = CONFIG,
             ["/etc/install.set"] = INSTALL_SET,
@@ -243,8 +242,13 @@ return function(H)
         H.eq("tall_rows", #tall, 40)
         for i = 1, #tall do H.eq("tall_width_" .. tostring(i), #tall[i], 26) end
         local tall_text = H.joined(tall)
-        H.contains("tall_system", tall_text, "os 0.1.0 slot a")
+        H.contains("tall_system", tall_text, "os 0.1.0")
         H.contains("tall_image", tall_text, "image 2.0.0")
+        H.contains("tall_sha", tall_text, "image 2.0.0 sha efefefef")
+        H.absent("tall_no_slot", tall_text, "slot")
+        H.eq("short_sha", M.short_sha(string.rep("ef", 32)), "efefefef")
+        H.eq("short_sha_none", M.short_sha(nil), nil)
+        H.eq("short_sha_bad", M.short_sha("not-hex"), nil)
         H.contains("tall_net", tall_text, "net ok")
         H.contains("tall_storage", tall_text, "install.set 2 entries")
         H.contains("tall_redacted", tall_text, "psk ***")
@@ -289,8 +293,9 @@ return function(H)
         local empty = M.build(fake_api({}))
         local empty_lines = M.render(empty, 26, 40)
         local empty_text = H.joined(empty_lines)
-        H.contains("empty_slot", empty_text, "os 0.1.0 slot ?")
+        H.contains("empty_system", empty_text, "os 0.1.0")
         H.contains("empty_image", empty_text, "image ?")
+        H.absent("empty_no_slot", empty_text, "slot")
         H.contains("empty_apps", empty_text, "apps n/a")
         H.contains("empty_conf", empty_text, "conf n/a")
         H.contains("empty_free", empty_text, "free n/a")

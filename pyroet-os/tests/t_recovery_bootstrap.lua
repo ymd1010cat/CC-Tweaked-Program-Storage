@@ -2,7 +2,7 @@
 META + PUSH DATA file sets, out-of-order and corrupt chunks, timeout, dead link,
 manifest/digest failures, and "a failed push keeps the old system".
 
-The target is always <root>/system (no slot, no /boot.slot).
+The target is always <root>/system (no slot, no slot pointer).
 No non-ASCII bytes in this file.
 ]]
 

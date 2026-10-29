@@ -24,7 +24,7 @@
 
 ```
 startup.lua                       ROM 只会自动跑这一个文件，内容必须很小
-  └─ bootloader                   镜像校验（SHA256）/ 按 /boot.slot 选槽 / 试启动与回退 / 首启向导
+  └─ bootloader                   镜像校验（SHA256）/ 单树 /system + journal 决策表 / 试启动与回退 / 首启向导
        └─ kernel + service manager  模块加载、服务注册与依赖、生命周期、权限仲裁
             └─ app runtime          每 app 一个 coroutine + 权限域 + 资源配额
                  ├─ system apps     Launcher / Settings / Net / Files
@@ -43,7 +43,7 @@ startup.lua                       ROM 只会自动跑这一个文件，内容必
 
 2.1 为什么只能是 OTA：约束 0.4.1 —— 不能挂载磁盘，就没有“插盘装系统”这条退路；机身盘只有 1,000,000 B，也放不下“安装器 + 安装包 + 系统”三份。唯一入口是**网络 + 手工粘贴的极小 bootstrap**。
 
-2.2 **机身预置/手工粘贴一个 ≤4 KB bootstrap**（预算 4,096 B，估算，P1 落地后由 `tools/sizecheck.py` 复核）。职责必须极小：纯 **rednet** 最小接收器，**不 require rpv**（rpv 子集本身就有 125 KB 量级，且一旦 rpv 坏了就没有修复通道）。只做五件事：`rednet.open`、向分发中心发 `HELLO`、收 `META`/`CHUNK`/`COMMIT`、按 offset 把 chunk 原样写入**非活动槽**、写完把 `/boot.slot` 原子指向新槽（**不写** `/boot.ok`）。**不解析镜像格式**（解析是 bootloader 的事），**不判断系统能否启动**（试启动与回退是 bootloader 的事），这样 bootstrap 才能在系统镜像损坏时仍然可用（它是唯一的救援通道）。
+2.2 **机身预置/手工粘贴一个 ≤4 KB bootstrap**（superseded by P6-3：`recovery/bootstrap.lua` 已改为 `PYROET-FLASH/2` 文件集推送，目标 `<root>/system`，无槽无指针，见 §12；下文为历史记录，不要再据此实现；预算 4,096 B，估算，P1 落地后由 `tools/sizecheck.py` 复核）。职责必须极小：纯 **rednet** 最小接收器，**不 require rpv**（rpv 子集本身就有 125 KB 量级，且一旦 rpv 坏了就没有修复通道）。只做五件事：`rednet.open`、向分发中心发 `HELLO`、收 `META`/`CHUNK`/`COMMIT`、按 offset 把 chunk 原样写入**非活动槽**、写完把 `/boot.slot` 原子指向新槽（**不写** `/boot.ok`）。**不解析镜像格式**（解析是 bootloader 的事），**不判断系统能否启动**（试启动与回退是 bootloader 的事），这样 bootstrap 才能在系统镜像损坏时仍然可用（它是唯一的救援通道）。
 
 > **superseded by P6-design（P6-2，2026-10-29）**：下面 2.3–2.8 描述的“双槽整镜像”
 > 已被 `pyroet-os/P6-design.md` 的“单树 `/system` + 三态 journal + 差异备份”取代，
@@ -245,7 +245,7 @@ python pyroet-os/tools/sizecheck.py                                      # 门�
 7.1 **尺寸三层门禁 + 更新窗口**（唯一口径 = `python pyroet-os/tools/sizecheck.py`）：`>629,145`（硬门禁 3/5 MiB）→ `SIZE_FAIL`（exit 1，发版阻断）；`349,525 < total ≤ 629,145`（超出目标线 1/3 MiB）→ `SIZE_WARN`（exit 0，只提示）；`≤349,525` → `SIZE_PASS`（exit 0）。**更新窗口独立判定**：`total + backup_cap ≤ 900,000` → `WINDOW_OK sum=.. limit=900000`；超出 → `WINDOW_FAIL total=.. cap=.. sum=.. limit=900000` 且 exit 1（`--backup-cap` 默认 200,000；`SIZE_FAIL` 时也照常打印 WINDOW 行）。`install.set` 缺路径 → ERROR（exit 2）。**超目标线不判死，但必须报差额**（工具输出 MARGIN 行）。为什么从 349,525 放宽到 629,145，见 §8.4。
 7.2 **26x20 布局自检**：所有系统界面必须在 26x20 内完整可用；硬规则——标题行 1 行、内容区 2–19 行、状态行 20 行、任何文本不超 26 列、**不允许横向滚动**；更小尺寸（如 26x20 以下的 monitor）降级为单行状态。每个系统 app 自带一个 `layout_selftest()`，CI 里跑纯函数校验（不依赖真实终端）。
 7.3 **低 TPS（掉刻）**：TPS < 20 时 app 切换不丢事件、网络操作有界超时（用 tick 计数或 `os.epoch` 截止时间，**不用** `os.sleep` 硬等），切换前后 cap 与配额不泄漏（app 退出必须回收 coroutine、socket、buffer）。
-7.4 **OTA**：断点续传（重连从第 0 块重算并覆盖写）、逐块与整镜像校验、试启动计数 `/slots/<x>/.tries`、`.tries > 2` 回退到带 `/boot.ok` 的槽并删除坏槽；校验失败/断电 → `/boot.slot` 不变、旧槽照常启动（回滚有效）；连续 3 次失败不锁死设备（bootstrap 仍可用）。健康判定见 §2.7（rpv 网络不是必要条件）。
+7.4 **OTA**（P6-2 口径，取代按槽整镜像；历史见 §2.3–2.8 与 §11.3–11.5 的 superseded 标注）：断点续传（重连从第 0 块重算并覆盖写）、逐块与整镜像校验、试启动计数 `/boot.tries`、`tries > 2` 回滚到 `/update.backup` 的旧字节并写 `rolledback` 墓碑；校验失败/断电 → `/system` 与 `/boot.ok` 都不动（回滚有效）；连续 3 次失败不锁死设备（bootstrap 仍可用）。健康判定见 §2.7（rpv 网络不是必要条件）。
 
 ## 8. 待拍板 / 已知分歧（需要用户确认）
 
@@ -293,9 +293,9 @@ python pyroet-os/tools/sizecheck.py                                      # 门�
 
 10.4 **没有键盘这条边界（沿用 §9.7）**：P2 运行时没有 input cap，所以"询问"是**注入的回调**（`permissions.new({ask=function(app,cap,info)})`），默认实现一律 `false`（fail closed）。启动链的默认策略（`startup.P.default_ask`）：`/system/` 下的**系统镜像包**按 manifest 原样授权（记 `PERMS_PREGRANT`），其它包一律拒绝，等输入服务落地再把回调换成真询问。launcher 的按键是纯函数 `M.handle_key(state, key)`，由 `opts.keys`（表或迭代器）驱动；真实键盘同样等 input 服务。`api.sys` 之外的输入通道一律不开。
 
-10.5 **launcher（桌面）**：`pyroet-os/system/launcher.app/`，`capabilities = {"fs.read","fs.write"}`（写**只**用于成功后追加一行 `/etc/launcher.recent`，被拒绝就忽略）。扫描 `/apps` 与 `/system` 下的 `<name>.app`（目录里必须有 `manifest.lua`），名称 = 目录名去掉 `.app`，版本取自运行时索引（`api.sys.apps()`）；运行时没有加载的包仍然列出、版本显示 `?`（桌面上"介质里有什么"不等于"运行时加载了什么"）。排序按名称升序，同名重复只取首个并进 problems。顶部两行状态：`slot <slot> ver <version>`（`/boot.slot` → `/slots/<slot>/boot.ok` → 同槽 `.image` → 根 `/boot.ok`）与 `net <ok|degraded|down|off> free <n>`（`fs.getFreeSpace("/")`，读不到就 `n/a`）。启动**只**走 `api.sys.launch(name)`（运行时 `rt:start`），绝不自己起 coroutine。布局：行 1–2 头部、行 3..n-2 列表、行 n-1 提示或单条消息、行 n 选择计数；**列 < 16 或行 < 6 → 降级成单行状态**，列 < 26 → 列表降级为单列（去掉版本列），任何行都 pad/truncate 到列宽，越界写屏不可能发生。
+10.5 **launcher（桌面）**：`pyroet-os/system/launcher.app/`，`capabilities = {"fs.read","fs.write"}`（写**只**用于成功后追加一行 `/etc/launcher.recent`，被拒绝就忽略）。扫描 `/apps` 与 `/system` 下的 `<name>.app`（目录里必须有 `manifest.lua`），名称 = 目录名去掉 `.app`，版本取自运行时索引（`api.sys.apps()`）；运行时没有加载的包仍然列出、版本显示 `?`（桌面上"介质里有什么"不等于"运行时加载了什么"）。排序按名称升序，同名重复只取首个并进 problems。顶部两行状态：`ver <version> sha <8 位十六进制>`（只读全局 `/boot.ok` 的 `version` 与 `manifest_sha` 前 8 位；`manifest_sha=none` 或非十六进制时省略 `sha` 段，标记读不到就 `ver ?`——单树没有槽位指针，G2 已删掉全部槽位兜底）与 `net <ok|degraded|down|off> free <n>`（`fs.getFreeSpace("/")`，读不到就 `n/a`）。启动**只**走 `api.sys.launch(name)`（运行时 `rt:start`），绝不自己起 coroutine。布局：行 1–2 头部、行 3..n-2 列表、行 n-1 提示或单条消息、行 n 选择计数；**列 < 16 或行 < 6 → 降级成单行状态**，列 < 26 → 列表降级为单列（去掉版本列），任何行都 pad/truncate 到列宽，越界写屏不可能发生。
 
-10.6 **settings（设置）**：`pyroet-os/system/settings.app/`，`capabilities = {"fs.read"}`——**严格只读**，没有写路径。离线套件用 instrumented fs 断言 `write/append/delete/makeDir` 调用数为 0、没有非 `"r"` 模式的 `open`，并断言运行时确实对 `fs.write` 返回 `capability denied: fs.write`。内容：系统版本/槽位/镜像版本/net health、应用清单与每个 cap 的 granted/denied/pending、`/etc/network.conf` 关键项（键名含 `psk`/`pass`/`secret`/`key`/`token` 的值一律显示 `***`，明文永不进屏幕）、存储（free + 硬门禁 349,525 B + `/etc/install.set` 条目数）。缺文件时是固定降级文案（`apps n/a` / `conf n/a` / `install.set n/a` / `free n/a`），不抛错、不空白屏。与 launcher 共用同一套 26x20 规则和 `layout_selftest()`。
+10.6 **settings（设置）**：`pyroet-os/system/settings.app/`，`capabilities = {"fs.read"}`——**严格只读**，没有写路径。离线套件用 instrumented fs 断言 `write/append/delete/makeDir` 调用数为 0、没有非 `"r"` 模式的 `open`，并断言运行时确实对 `fs.write` 返回 `capability denied: fs.write`。内容：系统版本、镜像版本 + `manifest_sha` 前 8 位（只读全局 `/boot.ok`）、net health、应用清单与每个 cap 的 granted/denied/pending、`/etc/network.conf` 关键项（键名含 `psk`/`pass`/`secret`/`key`/`token` 的值一律显示 `***`，明文永不进屏幕）、存储（free + 硬门禁 349,525 B + `/etc/install.set` 条目数）。缺文件时是固定降级文案（`apps n/a` / `conf n/a` / `install.set n/a` / `free n/a`），不抛错、不空白屏。与 launcher 共用同一套 26x20 规则和 `layout_selftest()`。
 
 10.7 **`api.sys` 不是第 8 个 cap**：它是宿主注入的**只读系统内省面**（`apps.new({sys = <table> | function(record) -> table|nil})`），四件事：`status()`（kernel 健康）、`apps()`（运行时 `status().apps`）、`perms(app)`（该 app 的决策表）、`launch(name)`（`rt:start`）。没注入的函数返回 `nil, "system unavailable: <fn>"` 并记 `APP_SYS_UNAVAILABLE`，所以 app 问什么都不会 nil-index。startup 的 `sys_for` 只把整表交给 `/system/` 下的包，用户包拿到桩：`launch` 是唯一有副作用的入口，按**目录**而不是按 cap 授权——cap 列表是 app 自己声明的，用它去决定"谁能启动别的 app"等于让被约束方自己发权限。`api.fs.getFreeSpace` 作为 `fs.read` 的一部分提供（读介质容量不写任何东西），宿主没有这个方法时返回 `capability unavailable: fs.read`。
 
@@ -314,7 +314,7 @@ manifest 的解析不复制：installer 通过 `kernel/apps.lua` 的 `A:read_man
 | 暂存 | 全部写进 `/apps/.tmp-<name>/`，真正的 `/apps/<name>.app` 在校验通过前不动 | — |
 | 校验 | 必须有 `manifest.lua` + `main.lua`；manifest 由 apps.lua 校验；可选 `SHA256SUMS`（`<64 hex>  <relpath>`）逐文件校验，且包内每个文件都必须被列出 | `INSTALL_HASH_BAD file=..` |
 | 覆盖 | 同名已存在 → 先记 `INSTALL_REPLACE`，删旧目录，`fs.move` 把临时目录挪进去 | `INSTALL_REPLACE name=..` |
-| 降级 | `fs.move` 被拒（CC 的 move 不覆盖）→ copy + 逐文件字节比对 + 删临时目录，与 `boot.lua` 的 `/boot.slot` 同一策略 | `INSTALL_MOVE_FALLBACK` |
+| 降级 | `fs.move` 被拒（CC 的 move 不覆盖）→ copy + 逐文件字节比对 + 删临时目录（同一 copy 降级也用于文件集替换） | `INSTALL_MOVE_FALLBACK` |
 | 失败 | 任何一步失败：删临时目录（已开始的替换连目标一起删），旧版本原样保留 | `INSTALL_FAIL name=.. err=..` |
 | 卸载 | 只删 `/apps/<name>.app`；`/system/<name>.app` 一律拒绝（系统 app 只随 OTA 换） | `INSTALL_REMOVE` / `INSTALL_REMOVE_DENIED .. reason=system` |
 | 列表 | `list()` 读 `/apps` 与 `/system`，version 经运行时 parser 得到（坏包不隐藏，版本记 `?` 并带 error） | `INSTALL_LIST count=..` |
@@ -354,7 +354,7 @@ sha256 比对 META → 用 `boot.atomic_write` 写 `/slots/<x>/.image`（`versio
 
 11.6 **与救援通道（`recovery/flash.lua`、`recovery/bootstrap.lua`，见 §12）的关系**：两者是
 **同一信任模型的两条链路**——都只用裸 rednet、都只做 SHA256 + 帧定界、都不解析镜像格式、都
-只写非活动槽 + 翻指针、都不写 `/boot.ok`。区别只在入口：`flash.lua`/`bootstrap.lua` 是系统
+只写目标文件集（P6-3 起是 `<root>/system`，无槽无指针）、都不写 `/boot.ok`。区别只在入口：`flash.lua`/`bootstrap.lua` 是系统
 坏掉时手工粘贴的极小接收器（§2.2，bootstrap ≤4 KB，拉/推两种模式），`ota.lua` 是镜像内
 的正常更新客户端（复用 `boot.lua` 的写入口、crypto 与日志）。因此 `ota.lua` 失败时永远
 退回 flash 那条路：OTA 代码本身不承担救援职责，也不引入握手/密钥。
@@ -453,7 +453,7 @@ journal 行格式 `<relpath> <old_sha> <new_sha> <bytes>`；`old_sha = -` 表示
 
 13.8 **迁移（顺序写死）**：先写新 `/boot.ok` → 再写 `update.journal.<1>`（`state=prepare`、`files=0`）→ 最后才删 `/slots/`、`/boot.slot`、`/boot.slot.tmp`、`system.tmp*`；反过来任何一步断电都会让设备同时没有系统也没有提交凭据。bootloader 开机检测到遗留即执行一次（`BOOT_MIGRATED`），随后空 `prepare` 日志按“下载未应用”清理。
 
-13.9 **P6-3 已清账（2026-10-29）**：原遗留四项全部落地 —— (1) `recovery/proto.lua`、`flash.lua`、`bootstrap.lua` 改写为 `PYROET-FLASH/2` 文件集、目标 `<root>/system`、无槽无指针（§12 已同步）；(2) `system/settings.app` 门禁文案改为三层（`M.BUDGET=629,145` / `M.STRETCH=349,525` / `M.WINDOW=900,000` / `M.BACKUP_CAP=200,000`），`launcher.app` 与 `settings.app` 的系统应用扫描根改为 `/system/system`；(3) `kernel/installer.lua` 仍只装应用（应用安装逻辑不变），但其 system 根改为 `/system/system`、crypto 改为 `/system/rpv/crypto.lua`；(4) `/kernel`、`/rpv`、`/net` 已搬进 `/system/`，老镜像由 `boot.migrate_layout()` 迁移（§13.11）。**保留的兼容读**：`launcher.app`/`settings.app` 仍会尝试读 `/boot.slot` 与 `/slots/<x>/boot.ok` 作为历史兜底；单树永远不会写它们，所以真机上显示 `slot ?` 属预期。
+13.9 **P6-3 已清账（2026-10-29）**：原遗留四项全部落地 —— (1) `recovery/proto.lua`、`flash.lua`、`bootstrap.lua` 改写为 `PYROET-FLASH/2` 文件集、目标 `<root>/system`、无槽无指针（§12 已同步）；(2) `system/settings.app` 门禁文案改为三层（`M.BUDGET=629,145` / `M.STRETCH=349,525` / `M.WINDOW=900,000` / `M.BACKUP_CAP=200,000`），`launcher.app` 与 `settings.app` 的系统应用扫描根改为 `/system/system`；(3) `kernel/installer.lua` 仍只装应用（应用安装逻辑不变），但其 system 根改为 `/system/system`、crypto 改为 `/system/rpv/crypto.lua`；(4) `/kernel`、`/rpv`、`/net` 已搬进 `/system/`，老镜像由 `boot.migrate_layout()` 迁移（§13.11）。**保留的兼容读已清理（G2，2026-10-29）**：`launcher.app`/`settings.app` 不再读 `/boot.slot`、`/slots/<x>/boot.ok`、`/slots/<x>/.image`，也不再渲染 `slot ?` 占位；两者只读全局 `/boot.ok`（`version` + `manifest_sha` 前 8 位），`M.SLOT_PATH` 由 `M.BOOT_OK` 取代，`read_boot()` 不再返回 `slot` 字段。全仓其余旧路径字面量只剩两类，都不是读取：`boot.migrate_layout()` 的删除动作（源码里是 `join(root, "boot.slot")`/`join(root, "slots")`）与 `tests/t_boot.lua`/`t_startup.lua` 的旧布局 fixture（证明迁移会把它们删掉）。
 
 13.10 **测试口径（P6-2 实测）**：`tests/t_boot.lua`（23 组：决策表 17 行 + 交叉、journal 两代与坏代、按哈希的幂等回滚、P6-design §9.3 五条回滚失败路径、迁移、崩溃窗口）、`tests/t_ota.lua`（18 组：协议边界、路径白名单、聚合哈希唯一定义、`verify`/`cap` 拒绝与重试、应用期失败回滚、重跑）、`tests/t_startup.lua`（14 组：manifest 来源、commit 失败保留意图、`rolledback` 启动、迁移）；`tests/t_desktop.lua`、`t_budget.lua` 的 fixture 从槽位改成全局凭据。离线套件 **OFFLINE_PASS 2,651 / FAIL 0 / GROUPS 149**（P6-2 前 2,313/128）；体积 `boot.lua` 38,721 B（581→1,031 行）、`kernel/ota.lua` 28,304 B（320→712 行）、`startup.lua` 20,280 B（506→517 行），TOTAL **392,500 B / SIZE_WARN**（超目标线 42,975 B，距硬门禁余 236,645 B）、`WINDOW_OK sum=592,500`。
 
@@ -486,6 +486,33 @@ journal 行格式 `<relpath> <old_sha> <new_sha> <bytes>`；`old_sha = -` 表示
 
 **路径引用**：`startup.lua` 的 `P.KERNEL_PATH`/`P.APPS_PATH`/`P.PERMISSIONS_PATH` 指向 `/system/kernel/*`，新增 `P.SYSTEM_APPS_ROOT = "/system/system"`；`boot.lua` 的 `M.CRYPTO = "/system/rpv/crypto.lua"`，`M.paths()` 新增 `system_apps`；`kernel/ota.lua` 的 `CRYPTO`、`kernel/installer.lua` 的 `SYS`/`CRYPTO`、`net/service.lua` 的 hosts 模块候选路径、`system/launcher.app` 的 `M.ROOTS` 同步；`tests/run-tests.ps1` 的 staging 与 `$required` 按同一布局。
 
+## 14. 发布口径（release packaging）
+
+14.1 **版本号 1.0.0，产物 `dist/release/pyroet-os-v1.0.0.zip`**，用仓库通用脚本构建：
+`python tools/build_release.py --project pyroet-os --out dist/release`（本目录**没有**自己的 release 脚本，也没有
+`RELEASE.md`，所以 tag 发布时 release 正文为空）。zip 根是 `pyroet-os/` 前缀 + 仓库根的 `LICENSE`；成员按
+路径排序、固定 `1980-01-01 00:00:00` 时间戳与 0644 权限，同一内容重复构建字节相同（CI 的
+`release-builds.yml` 用同一条命令，见 14.5）。
+
+14.2 **进包**（32 个 `pyroet-os/` 成员）：`startup.lua`（ROM starter）、`system/**`（bootloader、`kernel/`、`rpv/`
+子集、`net/`、三个系统 app）、`recovery/**`（`proto.lua` / `flash.lua` / `bootstrap.lua`）、`install.set`、
+`DECISIONS.md`、`P6-design.md`。`recovery/` **必须**随包发：`/system` 缺文件的砖机只能靠用户把它拷到机上，
+包里没有就等于没有救援通道；两份文档同理——现场没有仓库、也没有 git 历史，出故障时
+`DECISIONS.md`/`P6-design.md` 是唯一在场的口径来源。
+
+14.3 **不进包**：`tests/`（CraftOS-PC 离线套件、harness、fixture）与 `tools/`（`sizecheck.py`、`smoke.lua`、
+`smoke-run.ps1`）——纯开发材料，装机用不到。口径写在 `tools/build_release.py` 的
+`EXCLUDE_FROM_RELEASE["pyroet-os"] = ("tests/", "tools/")`，按相对路径**前缀**匹配；对其它项目零影响
+（`itn-pass` 仍只排 `tests/`，sentinel / cardkey / pylib / itn-pass 四包与本改动前逐字节相同）。
+
+14.4 **发布包 ≠ 运行时镜像**：发布包是完整源码集（含不进 `install.set` 的 `recovery/` 与两份文档），而
+`install.set` + `sizecheck.py` 统计的是**镜像**（26 条、`SIZE_WARN`、`WINDOW_OK`，当前口径见修订记录最新行）。
+两者成员集合不同：不要拿 zip 体积当体积门禁，也不要因为包里有 `recovery/` 就以为它在镜像里。
+
+14.5 **CI 接线**：`.github/workflows/release-builds.yml` 里 `pyroet-os` 与 sentinel/cardkey/pylib/itn-pass 走同一条
+通用分支——dispatch 选项、tag 名单（tag 名就叫 `pyroet-os`）、分支推送的全项目构建循环、`case` 分派四处；
+tag 推送时建/刷新该 tag 的 release 并上传这个 zip。根 `README.md` 的项目表、构建命令表、tag 名单同步维护。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -497,3 +524,5 @@ journal 行格式 `<relpath> <old_sha> <new_sha> <bytes>`；`old_sha = -` 表示
 - 2026-10-29: **G1 门禁改三层 + net.app 加回镜像**。`tools/sizecheck.py` 默认值改为 `--budget 629,145`（3/5 MiB 硬门禁）、`--stretch 349,525`（1/3 MiB 目标线，SIZE_WARN 不判死）；新增 `--backup-cap`（默认 200,000）与更新窗口检查 `total + cap <= 900,000`，输出 `WINDOW_OK sum=.. limit=900000` / `WINDOW_FAIL total=.. cap=.. sum=.. limit=900000`（后者 exit 1，且 `SIZE_FAIL` 时照常打印）。`system/net.app/`（main.lua 15,493 + manifest.lua 437 = 15,930 B）从 `examples/net.app/` 移回 `pyroet-os/system/net.app/`，`examples/` 不再保留任何副本；`install.set` 增至 25 条、TOTAL **359,305 B** → `SIZE_WARN`（超目标线 9,780 B，距硬门禁余 269,840 B）、`WINDOW_OK sum=559,305`。`tests/run-tests.ps1` 只 stage `system/net.app` 一份（删掉 examples staging 与 fixture 双份）；`tests/t_budget.lua` 的 install_set / 示例断言按新布局反转（`has_net_app_*`、`has_system_net_text`、`no_examples_copy`，install_entries 25），`t_desktop`/`t_settings` 的 `loaded=3`/`apps=3`/`rt:scan()==3` 断言原样保留。离线 **2,313 pass / 0 fail / 128 groups**（P5b 2,311/128，+2 断言）；改动文件非 ASCII 计数 0。§0.4/§4/§7.1/§8.4 同步为三层口径，settings.app 的 `M.BUDGET` 与 §10.6 明确记为待同步遗留（改它会计入镜像体积并牵动两条断言）。
 - 2026-10-29: **P6-2 系统更新模型改为“单树 + journal + 差异备份”**（设计见 `P6-design.md`，口径见 §13）。`boot.lua` 从“双槽整镜像 + 指针”改为单一 `/system/` 树 + 全局 `/boot.ok`（`PYROET-BOOT-OK-2 version=.. manifest_sha=.. ts=..`）+ 全局 `/boot.tries`：17 行决策表、journal 三态（`prepare|applying|applied`）+ `rolledback` 墓碑、按 seq 保留两代、回滚按内容哈希幂等推进、fatal 只有 `no_system`/`rollback_fail`/写盘失败且不 reboot、2.5 迁移顺序（`boot.ok` → 空 `prepare` journal → 删 `/slots`）；删除 `/boot.slot`、指针原子写、按槽 `boot.ok`/`.tries`/`.image` 全套逻辑。`kernel/ota.lua` 改为 `PYROET-OTA/2` 文件集协议（`META version= files= manifest_sha=` / `FILE <relpath> <size> <sha256>` / `DATA <relpath> <offset> <hex>`，`MAX_DATA=8192`、`F_max=65536`）：收齐清单即算聚合哈希（`relpath\0size\0sha\n` 排序后一次 SHA-256）比对，不符 `OTA_REJECT stage=verify`、状态 `rejected`、`retry()` 可重拉；`BACKUP_CAP=200,000` 在写 `prepare` 前检查（`stage=cap`）；通过后才 `journal(prepare)` → 逐文件 “`.part` → 备份并校验 `old_sha` → move 进 `/system` → 回读校验 `new_sha`” → `journal(applied)`；应用期失败立即回滚（`OTA_FAIL` + `OTA_ROLLED_BACK`）。`startup.lua` 的 commit 改为写全局 `/boot.ok`，`manifest_sha` 取自 journal（无更新记录时保留旧 marker 的 `manifest_sha`，均无则记 `none`），日志字段换成 `manifest_sha`。§2.3–2.8 与 §11.3–11.5 标记 superseded（历史保留）。测试：`t_boot` 23 组 / `t_ota` 18 组 / `t_startup` 14 组重写（含 §9.3 五条回滚失败路径与 5 个崩溃窗口），`t_desktop`/`t_budget` fixture 改全局凭据；离线 **2,651 pass / 0 fail / 149 groups**（P6-2 前 2,313/128，+338 断言 / +21 组）；TOTAL **392,500 B / SIZE_WARN**（+33,195 B：`boot.lua` 38,721、`kernel/ota.lua` 28,304、`startup.lua` 20,280），`WINDOW_OK sum=592,500`；改动文件非 ASCII 计数 0。遗留：`recovery/*`、`settings.app`/`launcher.app` 的槽位读取与 `/kernel`、`/rpv` 的源码路径迁移未动（见 §13.9）。
 - 2026-10-29: **P6-3 布局统一到单一 `/system` 树 + 恢复工具改文件集**。根的 `/startup.lua` 改成 1,071 B starter（只 `pcall(loadfile, "/system/startup.lua")` 并调用；加载失败/抛错打印 ASCII 并落回 shell，不 reboot）；`/kernel`、`/rpv`、`/net` 搬进 `/system/`，系统应用搬到 `/system/system/<name>.app`（`/etc`、`/apps` 留在根）；新增 `boot.migrate_layout()`（重命名式迁移、目标已存在则 skip、失败逆序回滚、fatal `layout_migrate_fail`，日志 `BOOT_MIGRATE_LAYOUT*`，可重入）；`recovery/proto.lua`/`flash.lua`/`bootstrap.lua` 改写为 `PYROET-FLASH/2` 文件集（`META version= manifest_sha= files=` + `<relpath> <size> <sha256>`、`GET <relpath> <idx>`、`DATA <relpath> idx= sha256= <hex>`，`MAX_DATA=8192`；无槽无指针，`P.target()` 取代 `P.ptr()`；暂存校验后才替换、失败按哈希逆序撤销、成功后写 `applied` journal 供试启动回滚）；`settings.app` 门禁文案改三层（`M.BUDGET=629145`/`M.STRETCH=349525`/`M.WINDOW=900000`/`M.BACKUP_CAP=200000`），launcher/settings 的系统应用扫描根改 `/system/system`；`install.set` 26 条、TOTAL **401,640 B / SIZE_WARN**、`WINDOW_OK sum=601,640`；离线 **2,880 pass / 0 fail / 158 groups**（P6-2 基线 2,651/149，+229 断言 / +9 组；新增 `tests/t_layout.lua`，三个 recovery 套件按文件集模型重写）；改动 lua 非 ASCII 计数 0。
+- 2026-10-29: **G2 清掉槽位时代的兜底读取**。`system/system/launcher.app/main.lua` 与 `system/system/settings.app/main.lua` 删除对 `/boot.slot`、`/slots/<x>/boot.ok`、`/slots/<x>/.image` 的全部读取分支和 `slot <x>`/`slot ?` 文案：`M.SLOT_PATH` → `M.BOOT_OK = "/boot.ok"`，`read_boot()` 只解析全局 `PYROET-BOOT-OK-2 version=.. manifest_sha=.. ts=..`（`manifest_sha` 为主键，P6 之前留在同一文件上的 `sha256` 作同义兜底，`none` 丢弃），新增 `M.short_sha()` 取前 8 位十六进制；launcher 行 1 变 `ver <v> sha <8hex>`（21 列），settings 变 `os <v>` + `image <v> sha <8hex>`（24 列），26x20 不越界、纯 ASCII；两个 app 的 `layout_selftest()` 各加一条“任何行不得再出现 slot”的检查。`tests/t_launcher.lua`/`t_settings.lua` 的 fixture 改全局 `/boot.ok`，槽位断言逐条替换为等价的全局标记断言（`slot a` → `no_slot_field` + `source=/boot.ok` + `sha abababab`、`.image` 兜底 → `manifest_sha=none` 被丢弃、`/boot.slot` 垃圾输入 → `/boot.ok` 垃圾输入、`H.absent(...,"slot")`），断言未删；`t_desktop` 的 fixture 本来已是全局凭据，未改。文档 §1.1/§2.2/§7.4/§10.5/§10.6/§11.2/§11.6 同步或标注 superseded，§13.9 记为已清账。离线 **2,890 pass / 0 fail / 158 groups**（P6-3 2,880/158，+10 断言）；TOTAL **401,769 B / SIZE_WARN**（+129 B）、`WINDOW_OK sum=601,769`；改动 lua 非 ASCII 计数 0。
+- 2026-10-29: **B7 接通发布（CI + 打包 + 根 README），口径见 §14**。`tools/build_release.py`：`VERSIONS` 增 `"pyroet-os": "1.0.0"`，`EXCLUDE_FROM_RELEASE` 增 `"pyroet-os": ("tests/", "tools/")`（按相对路径前缀匹配，`recovery/` 与两份文档保留在包内）。`.github/workflows/release-builds.yml` 按 itn-pass 同一模式补四处：dispatch 选项 `- pyroet-os`、tag `fromJSON` 名单加 `"pyroet-os"`、分支构建循环 `for project in sentinel cardkey pylib itn-pass pyroet-os`、`case` 分派 `sentinel|cardkey|pylib|itn-pass|pyroet-os)`；未重构任何行。根 `README.md` 加项目表一行（掌机类 Android OS、单树 + journal 文件集更新、含 EDL 式 `recovery/`）、构建命令一行（`python tools/build_release.py --project pyroet-os --out dist/release` → `dist/release/pyroet-os-v1.0.0.zip`，注明不含 `tests/`、`tools/`）、tag 名单一处。实测 `pyroet-os-v1.0.0.zip` **33 成员**（32 个 `pyroet-os/` 成员 + 根 `LICENSE`），同一内容重跑字节相同；**zip 的字节数与 sha256 刻意不写进本文档**——`DECISIONS.md` 自己是包内成员，写进去就改变哈希（构建输出与 release 页面才是可信来源）；成员含 `recovery/`(3)、`DECISIONS.md`、`P6-design.md`、`install.set`、`startup.lua`、`system/`(25)，不含 `tests/`、`tools/`。**其它项目零影响**：sentinel / cardkey / pylib / itn-pass 四包用 HEAD 版与新版脚本各构建一次，sha256 逐一相同（`d0fa417d…` / `686e1bb4…` / `e67772f1…` / `46575505…`）。本任务未改任何 `.lua`。

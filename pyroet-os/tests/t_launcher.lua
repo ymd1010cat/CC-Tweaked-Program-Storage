@@ -92,8 +92,7 @@ local function machine(opts)
     }
     return fake_api({
         files = o.files or {
-            ["/boot.slot"] = "a\n",
-            ["/slots/a/boot.ok"] = "PYROET-BOOT-OK-1 slot=a version=2.0.0 sha256="
+            ["/boot.ok"] = "PYROET-BOOT-OK-2 version=2.0.0 manifest_sha="
                 .. string.rep("ab", 32) .. " ts=1700000000000\n",
             ["/apps/box.app/manifest.lua"] = "return {}\n",
             ["/system/system/launcher.app/manifest.lua"] = "return {}\n",
@@ -135,43 +134,49 @@ return function(H)
     -- -----------------------------------------------------------------
     H.group("launcher.boot")
     do
+        -- one global marker: version plus the manifest hash of the running tree
         local info = M.read_boot(machine())
-        H.eq("slot", info.slot, "a")
         H.eq("version", info.version, "2.0.0")
         H.eq("sha", info.sha256, string.rep("ab", 32))
-        H.eq("source", info.source, "/slots/a/boot.ok")
+        H.eq("source", info.source, "/boot.ok")
+        H.eq("short_sha", M.short_sha(info.sha256), "abababab")
+        H.eq("no_slot_field", info.slot, nil)
 
-        -- no marker: the OTA descriptor is the fallback
-        local image = fake_api({ files = {
-            ["/boot.slot"] = "b",
-            ["/slots/b/.image"] = "version=3.0.0\nsha256=" .. string.rep("cd", 32) .. "\n",
-        } })
-        local image_info = M.read_boot(image)
-        H.eq("image_slot", image_info.slot, "b")
-        H.eq("image_version", image_info.version, "3.0.0")
-        H.eq("image_source", image_info.source, "/slots/b/.image")
-
-        -- no slot pointer: the root marker still tells the version
-        local root = fake_api({ files = {
-            ["/boot.ok"] = "PYROET-BOOT-OK-1 slot=a version=9.9.9 sha256=none ts=1\n",
-        } })
-        local root_info = M.read_boot(root)
-        H.eq("root_slot", root_info.slot, nil)
-        H.eq("root_version", root_info.version, "9.9.9")
-        H.eq("root_sha_none_dropped", root_info.sha256, nil)
-        H.eq("root_source", root_info.source, "/boot.ok")
-
+        -- a marker without a version or hash: both stay unknown, no marker file
         local nothing = M.read_boot(fake_api({}))
-        H.eq("nothing_slot", nothing.slot, nil)
         H.eq("nothing_version", nothing.version, nil)
+        H.eq("nothing_sha", nothing.sha256, nil)
         H.eq("nothing_source", nothing.source, nil)
 
-        local junk = M.read_boot(fake_api({ files = { ["/boot.slot"] = "a b!\n" } }))
-        H.eq("junk_slot", junk.slot, nil)
+        -- manifest_sha=none is a sentinel, not a hash, and never reaches the row
+        local none = fake_api({ files = {
+            ["/boot.ok"] = "PYROET-BOOT-OK-2 version=9.9.9 manifest_sha=none ts=1\n",
+        } })
+        local none_info = M.read_boot(none)
+        H.eq("none_version", none_info.version, "9.9.9")
+        H.eq("none_sha_dropped", none_info.sha256, nil)
+        H.eq("none_source", none_info.source, "/boot.ok")
+        H.eq("none_short", M.short_sha(none_info.sha256), nil)
 
-        local denied = M.read_file({}, "/boot.slot")
+        -- a v1 marker on the same path still carries a version and a sha256
+        local legacy = fake_api({ files = {
+            ["/boot.ok"] = "PYROET-BOOT-OK-1 slot=a version=1.0.0 sha256="
+                .. string.rep("cd", 32) .. " ts=1\n",
+        } })
+        local legacy_info = M.read_boot(legacy)
+        H.eq("legacy_version", legacy_info.version, "1.0.0")
+        H.eq("legacy_sha", legacy_info.sha256, string.rep("cd", 32))
+        H.eq("legacy_no_slot_field", legacy_info.slot, nil)
+
+        -- junk: a marker with no version reads as no version, never a crash
+        local junk = M.read_boot(fake_api({ files = { ["/boot.ok"] = "a b!\n" } }))
+        H.eq("junk_version", junk.version, nil)
+        H.eq("junk_short", M.short_sha(junk.sha256), nil)
+        H.eq("junk_valid_hex", M.short_sha("not-hex-at-all"), nil)
+
+        local denied = M.read_file({}, "/boot.ok")
         H.eq("read_denied", denied, nil)
-        local _, reason = M.read_file({}, "/boot.slot")
+        local _, reason = M.read_file({}, "/boot.ok")
         H.eq("read_reason", reason, "capability denied: fs.read")
     end
 
@@ -247,8 +252,9 @@ return function(H)
         local lines = M.render(state, 26, 20)
         H.eq("rows", #lines, 20)
         for i = 1, #lines do H.eq("width_" .. tostring(i), #lines[i], 26) end
-        H.contains("row1_slot", lines[1], "slot a")
-        H.contains("row1_version", lines[1], "2.0.0")
+        H.contains("row1_version", lines[1], "ver 2.0.0")
+        H.contains("row1_hash", lines[1], "sha abababab")
+        H.absent("no_slot_text", H.joined(lines), "slot")
         H.contains("row2_net", lines[2], "net ok")
         H.contains("row2_free", lines[2], "free 25K")
         H.contains("list_first", lines[3], "box")

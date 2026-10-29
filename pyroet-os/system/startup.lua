@@ -131,8 +131,8 @@ end
 
 -- The marker carries version + manifest_sha + timestamp, and both come from the
 -- update journal: after P6 the journal *is* the manifest description (the
--- per-slot /slots/<x>/.image died with /slots/), and boot.commit deletes it
--- right after the marker is written.
+-- per-slot image descriptor died with the slot layout), and boot.commit deletes
+-- it right after the marker is written.
 --
 -- Three cases, in this order:
 --   * journal state=applied -> the version and manifest_sha that was just tried

@@ -3,8 +3,9 @@
 What it shows, all of it read from files or from the host's read-only system
 surface (never written back):
 
-    system   Pyroet OS version, boot slot (/boot.slot), image version
-             (/slots/<slot>/boot.ok, then .image, then /boot.ok), net health
+    system   Pyroet OS version, image version and the first eight hex digits of
+             the global /boot.ok manifest_sha (one system tree, no slot), net
+             health
     apps     every app the runtime knows: name, version, and one line per
              declared capability with its decision -- granted / denied /
              pending (no decision file yet)
@@ -38,7 +39,7 @@ M.VERSION = "0.1.0"
 M.VIEW = { cols = 26, rows = 20 }
 M.MIN_COLS = 16
 M.MIN_ROWS = 6
-M.SLOT_PATH = "/boot.slot"
+M.BOOT_OK = "/boot.ok"
 M.CONF_PATH = "/etc/network.conf"
 M.INSTALL_SET = "/etc/install.set"
 M.CONF_LINES = 6
@@ -83,40 +84,28 @@ local function marker_value(text, key)
     return tostring(text):match(key .. "=([^%s]+)")
 end
 
+-- the first eight hex digits of a hash, or nil when the value is not a full hex
+-- string (P6 markers write `manifest_sha=none` when no update journal exists)
+function M.short_sha(value)
+    local text = tostring(value == nil and "" or value)
+    if not text:match("^%x+$") then return nil end
+    return text:sub(1, 8)
+end
+
+-- the global commit marker the single-tree boot chain writes:
+-- `PYROET-BOOT-OK-2 version=.. manifest_sha=.. ts=..`; there is no slot pointer
+-- and no per-slot descriptor to consult.
 function M.read_boot(api)
-    local info = { slot = nil, version = nil, sha256 = nil, source = nil }
-    local slot_text = M.read_file(api, M.SLOT_PATH)
-    if type(slot_text) == "string" then
-        local slot = slot_text:gsub("%s+", "")
-        if slot:match("^[%w_%-]+$") then info.slot = slot end
-    end
-    local bases = {}
-    if info.slot then bases[#bases + 1] = "/slots/" .. info.slot end
-    bases[#bases + 1] = ""
-    for i = 1, #bases do
-        local base = bases[i]
-        local text = M.read_file(api, base .. "/boot.ok")
-        if type(text) == "string" then
-            local version = marker_value(text, "version")
-            if version then info.version = version end
-            local sha = marker_value(text, "sha256")
-            if sha and sha ~= "none" then info.sha256 = sha end
-            info.source = base .. "/boot.ok"
-            break
-        end
-    end
-    if not info.version then
-        for i = 1, #bases do
-            local text = M.read_file(api, bases[i] .. "/.image")
-            if type(text) == "string" then
-                local version = marker_value(text, "version")
-                if version then
-                    info.version = version
-                    info.source = bases[i] .. "/.image"
-                    break
-                end
-            end
-        end
+    local info = { version = nil, sha256 = nil, source = nil }
+    local text = M.read_file(api, M.BOOT_OK)
+    if type(text) == "string" then
+        local version = marker_value(text, "version")
+        if version then info.version = version end
+        -- manifest_sha is the P6 key; sha256 is the same field on a marker the
+        -- v1 boot chain left behind (same file, same meaning, not a slot read)
+        local sha = marker_value(text, "manifest_sha") or marker_value(text, "sha256")
+        if sha and sha ~= "none" then info.sha256 = sha end
+        info.source = M.BOOT_OK
     end
     return info
 end
@@ -264,7 +253,6 @@ function M.build(api, opts)
     local state = {
         cols = o.cols or M.VIEW.cols,
         rows = o.rows or M.VIEW.rows,
-        slot = "?",
         version = "?",
         sha256 = nil,
         boot_source = nil,
@@ -287,7 +275,6 @@ function M.refresh(state, api, opts)
     local o = opts or {}
     state.frames = (state.frames or 0) + 1
     local boot = M.read_boot(api)
-    state.slot = boot.slot or "?"
     state.version = boot.version or "?"
     state.sha256 = boot.sha256
     state.boot_source = boot.source
@@ -316,8 +303,11 @@ function M.sections(state)
     local out = {}
     local function add(text) out[#out + 1] = tostring(text) end
     add("=== system ===")
-    add("os " .. M.VERSION .. " slot " .. tostring(state.slot or "?"))
-    add("image " .. tostring(state.version or "?"))
+    add("os " .. M.VERSION)
+    local image = "image " .. tostring(state.version or "?")
+    local short = M.short_sha(state.sha256)
+    if short then image = image .. " sha " .. short end
+    add(image)
     add("net " .. tostring(state.net or "?"))
     add("=== apps ===")
     local apps = state.apps or {}
@@ -476,8 +466,8 @@ function M.sample_state()
     return {
         cols = M.VIEW.cols,
         rows = M.VIEW.rows,
-        slot = "a",
         version = "1.0.0",
+        sha256 = string.rep("ef", 32),
         net = "ok",
         free = 26214,
         apps = {
@@ -518,6 +508,12 @@ function M.selftest()
     local joined = table.concat(full, "\n")
     if not joined:find("=== apps ===", 1, true) then
         problems[#problems + 1] = "apps block lost"
+    end
+    -- the slot era is gone: no row may carry the word again
+    for i = 1, #full do
+        if full[i]:find("slot", 1, true) then
+            problems[#problems + 1] = "row " .. tostring(i) .. " still mentions a slot"
+        end
     end
     if not (full[#full] or ""):find("ro 1 apps 26x20", 1, true) then
         problems[#problems + 1] = "status row lost"

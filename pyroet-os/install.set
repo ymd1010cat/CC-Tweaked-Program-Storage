@@ -36,7 +36,7 @@
 # pyroet-os/startup.lua
 # pyroet-os/boot/bootloader.lua
 # pyroet-os/boot/image.lua
-# pyroet-os/boot/slots.lua   (pointer /boot.slot, /boot.ok marker, .tries)
+# pyroet-os/boot/slots.lua   (dropped at P6: one /system tree, no pointer state)
 # pyroet-os/boot/update.lua
 # -- kernel + service manager -----------------------------------------
 # pyroet-os/kernel/kernel.lua

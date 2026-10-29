@@ -1,7 +1,7 @@
 --[[- recovery/proto.lua -- shared file-set framing, hashing and apply for the
 recovery tools (PYROET-FLASH/2, DECISIONS.md 12). ASCII only.
 
-There is no slot and no /boot.slot any more: the image is one file set rooted at
+There is no slot and no slot pointer any more: the image is one file set rooted at
 `/system/`, so "which image is in charge" is not a pointer any more, it is a
 fact. `P.target()` is the equivalent of the old `P.ptr()`: it reports the single
 tree (and whether it is there at all, which a bricked machine needs to know).

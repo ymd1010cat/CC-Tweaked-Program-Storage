@@ -4,7 +4,7 @@ Implements pyroet-os/P6-design.md sections 2, 4, 5 and 6, with no dependency
 beyond the CraftOS `fs` API plus SHA-256 (loaded lazily from
 /system/rpv/crypto.lua), so it runs before the kernel and before everything else.
 
-There is no slot and no /boot.slot any more. The machine has exactly one system
+There is no slot and no slot pointer any more. The machine has exactly one system
 tree, `/system/`, and an update is a *file set* applied in place. What makes that
 survivable is three files:
 

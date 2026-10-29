@@ -6,9 +6,9 @@ Responsibilities, and nothing else:
      manifest.lua, and show name + version (the version comes from the app
      runtime through `api.sys.apps()`; a package the runtime refused to load
      still gets a row, marked `?`);
-  2. show a two line status block on top: boot slot + image version (from
-     /slots/<slot>/boot.ok, falling back to /slots/<slot>/.image and then to
-     /boot.ok), net service health, free space;
+  2. show a two line status block on top: image version and the first eight
+     hex digits of /boot.ok's manifest_sha (the global commit marker -- there
+     is one system tree and no slot pointer), net service health, free space;
   3. move a selection with the arrow keys or a digit key, and start the
      selected app on Enter *through the runtime* (`api.sys.launch`), never by
      pulling a coroutine of its own;
@@ -22,7 +22,7 @@ the state -- `M.handle_key(state, key)` -- and `M.run` pulls them from
 until then the desktop is driven by the boot chain and by tests, and the
 keyboard path is fully covered by the offline suite.
 
-Layout (DECISIONS.md 7.2): row 1 slot + version, row 2 net + free, rows 3..n-2
+Layout (DECISIONS.md 7.2): row 1 version + short hash, row 2 net + free, rows 3..n-2
 the list, row n-1 the hint (or one message), row n the selection counter. Every
 line is padded or truncated to the view width and never wider. Nothing fits
 under 16 columns or 6 rows, so the view collapses to a single status line --
@@ -41,7 +41,7 @@ M.VIEW = { cols = 26, rows = 20 }
 M.MIN_COLS = 16
 M.MIN_ROWS = 6
 M.ROOTS = { "/apps", "/system/system" }
-M.SLOT_PATH = "/boot.slot"
+M.BOOT_OK = "/boot.ok"
 M.RECENT_PATH = "/etc/launcher.recent"
 M.HINT = "up/dn enter run"
 M.SCAN_INTERVAL = 10
@@ -89,42 +89,28 @@ local function marker_value(text, key)
     return tostring(text):match(key .. "=([^%s]+)")
 end
 
--- boot slot, then the image version: the commit marker first (it is what the
--- bootloader wrote), then the OTA descriptor the bootstrap left in the slot
+-- the first eight hex digits of a hash, or nil when the value is not a full hex
+-- string (P6 markers write `manifest_sha=none` when no update journal exists)
+function M.short_sha(value)
+    local text = tostring(value == nil and "" or value)
+    if not text:match("^%x+$") then return nil end
+    return text:sub(1, 8)
+end
+
+-- the one global commit marker the single-tree boot chain writes:
+-- `PYROET-BOOT-OK-2 version=.. manifest_sha=.. ts=..`. There is no slot
+-- pointer to consult and no per-slot descriptor to fall back to.
 function M.read_boot(api)
-    local info = { slot = nil, version = nil, sha256 = nil, source = nil }
-    local slot_text = M.read_file(api, M.SLOT_PATH)
-    if type(slot_text) == "string" then
-        local slot = slot_text:gsub("%s+", "")
-        if slot:match("^[%w_%-]+$") then info.slot = slot end
-    end
-    local bases = {}
-    if info.slot then bases[#bases + 1] = "/slots/" .. info.slot end
-    bases[#bases + 1] = ""
-    for i = 1, #bases do
-        local base = bases[i]
-        local text = M.read_file(api, base .. "/boot.ok")
-        if type(text) == "string" then
-            local version = marker_value(text, "version")
-            if version then info.version = version end
-            local sha = marker_value(text, "sha256")
-            if sha and sha ~= "none" then info.sha256 = sha end
-            info.source = base .. "/boot.ok"
-            break
-        end
-    end
-    if not info.version then
-        for i = 1, #bases do
-            local text = M.read_file(api, bases[i] .. "/.image")
-            if type(text) == "string" then
-                local version = marker_value(text, "version")
-                if version then
-                    info.version = version
-                    info.source = bases[i] .. "/.image"
-                    break
-                end
-            end
-        end
+    local info = { version = nil, sha256 = nil, source = nil }
+    local text = M.read_file(api, M.BOOT_OK)
+    if type(text) == "string" then
+        local version = marker_value(text, "version")
+        if version then info.version = version end
+        -- manifest_sha is the P6 key; sha256 is the same field on a marker the
+        -- v1 boot chain left behind (same file, same meaning, not a slot read)
+        local sha = marker_value(text, "manifest_sha") or marker_value(text, "sha256")
+        if sha and sha ~= "none" then info.sha256 = sha end
+        info.source = M.BOOT_OK
     end
     return info
 end
@@ -253,7 +239,6 @@ function M.build(api, opts)
         index = 1,
         problems = {},
         message = "",
-        slot = "?",
         version = "?",
         sha256 = nil,
         boot_source = nil,
@@ -298,7 +283,6 @@ function M.refresh(state, api, opts)
         state.selected_name = selected and selected.name or nil
     end
     local boot = M.read_boot(api)
-    state.slot = boot.slot or "?"
     state.version = boot.version or "?"
     state.sha256 = boot.sha256
     state.boot_source = boot.source
@@ -318,8 +302,11 @@ end
 -- ---------------------------------------------------------------------------
 
 function M.header_lines(state)
+    local first = "ver " .. tostring(state.version or "?")
+    local short = M.short_sha(state.sha256)
+    if short then first = first .. " sha " .. short end
     return {
-        "slot " .. tostring(state.slot or "?") .. " ver " .. tostring(state.version or "?"),
+        first,
         "net " .. tostring(state.net or "?") .. " free "
             .. (state.free and M.bytes_text(state.free) or "n/a"),
     }
@@ -568,8 +555,8 @@ function M.sample_state()
         },
         index = 2,
         message = "",
-        slot = "a",
         version = "1.0.0",
+        sha256 = string.rep("ab", 32),
         net = "ok",
         free = 26214,
     }
@@ -591,11 +578,17 @@ function M.selftest()
     end
     local full = M.render(state, M.VIEW.cols, M.VIEW.rows)
     in_bounds(full, M.VIEW.cols, M.VIEW.rows, "26x20")
-    if not (full[1] or ""):find("slot a", 1, true) then
-        problems[#problems + 1] = "row 1 lost the slot"
+    if not (full[1] or ""):find("ver 1.0.0 sha abababab", 1, true) then
+        problems[#problems + 1] = "row 1 lost the version and the short hash"
     end
     if not (full[2] or ""):find("free 25K", 1, true) then
         problems[#problems + 1] = "row 2 lost the free space"
+    end
+    -- the slot era is gone: no row may carry the word again
+    for i = 1, #full do
+        if full[i]:find("slot", 1, true) then
+            problems[#problems + 1] = "row " .. tostring(i) .. " still mentions a slot"
+        end
     end
     if not (full[#full] or ""):find("3 apps sel 2/3", 1, true) then
         problems[#problems + 1] = "status row lost the selection"

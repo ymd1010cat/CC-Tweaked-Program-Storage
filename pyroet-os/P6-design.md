@@ -31,8 +31,8 @@
 ```
 /                     机身根（1,000,000 B 配额）
 ├─ startup.lua        ROM 唯一入口，3 行 stub：dofile("/system/startup.lua")，不参与更新
-├─ boot.ok            全局提交凭据（替代按槽 /slots/<x>/boot.ok）
-├─ boot.tries         连续试启动计数（替代按槽 /slots/<x>/.tries）
+├─ boot.ok            全局提交凭据（取代按槽的 boot.ok 标记）
+├─ boot.tries         连续试启动计数（取代按槽的 .tries）
 ├─ update.journal.<n> 更新意图日志，按 seq 递增，保留最新两代
 ├─ update.backup/     只存本次会被修改的旧文件，结构与 /system/ 同构
 └─ system/            唯一系统目录（boot/kernel/rpv/net/system 全部落进来）
@@ -260,3 +260,4 @@ fatal 只有三类：`no_system`（1）、`rollback_fail`（9/14）、写盘失�
 5. **§8 的“recovery 不动”条**：该条已被 P6-3 取代 —— `recovery/proto.lua`/`flash.lua`/`bootstrap.lua` 全部改写为文件集模型，写 `<root>/system`，不再写 `/slots/<x>` 与 `/boot.slot`；`P.ptr()` 由 `P.target()` 取代，`P.write()` 由 `P.write_file_set()` 取代。§10 第 2 条（是否保留 `/boot.slot` 兼容）由此关闭：**不保留**。
 6. **§8 的体积影响估算**：估算 `+13,600 B`、TOTAL ≈356,975；实测 P6-2 后 TOTAL **392,500 B**，P6-3 后 **401,640 B / SIZE_WARN**、`WINDOW_OK sum=601,640`（`install.set` 26 条，含 1,071 B 的根 starter）。门禁本身在 G1 已放宽为三层（硬门禁 629,145 / 目标线 349,525 / 更新窗口 900,000），见 `DECISIONS.md` §8.4。
 7. **§9.5 断言数**：估算 +700；实际 P6-2 达成 2,651 pass / 149 groups，P6-3 再 +229 断言 / +9 组到 **2,880 pass / 0 fail / 158 groups**（新增 `tests/t_layout.lua`，三个 recovery 套件按文件集模型重写）。
+8. **§10 第 2 条（是否保留槽指针兼容）在 UI 侧也关闭了（G2，2026-10-29）**：`launcher.app` 与 `settings.app` 里"先读槽指针、再读按槽 `boot.ok`/`.image`、都没有就显示 `slot ?`"的历史兜底已整段删除，两者只读全局 `/boot.ok` 的 `version` 与 `manifest_sha` 前 8 位（`manifest_sha=none` 时只显示版本）；`DECISIONS.md` §10.5/§10.6/§13.9 已按同一口径同步。

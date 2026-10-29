@@ -6,8 +6,8 @@ zip root. Members use fixed timestamps and modes, so repeated builds are
 byte-identical (this is what the release workflow publishes).
 
 `EXCLUDE_FROM_RELEASE` drops development-only material from a project's archive
-(only `itn-pass` ships without its `tests/` tree; the other projects are
-unchanged, byte for byte).
+(`itn-pass` ships without its `tests/` tree, `pyroet-os` without `tests/` and
+`tools/`; the other projects are unchanged, byte for byte).
 
 Usage:
     python tools/build_release.py                      # all projects -> dist/release
@@ -20,9 +20,9 @@ import hashlib
 import zipfile
 from pathlib import Path
 
-VERSIONS = {"sentinel": "2.0.0", "cardkey": "2.0.0", "pylib": "1.0.0", "itn-pass": "1.0.0"}
+VERSIONS = {"sentinel": "2.0.0", "cardkey": "2.0.0", "pylib": "1.0.0", "itn-pass": "1.0.0", "pyroet-os": "1.0.0"}
 # project -> relative-path prefixes that stay out of the release archive.
-EXCLUDE_FROM_RELEASE = {"itn-pass": ("tests/",)}
+EXCLUDE_FROM_RELEASE = {"itn-pass": ("tests/",), "pyroet-os": ("tests/", "tools/")}
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 
 
