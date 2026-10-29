@@ -513,6 +513,45 @@ journal 行格式 `<relpath> <old_sha> <new_sha> <bytes>`；`old_sha = -` 表示
 通用分支——dispatch 选项、tag 名单（tag 名就叫 `pyroet-os`）、分支推送的全项目构建循环、`case` 分派四处；
 tag 推送时建/刷新该 tag 的 release 并上传这个 zip。根 `README.md` 的项目表、构建命令表、tag 名单同步维护。
 
+## 15. OTA 服务端（分发中心）
+
+15.1 **部署形态**：跑在分发中心（134）——一台**普通 CC 电脑 + 裸 rednet**，不装 rpv、不依赖 `/system` 树。
+全部部署物 = `ota/server.lua` 一个文件 + 一个发布目录；`M.new{fs,log,rednet,channel,manifest|dir}`，`M.serve()` 阻塞循环收包，`M.stop()` 退出。
+`channel` 就是 rednet 的**协议串**（裸 rednet 没有数字频道），默认 `pyroet-ota`，必须与客户端 `kernel/ota.lua` 的 `PROTOCOL` 一致——不一致时客户端只会看到超时。
+
+15.2 **发布目录与 manifest 生成**：`<dir>/meta.txt`（`version=<tok>` 必需；`files=`/`manifest_sha=` 是可选钉，把镜像钉在“就是这批字节”上）
++ 按 relpath 展开的 `/system` 镜像树（`<dir>/kernel/ota.lua` → relpath `kernel/ota.lua`；`meta.txt` 是唯一不进更新集合的根文件）。
+`M.build_manifest(dir)` 递归读取、按 relpath 排序、逐文件算 SHA-256，再用 §3.2 的唯一定义算 `manifest_sha`（空集 = `sha256("")`）。
+发布侧 **fail-closed**：白名单外路径、0 字节、> `F_MAX`(65,536)、> `MAX_FILES`(256)、`meta.txt` 的钉不符（`files=`/`manifest_sha=`）一律拒绝构建并记
+`OTA_SERVER_BAD_FILE`/`OTA_SERVER_BUILD_FAIL`，不把“客户端必然拒收”的清单发出去。清单常驻内存（每条带字节），分发中心内存占用 ≈ 发布目录体量。
+
+15.3 **签名边界**：**无签名，只有完整性**。SHA-256 + 帧格式就是全部信任模型（同 §8.3）；`manifest_sha` 是“这一批 (relpath,size,sha256)”的指纹，
+客户端收齐 FILE 行后**本地重算**比对，不符即 `OTA_REJECT stage=verify`、一字节不写；分发中心被改 → 客户端拒收。
+但协议里没有“发布者是谁”：能同时改写 manifest 与字节的中间人仍可通过（rednet 无认证）。要真认证必须在 §3 协议上加签名，属未决项，本轮不做。
+
+15.4 **与客户端严格同口径**（`tests/t_ota_server.lua` 差分，任一项漂移即测试失败）：`MAX_DATA=8192`、`F_MAX=65536`、`MAX_FILES=256`、
+路径白名单（≤96 字节、逐段非 `.`/`..`/不以 `.` 开头、`[%w_%-%.]`、五个保留名、`.lua/.txt/.conf/.cfg`）、
+hex 一律小写、offset 必须 `MAX_DATA` 对齐且 `chunk = min(MAX_DATA, size - offset)`（末块可短）、
+`manifest_sha` = 按 relpath 排序的 `<relpath>\0<size>\0<sha256>\n` 单次 SHA-256。
+白名单在服务端是**复制 + 双向差分测试**而不是 require 客户端：分发中心不一定有 `/system/kernel/ota.lua`（复制来源在 `ota/server.lua` 的注释里点名到 `system/kernel/ota.lua:235-260`）。
+
+15.5 **协议与容错**：只有三个请求（`GET meta` / `GET <idx>` / `GET <idx> <offset>`，idx 0 起）。
+本协议前缀但请求非法 → `PYROET-OTA/2 ERR reason=<bad_verb|bad_request|bad_idx|bad_offset|no_data|no_manifest>`；
+**非本协议前缀的报文静默忽略**（不抢答裸 rednet 上别人的流量）。无会话、无位图：一个请求一个回包，丢包只花客户端一次重传。
+服务端**不在请求时重算** manifest：构建期算一次，之后按记录原样发。构建后被篡改的记录服务器不会“顺手修正”，只会被客户端拒绝——这是刻意的，服务端不猜作者意图。
+
+15.6 **不进镜像 / 不进 install.set**：`ota/` 是分发侧工具，装机用不到。`install.set` 仍 26 条、`python pyroet-os/tools/sizecheck.py`
+→ TOTAL **401,778 B / SIZE_WARN / `WINDOW_OK sum=601,778`**（与 B7 逐字节相同）。注意它**会**随 §14.2 的源码发布 zip 一起发：
+`tools/build_release.py` 只按前缀排除 `tests/`、`tools/`，所以发布 zip 里的 `pyroet-os/` 成员由 32 变 33（+`ota/server.lua`）。
+要不要从发布包里剔除是另一个决定，本轮不动 `build_release.py`。
+
+15.7 **测试口径**：`tests/t_ota_server.lua` 把 `system/kernel/ota.lua`（客户端）与 `ota/server.lua`（服务端）放在同一进程，
+stub rednet 只替换 modem（客户端 `send` → 服务端 `dispatch` → 回包进客户端 `receive`），其余全是真代码。覆盖：
+正常更新（小文件 + 一个 `8192+100` 的多块文件，逐条断言 8 条线上请求）、`valid_path` 双向差分（29 条路径 × 判定 + 原因）、
+`manifest_hash` 双向一致、客户端解析服务端 FILE/DATA 行后再哈希回服务端 `manifest_sha`、META 说谎 → 客户端 `rejected`、
+字节被改 → 下载校验失败 → 回滚到原字节、丢 DATA 回包 / 丢请求 → 重传后成功、`files=0`（服务端合法 `sha256("")`、客户端拒 `bad files`）、
+超大文件与非法路径两侧都拒、越界 idx、`retry()` 从 `rejected` 恢复、`serve()/stop()` 循环与 `receive` 抛错。基线见修订记录。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -526,3 +565,4 @@ tag 推送时建/刷新该 tag 的 release 并上传这个 zip。根 `README.md`
 - 2026-10-29: **P6-3 布局统一到单一 `/system` 树 + 恢复工具改文件集**。根的 `/startup.lua` 改成 1,071 B starter（只 `pcall(loadfile, "/system/startup.lua")` 并调用；加载失败/抛错打印 ASCII 并落回 shell，不 reboot）；`/kernel`、`/rpv`、`/net` 搬进 `/system/`，系统应用搬到 `/system/system/<name>.app`（`/etc`、`/apps` 留在根）；新增 `boot.migrate_layout()`（重命名式迁移、目标已存在则 skip、失败逆序回滚、fatal `layout_migrate_fail`，日志 `BOOT_MIGRATE_LAYOUT*`，可重入）；`recovery/proto.lua`/`flash.lua`/`bootstrap.lua` 改写为 `PYROET-FLASH/2` 文件集（`META version= manifest_sha= files=` + `<relpath> <size> <sha256>`、`GET <relpath> <idx>`、`DATA <relpath> idx= sha256= <hex>`，`MAX_DATA=8192`；无槽无指针，`P.target()` 取代 `P.ptr()`；暂存校验后才替换、失败按哈希逆序撤销、成功后写 `applied` journal 供试启动回滚）；`settings.app` 门禁文案改三层（`M.BUDGET=629145`/`M.STRETCH=349525`/`M.WINDOW=900000`/`M.BACKUP_CAP=200000`），launcher/settings 的系统应用扫描根改 `/system/system`；`install.set` 26 条、TOTAL **401,640 B / SIZE_WARN**、`WINDOW_OK sum=601,640`；离线 **2,880 pass / 0 fail / 158 groups**（P6-2 基线 2,651/149，+229 断言 / +9 组；新增 `tests/t_layout.lua`，三个 recovery 套件按文件集模型重写）；改动 lua 非 ASCII 计数 0。
 - 2026-10-29: **G2 清掉槽位时代的兜底读取**。`system/system/launcher.app/main.lua` 与 `system/system/settings.app/main.lua` 删除对 `/boot.slot`、`/slots/<x>/boot.ok`、`/slots/<x>/.image` 的全部读取分支和 `slot <x>`/`slot ?` 文案：`M.SLOT_PATH` → `M.BOOT_OK = "/boot.ok"`，`read_boot()` 只解析全局 `PYROET-BOOT-OK-2 version=.. manifest_sha=.. ts=..`（`manifest_sha` 为主键，P6 之前留在同一文件上的 `sha256` 作同义兜底，`none` 丢弃），新增 `M.short_sha()` 取前 8 位十六进制；launcher 行 1 变 `ver <v> sha <8hex>`（21 列），settings 变 `os <v>` + `image <v> sha <8hex>`（24 列），26x20 不越界、纯 ASCII；两个 app 的 `layout_selftest()` 各加一条“任何行不得再出现 slot”的检查。`tests/t_launcher.lua`/`t_settings.lua` 的 fixture 改全局 `/boot.ok`，槽位断言逐条替换为等价的全局标记断言（`slot a` → `no_slot_field` + `source=/boot.ok` + `sha abababab`、`.image` 兜底 → `manifest_sha=none` 被丢弃、`/boot.slot` 垃圾输入 → `/boot.ok` 垃圾输入、`H.absent(...,"slot")`），断言未删；`t_desktop` 的 fixture 本来已是全局凭据，未改。文档 §1.1/§2.2/§7.4/§10.5/§10.6/§11.2/§11.6 同步或标注 superseded，§13.9 记为已清账。离线 **2,890 pass / 0 fail / 158 groups**（P6-3 2,880/158，+10 断言）；TOTAL **401,769 B / SIZE_WARN**（+129 B）、`WINDOW_OK sum=601,769`；改动 lua 非 ASCII 计数 0。
 - 2026-10-29: **B7 接通发布（CI + 打包 + 根 README），口径见 §14**。`tools/build_release.py`：`VERSIONS` 增 `"pyroet-os": "1.0.0"`，`EXCLUDE_FROM_RELEASE` 增 `"pyroet-os": ("tests/", "tools/")`（按相对路径前缀匹配，`recovery/` 与两份文档保留在包内）。`.github/workflows/release-builds.yml` 按 itn-pass 同一模式补四处：dispatch 选项 `- pyroet-os`、tag `fromJSON` 名单加 `"pyroet-os"`、分支构建循环 `for project in sentinel cardkey pylib itn-pass pyroet-os`、`case` 分派 `sentinel|cardkey|pylib|itn-pass|pyroet-os)`；未重构任何行。根 `README.md` 加项目表一行（掌机类 Android OS、单树 + journal 文件集更新、含 EDL 式 `recovery/`）、构建命令一行（`python tools/build_release.py --project pyroet-os --out dist/release` → `dist/release/pyroet-os-v1.0.0.zip`，注明不含 `tests/`、`tools/`）、tag 名单一处。实测 `pyroet-os-v1.0.0.zip` **33 成员**（32 个 `pyroet-os/` 成员 + 根 `LICENSE`），同一内容重跑字节相同；**zip 的字节数与 sha256 刻意不写进本文档**——`DECISIONS.md` 自己是包内成员，写进去就改变哈希（构建输出与 release 页面才是可信来源）；成员含 `recovery/`(3)、`DECISIONS.md`、`P6-design.md`、`install.set`、`startup.lua`、`system/`(25)，不含 `tests/`、`tools/`。**其它项目零影响**：sentinel / cardkey / pylib / itn-pass 四包用 HEAD 版与新版脚本各构建一次，sha256 逐一相同（`d0fa417d…` / `686e1bb4…` / `e67772f1…` / `46575505…`）。本任务未改任何 `.lua`。
+- 2026-10-29: **O2 落地 OTA 服务端（分发中心侧）**。新增 `ota/server.lua`（636 行纯 ASCII，表模块 `local M = ... return M`）：`M.new{fs,log,rednet,channel,manifest|dir}`、`M.build_manifest(dir)`（发布目录 + `meta.txt` 侧车，按 relpath 排序算逐文件 sha256 与 §3.2 聚合哈希，`files=`/`manifest_sha=` 可选钉，白名单/0 字节/`F_MAX`/`MAX_FILES` 不合一律 fail-closed）、`M.handle(msg,sender)`（`GET meta`/`GET <idx>`/`GET <idx> <offset>` → `META`/`FILE`/`DATA`，非法请求回 `ERR reason=..`，非本协议前缀静默忽略）、`M.serve()`/`M.stop()`；常量、路径白名单、hex 大小写、offset 步长与末块长度全部与客户端逐项对齐（白名单是复制 + 双向差分，来源注释点名 `system/kernel/ota.lua:235-260`）。新增 `tests/t_ota_server.lua`（897 行 / **368 断言 / 10 组**），在同一进程用 stub rednet 把客户端与服务端接起来跑完整更新，含 `valid_path` 与 `manifest_hash` 双向交叉、线上 8 条请求逐条断言、META 说谎/字节改坏/丢 DATA 回包/丢请求/`files=0`/超大文件/非法路径/越界 idx/`retry()`/`serve()` 全路径。`tests/run.lua` 的 FILES 追加 `t_ota_server`，`tests/run-tests.ps1` stage `ota/*.lua` 并把 `ota\server.lua` 列入 `$required`。**不进镜像**：`install.set` 仍 26 条、TOTAL **401,778 B / SIZE_WARN / MARGIN 52,253**、`WINDOW_OK sum=601,778`；离线 **3,258 pass / 0 fail / 168 groups**（基线 2,890/158，**+368 断言 / +10 组**）；新增/改动 lua 非 ASCII 计数 0。文档新增 §15；发布 zip 的 `pyroet-os/` 成员会因 `build_release.py` 的 `rglob` 自动 +1（见 §15.6），本轮不改打包脚本。

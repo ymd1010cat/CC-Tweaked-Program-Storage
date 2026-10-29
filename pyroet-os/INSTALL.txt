@@ -1,0 +1,121 @@
+PYROET OS 1.0.0 -- INSTALL NOTES (CC:Tweaked)
+=============================================
+Plain ASCII on purpose: readable on a CC:Tweaked terminal too. All paths are
+in-game paths.
+
+0. PREREQUISITES
+- CC:Tweaked or a compatible CraftOS on a Pocket Computer (26x20 target;
+  smaller screens degrade to one status line).
+- 1,000,000 B computer storage (default quota). Before a system update keep
+  about 601,778 B free: image 401,778 B + backup cap 200,000 B.
+- Release archive pyroet-os-v1.0.0.zip (pyroet-os/ tree plus LICENSE).
+  tests/ and tools/ are NOT shipped (development material).
+- A modem for networking or a rednet install (side from /etc/network.conf,
+  default back). Without one the system still boots; net reports degraded.
+- /recovery/*.lua is optional for booting but is the only rescue path.
+
+1. ARCHIVE -> TARGET PATHS
+Copy each member with a prefix swap:
+  pyroet-os/startup.lua            -> /startup.lua
+  pyroet-os/system/startup.lua     -> /system/startup.lua
+  pyroet-os/system/boot.lua        -> /system/boot.lua
+  pyroet-os/system/kernel/*.lua    -> /system/kernel/*.lua
+  pyroet-os/system/rpv/*.lua       -> /system/rpv/*.lua
+  pyroet-os/system/net/*.lua       -> /system/net/*.lua
+  pyroet-os/system/system/*.app/** -> /system/system/*.app/**
+  pyroet-os/recovery/*.lua         -> /recovery/*.lua
+  pyroet-os/ota/*.lua              -> /ota/*.lua   (optional; publisher side only,
+                                                      never runs on the pocket)
+  pyroet-os/install.set            -> /etc/install.set   (optional)
+  pyroet-os/README.md              -> /docs/README.md    (optional)
+  pyroet-os/INSTALL.txt            -> /docs/INSTALL.txt  (optional)
+  pyroet-os/DECISIONS.md           -> /docs/DECISIONS.md (optional)
+  pyroet-os/P6-design.md           -> /docs/P6-design.md (optional)
+  LICENSE                          -> /docs/LICENSE      (optional)
+Rules: /startup.lua is the only file CraftOS runs; it must load
+/system/startup.lua. /apps and /etc are user data. /boot.ok, /boot.tries and
+/update.* are runtime state -- never copy them from the archive.
+
+2. GETTING FILES ONTO A POCKET
+A pocket cannot mount a disk, so a drive on a desktop is only a step.
+A. Rednet push (full image). Type or paste /recovery/proto.lua and
+   /recovery/bootstrap.lua (about 28 KB of text; Ctrl+V in the CC editor),
+   then run "recovery/bootstrap.lua". A desktop publisher sends
+   "PYROET-FLASH/2 PUSH meta ..." plus "PUSH DATA ..." on protocol
+   pyroet-flash. The receiver proves every file by SHA-256 and keeps the old
+   tree on any failure.
+B. Pastebin/wget when the server allows HTTP: fetch the small files, then
+   push or type the rest.
+C. Manual edit: fine for /startup.lua, /etc/*.conf and one test .app, not for
+   a 400 KB image.
+Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
+
+3. FIRST BOOT
+1. reboot. Expect a first frame like:
+     Pyroet OS 0.2.0
+     kernel ok
+     normal journal none
+2. The boot chain then returns to the ROM shell. Normal in 1.0.0: there is no
+   input/event service yet, so the desktop is a static first frame and the
+   shell is where you type commands.
+3. Check: cat /boot.ok ; tail /kernel.log
+   /boot.ok is one line:
+     PYROET-BOOT-OK-2 version=0.2.0 manifest_sha=none ts=<ms>
+4. "Pyroet OS: cannot load /system/startup.lua" or "startup failed" means the
+   image is incomplete or broken: see section 6.
+
+4. MINIMAL CONFIG
+/etc/network.conf (key=value, # comment, ip required):
+  ip=10.0.0.5
+  prefix=24
+  gateway=10.0.0.1
+  iface_side=back
+/etc/hosts.conf ("<hostname> <ipv4>"; there is no DNS client in 1.0.0):
+  router 10.0.0.1
+  server 10.0.0.10
+/etc/net.target (Net app probe target, "<ipv4> <port>"):
+  10.0.0.10 80
+The net service ships but is not registered by the default boot chain in
+1.0.0; inject its kernel spec to start it:
+  local spec = dofile("/system/net/service.lua").spec({ log = print })
+  -- pass { services = { spec } } to /system/startup.lua run(opts)
+
+5. UPDATE AND RECOVERY
+System OTA over rednet (protocol pyroet-ota, publisher rednet id 12):
+  local ota = dofile("/system/kernel/ota.lua").new({ host = 12, log = print })
+  ota:update() ; print(ota:status().state)
+It verifies the manifest hash and the backup cap BEFORE touching /system,
+stages every file, keeps the old bytes in /update.backup until commit, and
+rolls itself back on failure. Rescue reflash:
+  recovery/flash.lua --disk=/disk/firmware   (from a disk drive)
+  recovery/flash.lua --host=12               (from rednet)
+  recovery/bootstrap.lua                     (push receiver)
+Phases: describe -> stage+prove -> apply. A failed apply undoes itself by
+content hash; success writes an "applied" journal so the next boot trial-
+boots the image and falls back from /update.backup. User apps only (system
+apps change only through OTA):
+  local inst = dofile("/system/kernel/installer.lua").new({ log = print })
+  inst:install("hello") ; inst:list() ; inst:uninstall("hello")
+
+6. TROUBLESHOOTING
+Drops to shell with an ASCII error:
+- "cannot load /system/startup.lua": /system missing or unreadable. Re-copy
+  the tree, or run recovery/flash.lua from /recovery.
+- "startup failed" + reason: check "tail /kernel.log" for the last
+  STARTUP_*/BOOT_* line.
+Three failed boots: the bootloader rolled back to /update.backup. Look for
+BOOT_ROLLBACK*, cat /boot.ok (old version), ls /update.journal.*; then retry
+the update or reflash.
+"BOOT_ROLLBACK_FAIL" / "FLASH_REQUIRED tool=recovery/flash.lua": the backup
+cannot be proven; boot stops on purpose (no reboot loop). Reflash.
+"BOOT_FATAL reason=no_system": /system is gone; only a flash restores it.
+NET_* / health=degraded: config errors never block boot. Read the NET_* line;
+parse errors include the line number. Check modem, iface_side, ip.
+"capability denied: <cap>": /etc/perms/<app>.cfg denies it (or the app is not
+a system package). A corrupt decision file denies everything and is never
+rewritten; delete it to be asked again.
+"No such program": run recovery programs by path, e.g.
+"recovery/flash.lua --host=12".
+Storage: "df" shows free space; keep >= 601,778 B free before an update
+(401,778 image + 200,000 cap). A too-large update is refused before any byte
+is written. Keep /recovery on the machine: it is the only rescue path.

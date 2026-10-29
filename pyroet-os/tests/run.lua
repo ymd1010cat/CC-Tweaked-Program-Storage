@@ -11,6 +11,7 @@ Staged layout (created by tests/run-tests.ps1; since P6-3 the image is one
     /system/net/*.lua       network service + static hosts
     /system/system/*.app    launcher, settings, net (system apps, image payload)
     /recovery/*.lua         pyroet-os/recovery/proto.lua + flash.lua + bootstrap.lua
+    /ota/server.lua         pyroet-os/ota/server.lua (distribution side, not image)
     /install.set            pyroet-os/install.set (budget assertions)
     /tests/*.lua            this file, harness.lua and the t_*.lua suites
     /tests/root-startup.lua the computer-root starter pyroet-os/startup.lua
@@ -36,7 +37,7 @@ H.mkdirp(H.root)
 local FILES = { "t_boot", "t_kernel", "t_apps", "t_startup",
     "t_net_hosts", "t_net_service", "t_net_app",
     "t_permissions", "t_launcher", "t_settings", "t_desktop",
-    "t_installer", "t_ota",
+    "t_installer", "t_ota", "t_ota_server",
     "t_recovery_proto", "t_recovery_flash", "t_recovery_bootstrap",
     "t_layout", "t_budget" }
 

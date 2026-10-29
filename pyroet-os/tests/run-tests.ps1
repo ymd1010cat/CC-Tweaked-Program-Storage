@@ -13,6 +13,7 @@
 #     .tests/computer/20/system/net/*.lua        network service + static hosts
 #     .tests/computer/20/system/system/*.app     launcher, settings, net (system apps)
 #     .tests/computer/20/recovery/*.lua          pyroet-os/recovery/*.lua (dev tools)
+#     .tests/computer/20/ota/*.lua               pyroet-os/ota/*.lua (distribution side, not image)
 #     .tests/computer/20/install.set             pyroet-os/install.set (budget assertions)
 #     .tests/computer/20/tests/*.lua             this directory's runner + suites
 #     .tests/computer/20/tests/root-startup.lua  the ROM stub pyroet-os/startup.lua
@@ -56,7 +57,8 @@ foreach ($required in @("startup.lua", "system\startup.lua", "system\boot.lua",
         "system\system\net.app\manifest.lua", "system\system\net.app\main.lua",
         "system\system\launcher.app\manifest.lua", "system\system\launcher.app\main.lua",
         "system\system\settings.app\manifest.lua", "system\system\settings.app\main.lua",
-        "recovery\proto.lua", "recovery\flash.lua", "recovery\bootstrap.lua", "install.set")) {
+        "recovery\proto.lua", "recovery\flash.lua", "recovery\bootstrap.lua",
+        "ota\server.lua", "install.set")) {
     if (-not (Test-Path (Join-Path $osRoot $required))) {
         Write-Output "OFFLINE_ERROR missing source: pyroet-os/$required"
         exit 2
@@ -79,6 +81,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\net")    | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "recovery") | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $comp "ota") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\net.app") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\launcher.app") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\settings.app") | Out-Null
@@ -94,6 +97,9 @@ try {
     # image content; there is no /examples copy to drift against
     Copy-Item (Join-Path $osRoot "system\system\net.app\*") (Join-Path $comp "system\system\net.app") -Force
     Copy-Item (Join-Path $osRoot "recovery\*.lua")             (Join-Path $comp "recovery")           -Force
+    # the distribution side (ota/server.lua) is a dev tool like recovery/: it is
+    # staged so t_ota_server can drive it, and it is NOT in install.set
+    Copy-Item (Join-Path $osRoot "ota\*.lua")                  (Join-Path $comp "ota")                -Force
     Copy-Item (Join-Path $osRoot "install.set")                (Join-Path $comp "install.set")        -Force
     Copy-Item (Join-Path $osRoot "system\system\launcher.app\*") (Join-Path $comp "system\system\launcher.app") -Force
     Copy-Item (Join-Path $osRoot "system\system\settings.app\*") (Join-Path $comp "system\system\settings.app") -Force
