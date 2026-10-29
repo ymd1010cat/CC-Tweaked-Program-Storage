@@ -5,6 +5,10 @@ Each archive holds `<project>/` at its root plus the repository `LICENSE` at the
 zip root. Members use fixed timestamps and modes, so repeated builds are
 byte-identical (this is what the release workflow publishes).
 
+`EXCLUDE_FROM_RELEASE` drops development-only material from a project's archive
+(only `itn-pass` ships without its `tests/` tree; the other projects are
+unchanged, byte for byte).
+
 Usage:
     python tools/build_release.py                      # all projects -> dist/release
     python tools/build_release.py --project cardkey --out dist/release
@@ -16,7 +20,9 @@ import hashlib
 import zipfile
 from pathlib import Path
 
-VERSIONS = {"sentinel": "2.0.0", "cardkey": "2.0.0", "pylib": "1.0.0"}
+VERSIONS = {"sentinel": "2.0.0", "cardkey": "2.0.0", "pylib": "1.0.0", "itn-pass": "1.0.0"}
+# project -> relative-path prefixes that stay out of the release archive.
+EXCLUDE_FROM_RELEASE = {"itn-pass": ("tests/",)}
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 
 
@@ -37,6 +43,9 @@ def build(repo: Path, out: Path, project: str) -> Path:
 
     dest = out / f"{project}-v{VERSIONS[project]}.zip"
     files = sorted((p for p in src.rglob("*") if p.is_file()), key=lambda p: p.as_posix())
+    skip = EXCLUDE_FROM_RELEASE.get(project, ())
+    if skip:
+        files = [p for p in files if not p.relative_to(src).as_posix().startswith(skip)]
     with zipfile.ZipFile(dest, "w") as zf:
         for path in files:
             _add(zf, path, project + "/" + path.relative_to(src).as_posix())
