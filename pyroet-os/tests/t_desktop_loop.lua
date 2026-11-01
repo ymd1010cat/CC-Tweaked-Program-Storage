@@ -330,8 +330,9 @@ return function(H)
             -- net declares input now: Enter is a full handover (keyboard+screen),
             -- so this escape goes to net and quits it ...
             { "key", 15 },
-            -- ... the launcher gets the screen back, and this one quits the desktop
-            { "key", 15 },
+            -- ... the launcher gets the screen back, and Ctrl+T leaves the
+            -- desktop (q on the desktop is only a hint now)
+            { "terminate" },
         }
         local pull = function()
             pulls = pulls + 1
@@ -360,7 +361,7 @@ return function(H)
         H.check("boot_ok", result.ok == true, "boot failed")
         H.eq("boot_committed", result.committed, true)
         H.table("boot_desktop", result.desktop)
-        H.eq("boot_desktop_reason", result.desktop_reason, "quit")
+        H.eq("boot_desktop_reason", result.desktop_reason, "terminate")
         H.eq("boot_pulled", result.desktop and result.desktop.pulled, 4)
         H.ge("boot_ticked", result.desktop and result.desktop.ticked, 4)
         H.ge("boot_delivered", result.desktop and result.desktop.delivered, 4)
@@ -379,8 +380,8 @@ return function(H)
         H.has(lines, "DESKTOP_ENTRY app=launcher keys=6")
         local commit_at = H.index_of(lines, "STARTUP_COMMITTED")
         local enter_at = H.index_of(lines, "STARTUP_DESKTOP_ENTER")
-        local exit_at = H.index_of(lines, "DESKTOP_EXIT reason=quit")
-        local chain_exit = H.index_of(lines, "STARTUP_DESKTOP_EXIT reason=quit")
+        local exit_at = H.index_of(lines, "DESKTOP_EXIT reason=terminate")
+        local chain_exit = H.index_of(lines, "STARTUP_DESKTOP_EXIT reason=terminate")
         H.check("commit_before_enter", commit_at ~= nil and enter_at ~= nil
             and commit_at < enter_at, "commit=" .. tostring(commit_at)
             .. " enter=" .. tostring(enter_at))
@@ -396,7 +397,8 @@ return function(H)
         H.has(lines, "DESKTOP_EVENT n=1 event=key arg=down app=launcher")
         H.has(lines, "DESKTOP_EVENT n=2 event=key arg=enter app=launcher")
         H.has(lines, "DESKTOP_EVENT n=3 event=key arg=escape app=net")
-        H.has(lines, "DESKTOP_EVENT n=4 event=key arg=escape app=launcher")
+        H.has(lines, "DESKTOP_EVENT n=4 event=terminate app=-")
+        H.has(lines, "DESKTOP_TERMINATE scope=desktop event=terminate")
         H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=net")
         H.has(lines, "APP_LOG app=launcher msg=key=enter action=launch"
             .. " index=2 sel=net detail=net")
@@ -407,15 +409,14 @@ return function(H)
         H.has(lines, "APP_EXIT app=net")
         H.has(lines, "DESKTOP_FOREGROUND app=launcher reason=settle")
         H.has(lines, "APP_LOG app=launcher msg=focus msg=back from net")
-        H.has(lines, "APP_LOG app=launcher msg=quit key=escape")
-        H.has(lines, "APP_EXIT app=launcher")
-        H.has(lines, "DESKTOP_DETACH app=launcher reason=quit")
+        -- the desktop itself does not quit on a letter: it is still running,
+        -- the machine is just handed back to the shell by Ctrl+T
+        H.lacks("boot_no_launcher_quit", lines, "app=launcher msg=quit")
 
         -- one handling per event: two keys produced two app log lines (escape
         -- quits before it logs a key action), so nothing repainted in a loop
         H.eq("boot_key_logs", H.count(lines, "APP_LOG app=launcher msg=key="), 2)
-        H.eq("boot_launcher_state", result.apps:app("launcher").state, "stopped")
-        H.eq("boot_launcher_result", result.apps:app("launcher").result, "quit")
+        H.eq("boot_launcher_state", result.apps:app("launcher").state, "running")
         H.ascii_check("boot_logs_ascii", H.joined(lines))
     end
 
@@ -442,7 +443,7 @@ return function(H)
             { "key", 11 },   -- down -> net
             { "key", 14 },   -- enter -> handover to net (it declares input now)
             { "key", 15 },   -- escape -> net quits
-            { "key", 15 },   -- escape -> the launcher quits the desktop
+            { "terminate" }, -- Ctrl+T -> the desktop leaves for the shell
         }
         local pull = function()
             pulls = pulls + 1
@@ -475,7 +476,7 @@ return function(H)
 
         -- and the keyboard works: down moved the selection, enter handed net the
         -- keyboard+screen, escape quit net, the launcher came back and quit
-        H.eq("migrate_desktop_reason", result.desktop_reason, "quit")
+        H.eq("migrate_desktop_reason", result.desktop_reason, "terminate")
         H.has(lines, "STARTUP_DESKTOP_ENTER name=launcher source=injected")
         H.has(lines, "DESKTOP_EVENT n=1 event=key arg=down app=launcher")
         H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=net")
@@ -485,7 +486,7 @@ return function(H)
         H.has(lines, "DESKTOP_FOREGROUND app=launcher reason=settle")
         H.has(lines, "APP_LOG app=launcher msg=focus msg=back from net")
         H.eq("migrate_net_result", result.apps:app("net").result, "quit")
-        H.eq("migrate_launcher_result", result.apps:app("launcher").result, "quit")
+        H.eq("migrate_launcher_state", result.apps:app("launcher").state, "running")
         H.eq("migrate_pulls", pulls, 4)
         H.ascii_check("migrate_logs_ascii", H.joined(lines))
     end
@@ -847,6 +848,112 @@ end
     end
 
     -- -----------------------------------------------------------------
+    H.group("desktop_loop.leave")
+    -- Exit semantics of round 6: on the desktop q/Q/escape are only a hint -- the
+    -- machine stays; Ctrl+T is the way out, and it is scoped: while an app owns
+    -- the console it leaves the app, on the desktop it leaves the system.
+    do
+        H.rmrf("/etc/perms")
+        local dir = H.case_dir("loop", "leave")
+        bootable(dir)
+        local host = new_host()
+        host.keys = KEYS
+        local log, lines = H.logger()
+        local buf = S.buffer(51, 19)
+        local frames, pulls = {}, 0
+        local function snap()
+            local out = {}
+            for y = 1, 19 do out[y] = buf.row(y) end
+            return out
+        end
+        -- 1: q on the desktop (must stay)  2: terminate (must leave the system)
+        local events = { { "char", "q" }, { "terminate" } }
+        local pull = function()
+            frames[pulls + 1] = snap()
+            pulls = pulls + 1
+            local event = events[pulls]
+            if event == nil then return "terminate" end
+            return event[1], event[2]
+        end
+        local result = nil
+        local saved = rawget(_G, "PYROET_APP_NOPAINT")
+        rawset(_G, "PYROET_APP_NOPAINT", nil)
+        local okrun, why = pcall(function()
+            local okw, value = S.with_term(buf, function()
+                return startup.run({
+                    fs = F,
+                    root = dir,
+                    log = log,
+                    apps_root = dir .. "/apps",
+                    input = host,
+                    pull_event = pull,
+                    terminal = buf,
+                    start_timer = function() return 7 end,
+                    reboot = function() error("rebooted unexpectedly") end,
+                    frame = function() return true end,
+                })
+            end)
+            result = value
+            return okw
+        end)
+        rawset(_G, "PYROET_APP_NOPAINT", saved)
+        H.check("leave_run_ok", okrun and why == true, tostring(result))
+        -- q did NOT leave the system: the desktop ran until the terminate
+        H.eq("leave_reason", result and result.desktop_reason, "terminate")
+        H.eq("leave_pulled", result and result.desktop.pulled, 2)
+        H.has(lines, "APP_LOG app=launcher msg=leave hint char=q scope=desktop")
+        H.has(lines, "DESKTOP_TERMINATE scope=desktop event=terminate")
+        H.lacks("leave_no_quit", lines, "app=launcher msg=quit")
+        H.lacks("leave_no_detach_quit", lines, "reason=quit")
+        -- the frame after q is still the desktop, with the hint verbatim on row 18
+        local after_q = frames[2]
+        local joined = table.concat(after_q or {}, "\n")
+        H.contains("leave_list_still_there", joined, "apps sel")
+        H.eq("leave_hint_row", ((after_q or {})[18] or ""):sub(1, 23),
+            "Ctrl+T leaves Pyroet OS")
+        H.contains("leave_marker", joined, ">")
+        H.ascii_check("leave_ascii", H.joined(lines))
+
+        -- and while an app owns the console, terminate leaves the APP only
+        H.rmrf("/etc/perms")
+        local dir2 = H.case_dir("loop", "leave_app")
+        bootable(dir2)
+        local host2 = new_host()
+        host2.keys = KEYS
+        local log2, lines2 = H.logger()
+        local events2 = {
+            { "key", 11 },      -- down -> net
+            { "key", 14 },      -- enter -> handover to net
+            { "terminate" },    -- scope=app: net quits, the desktop stays
+            { "terminate" },    -- scope=desktop: now it leaves
+        }
+        local pulls2 = 0
+        local pull2 = function()
+            pulls2 = pulls2 + 1
+            local event = events2[pulls2]
+            if event == nil then return "terminate" end
+            return event[1], event[2]
+        end
+        local result2 = startup.run({
+            fs = F,
+            root = dir2,
+            log = log2,
+            apps_root = dir2 .. "/apps",
+            input = host2,
+            pull_event = pull2,
+            start_timer = function() return 7 end,
+            reboot = function() error("rebooted unexpectedly") end,
+            frame = function() return true end,
+        })
+        H.eq("leave_app_reason", result2.desktop_reason, "terminate")
+        H.has(lines2, "DESKTOP_TERMINATE scope=app app=net event=terminate")
+        H.has(lines2, "APP_EXIT app=net")
+        H.has(lines2, "DESKTOP_FOREGROUND app=launcher reason=settle")
+        H.has(lines2, "DESKTOP_TERMINATE scope=desktop event=terminate")
+        H.eq("leave_app_pulls", pulls2, 4)
+    end
+
+    -- -----------------------------------------------------------------
     H.group("desktop_loop.terminate")
     do
         H.rmrf("/etc/perms")
@@ -1003,11 +1110,16 @@ end
             log = function() end,
         }
         local state = LAUNCHER.build(api)
+        -- q / Q / escape are "back" on the desktop: they only draw the hint and
+        -- never leave Pyroet OS (Ctrl+T is the way out, asserted below)
         H.eq("map_escape", LAUNCHER.dispatch_event(state, "key", "escape", nil, api),
-            "quit")
-        H.eq("map_q", LAUNCHER.dispatch_event(state, "char", "q", nil, api), "quit")
+            "repaint")
+        H.eq("map_escape_hint", state.message, LAUNCHER.LEAVE_HINT)
+        H.eq("map_q", LAUNCHER.dispatch_event(state, "char", "q", nil, api), "repaint")
+        H.eq("map_q_hint", state.message, LAUNCHER.LEAVE_HINT)
         H.eq("map_q_upper", LAUNCHER.dispatch_event(state, "char", "Q", nil, api),
-            "quit")
+            "repaint")
+        H.eq("map_leave_hint", LAUNCHER.LEAVE_HINT, "Ctrl+T leaves Pyroet OS")
         H.eq("map_unknown_char",
             LAUNCHER.dispatch_event(state, "char", "z", nil, api), "none")
         H.eq("map_unknown_event",

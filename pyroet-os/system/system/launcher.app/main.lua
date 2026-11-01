@@ -50,6 +50,10 @@ M.ROOTS = { "/apps", "/system/system" }
 M.BOOT_OK = "/boot.ok"
 M.RECENT_PATH = "/etc/launcher.recent"
 M.HINT = "up/dn enter run"
+-- leaving Pyroet OS is Ctrl+T (the ROM `terminate` event), never a letter:
+-- q used to drop the whole machine to the CraftOS shell, which is not what
+-- "back" means on this desktop.
+M.LEAVE_HINT = "Ctrl+T leaves Pyroet OS"
 M.SCAN_INTERVAL = 10
 
 -- printable ASCII only, truncated or padded to exactly `cols` columns
@@ -637,6 +641,23 @@ function M.paint_once(state, api, term)
     return lines
 end
 
+-- the keys that mean "back" -- and, on this desktop, "how do I leave".
+M.ESCAPE_CODE = 256
+M.QUIT_CODES = { [16] = true, [81] = true, [256] = true }
+
+function M.quit_key(key, api)
+    if type(key) == "number" then
+        if M.QUIT_CODES[key] then return true end
+        local name = M.code_name(key, api)
+        if name ~= nil then key = name
+        elseif key == M.ESCAPE_CODE then key = "escape"
+        else return false end
+    end
+    if type(key) ~= "string" then return false end
+    key = key:lower()
+    return key == "q" or key == "escape" or key == "quit"
+end
+
 -- one normalized event in, one action out. The dispatcher delivers `key`
 -- events with a key *name* ("up", "enter", "escape"), everything else raw; a
 -- raw keycode is accepted as well and normalized through the ROM's keys table.
@@ -644,20 +665,29 @@ end
 -- ("move" | "select" | "launch" | "error" | "denied" | "repaint" | "none").
 function M.dispatch_event(state, event, p1, p2, api)
     if event == "key" then
+        if M.quit_key(p1, api) then
+            -- back is not "leave the machine": say how to leave and stay here
+            state.message = M.LEAVE_HINT
+            M.note(api, "leave hint key=" .. tostring(p1) .. " scope=desktop")
+            return "repaint"
+        end
         local key = p1
         if type(key) == "number" then
             key = M.code_name(key, api)
             if key == nil then return "none" end
         end
         key = tostring(key == nil and "" or key)
-        if key == "escape" then return "quit", "escape" end
         local action, detail = M.handle_key(state, key, api)
         M.note_key(api, state, key, action, detail)
         return action, detail
     end
     if event == "char" then
         local ch = tostring(p1 == nil and "" or p1)
-        if ch == "q" or ch == "Q" then return "quit", "q" end
+        if ch == "q" or ch == "Q" then
+            state.message = M.LEAVE_HINT
+            M.note(api, "leave hint char=" .. ch .. " scope=desktop")
+            return "repaint"
+        end
         if ch:match("^%d$") then
             local action, detail = M.handle_key(state, ch, api)
             M.note_key(api, state, ch, action, detail)

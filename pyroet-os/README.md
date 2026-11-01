@@ -139,8 +139,9 @@ pyroet-os/
        ├─ 8. boot.commit()      写全局 /boot.ok，删 journal 与 /update.backup
        └─ 9. 常驻桌面对话循环    commit 后**不返回**：kernel/desktop.lua 持有一个阻塞
                                 os.pullEvent，把事件规范化后投给前台应用（launcher）；
-                                只有 `q` / Ctrl+T / 循环自身的正常退出才回 ROM shell
-                                （`keys.escape` 在 CraftOS-PC 里不存在，Esc 不一定投递）
+                                只有 **Ctrl+T**（ROM 的 `terminate`）才回 ROM shell；
+                                桌面上按 `q`/`Q`/Esc 只写一行 `Ctrl+T leaves Pyroet OS`，
+                                应用内按它们则退回 launcher（应用内 Ctrl+T 也是先退应用）
 ```
 
 任何会让机器起不来的错误都走 `os.reboot()`（让 `/boot.tries` 记账生效），而**不** commit；
@@ -588,7 +589,7 @@ python tools/build_release.py --project pyroet-os --out dist/release
 | 系统应用 | launcher 0.2.0（D1：+5,209 B；D1-fix 第二轮：+2,476 B，两种按键形态；第三轮：+403 B，desk_focus）/ settings 0.2.0（T14：20,548→31,350 B，可键盘编辑并落盘）/ installer 0.2.0（T14：33,774→38,907 B，交接即可操作）/ net 0.2.0（T14：15,493→20,319 B，刷新/滚动） |
 | `installer.app`（T1/T4） | 0.1.0，34,853 B（main.lua 33,774 + manifest.lua 1,079） |
 | OTA 服务端（`ota/server.lua`） | 1.0，27,927 B（不进镜像） |
-| 镜像 | 29 条 / 540,181 B / `SIZE_WARN` / `WINDOW_OK sum=740181` |
+| 镜像 | 29 条 / 542,283 B / `SIZE_WARN` / `WINDOW_OK sum=742283` |
 
 设计口径以 [`DECISIONS.md`](DECISIONS.md)（架构、门禁、发布）与 [`P6-design.md`](P6-design.md)
 （文件集更新、journal、崩溃窗口、bootloader 决策表）为准；本文是面向使用者的入口，

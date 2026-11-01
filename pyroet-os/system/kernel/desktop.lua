@@ -545,6 +545,25 @@ function D:dispatch(event, p1, p2, p3)
     end
     local name, a1, a2, a3 = D.normalize(self, event, p1, p2, p3)
     if name == "terminate" or name == "shutdown" then
+        -- Ctrl+T is the only way out of the desktop, but it is scoped: while an
+        -- app owns the console it means "leave this app" (the same event the
+        -- app's own quit path uses), and only on the desktop does it leave the
+        -- whole system for the CraftOS shell.
+        if self.loan ~= nil then
+            self:log("DESKTOP_TERMINATE scope=app app=" .. short(self.loan.name, 24)
+                .. " event=" .. short(name, 16))
+            self:loan_end("terminate")
+            return false
+        end
+        if self.foreground ~= self.name then
+            local before = self:running_inputs()
+            self:log("DESKTOP_TERMINATE scope=app app=" .. short(self.foreground, 24)
+                .. " event=" .. short(name, 16))
+            self:deliver(name, p1, p2, p3)
+            self:tick()
+            return self:settle(before)
+        end
+        self:log("DESKTOP_TERMINATE scope=desktop event=" .. short(name, 16))
         self:log("DESKTOP_EVENT n=" .. tostring(self.pulled) .. " event="
             .. short(name, 16) .. " app=-")
         return true, "terminate"
