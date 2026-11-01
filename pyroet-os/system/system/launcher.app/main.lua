@@ -666,6 +666,14 @@ function M.dispatch_event(state, event, p1, p2, api)
         return "none"
     end
     if event == "term_resize" then return "repaint" end
+    -- the desktop hands the screen back (a screen loan just ended): show why and
+    -- repaint now, because a loaned app that could not take the keyboard gives
+    -- the launcher no other event to wake up on
+    if event == "desk_focus" then
+        state.message = tostring(p1 == nil and "desktop" or p1)
+        M.note(api, "focus msg=" .. tostring(state.message))
+        return "repaint"
+    end
     return "none"
 end
 

@@ -81,6 +81,13 @@ D.KEY_NAMES = { "up", "down", "left", "right", "enter", "escape", "backspace",
 -- gives the desktop a third exit next to `q` and Ctrl+T (`terminate`).
 D.ESCAPE_CODE = 256
 
+-- how long a screen loan may last, in seconds, when the app declared no `input`
+-- (it can never hand the screen back itself) and does not stop on its own
+D.LOAN_SECONDS = 15
+-- fallback bound for a machine whose event source cannot start a timer: after
+-- this many events the loan ends anyway (never a dead end)
+D.LOAN_EVENTS = 40
+
 local function short(value, max)
     local s = tostring(value == nil and "nil" or value)
     s = s:gsub("[\r\n\t]+", " ")
@@ -146,10 +153,18 @@ function D.new(opts)
     self.ticked = 0
     self.handovers = 0
     self.foreground = self.name
-    -- apps the desktop parked: launched, but they cannot own the console (no
-    -- `input`), so they never get a time slice and can never paint over it
+    -- apps the desktop parked: launched, the loan is over (or they never had a
+    -- screen), and they are frozen so they can never paint over the desktop
     self.parked = {}
     self.parked_count = 0
+    -- the one screen loan in flight (see D:loan_start)
+    self.loan = nil
+    self.loans = 0
+    self.loan_ends = 0
+    self.loan_seconds = o.loan_seconds
+    self.loan_events = o.loan_events
+    if self.loan_seconds == nil then self.loan_seconds = D.LOAN_SECONDS end
+    self.start_timer = o.startTimer
     self.reason = nil
     self.exited = false
     return self
@@ -185,6 +200,9 @@ function D:state()
         handovers = self.handovers,
         foreground = self.foreground,
         parked = self.parked_count,
+        loans = self.loans,
+        loan_ends = self.loan_ends,
+        loan = self.loan and self.loan.name or nil,
         reason = self.reason,
         exited = self.exited,
     }
@@ -279,12 +297,127 @@ function D:tick()
     self.ticked = self.ticked + 1
     -- parked apps are handed to the scheduler as a skip map: they stay running
     -- but never get a time slice, so they cannot paint over the foreground
-    local ok, advanced = pcall(self.rt.tick, self.rt, self.parked)
+    local skip = {}
+    for name in pairs(self.parked) do skip[name] = true end
+    if self.loan ~= nil then
+        -- during a loan the loaned app owns the screen: only it runs, so the
+        -- launcher cannot take the screen back behind the app's frame
+        local all = self:running_all()
+        for name in pairs(all) do
+            if name ~= self.loan.name then skip[name] = true end
+        end
+    end
+    local ok, advanced = pcall(self.rt.tick, self.rt, skip)
     if not ok then
         self:log("DESKTOP_TICK_FAIL err=" .. short(advanced))
         return false
     end
     return advanced ~= nil
+end
+
+-- ---------------------------------------------------------------------------
+-- screen loans (D1-fix round 3)
+-- ---------------------------------------------------------------------------
+--
+-- Parking made a launched app invisible, which reads as "Enter did nothing": the
+-- user pressed Enter on `installer` and the screen never changed. A desktop app
+-- must be *seen*. The rule now is:
+--
+--   * an app that declares `input` gets the keyboard and the screen (handover);
+--   * any other launched app gets a **screen loan**: it is scheduled for real,
+--     the launcher is not scheduled at all (so it cannot repaint over the app),
+--     its own first frame lands on the screen -- and the loan ends when the app
+--     stops by itself, or, because an app without a keyboard can never hand the
+--     screen back, when the loan timer fires.
+--
+-- The loan ends with the launcher focused again: it is told why via a
+-- `desk_focus` event (`display only: <name>`), so it repaints immediately
+-- instead of waiting for a key that no app is going to give it.
+
+function D:park_one(name, reason)
+    if name == nil or self.parked[name] then return false end
+    self.parked[name] = true
+    self.parked_count = self.parked_count + 1
+    self:log("DESKTOP_PARK app=" .. short(name, 24) .. " reason=" .. short(reason, 16))
+    return true
+end
+
+function D:loan_start(name)
+    if name == nil then return false end
+    if self.loan ~= nil then self:loan_end("replaced") end
+    local all = self:running_all()
+    local entry = all[name]
+    self.loan = { name = name, timer = nil, events = 0 }
+    self.loans = self.loans + 1
+    self:log("DESKTOP_LOAN app=" .. short(name, 24) .. " reason=no_input"
+        .. " caps=" .. tostring(#((entry and entry.capabilities) or {})))
+    -- bound the loan: without a keyboard the app can never hand the screen back,
+    -- so a timer (and, as a fallback, an event count) guarantees the machine is
+    -- not stuck on a frame nobody can leave
+    if type(self.start_timer) == "function" and (self.loan_seconds or 0) > 0 then
+        local called, id = pcall(self.start_timer, self.loan_seconds)
+        if called then
+            self.loan.timer = id
+            self:log("DESKTOP_LOAN_TIMER id=" .. short(id, 12)
+                .. " seconds=" .. tostring(self.loan_seconds))
+        else
+            self:log("DESKTOP_LOAN_TIMER_FAIL err=" .. short(id, 40))
+        end
+    else
+        self:log("DESKTOP_LOAN_TIMER_SKIP reason=no_timer")
+    end
+    -- draw the app's first frame now: "started" on the launcher's hint row is
+    -- not the same as the app being visible
+    self:tick()
+    return true
+end
+
+function D:loan_end(reason)
+    if self.loan == nil then return false end
+    local name = self.loan.name
+    self.loan = nil
+    self.loan_ends = self.loan_ends + 1
+    -- parked *after* the loan, never during it: frozen, so it cannot paint again
+    self:park_one(name, "loan_over")
+    self:log("DESKTOP_LOAN_END app=" .. short(name, 24) .. " reason=" .. short(reason, 16))
+    self.foreground = self.name
+    self.handovers = self.handovers + 1
+    self:log("DESKTOP_FOREGROUND app=" .. short(self.name, 24) .. " reason=loan_end")
+    -- the launcher gets the screen back: push the reason and step it once so the
+    -- desktop frame is actually on screen when the loan ends
+    self:deliver("desk_focus", "display only: " .. name)
+    self:tick()
+    return true
+end
+
+-- a loan ends when the app stops by itself (its body returned)
+function D:loan_stopped()
+    if self.loan == nil then return false end
+    local all = self:running_all()
+    if all[self.loan.name] == nil then return self:loan_end("stopped") end
+    return false
+end
+
+-- apps that started during this step: an input app is the handover path, every
+-- other one takes a screen loan
+function D:launched(before_all)
+    if self.loan ~= nil then return nil end
+    local after = self:running_all()
+    local names = {}
+    for name in pairs(after) do
+        if before_all[name] == nil and name ~= self.name and not self.parked[name] then
+            names[#names + 1] = name
+        end
+    end
+    table.sort(names)
+    for i = 1, #names do
+        local entry = after[names[i]]
+        if not D.has_cap(entry, "input") then
+            self:loan_start(names[i])
+            return names[i]
+        end
+    end
+    return nil
 end
 
 function D.normalize(self, event, p1, p2, p3)
@@ -311,31 +444,6 @@ function D:detach_reason()
     return short(record.result, 24)
 end
 
--- Park every app that was started during this step and cannot own the console.
--- The desktop is one screen and one keyboard: an app without `input` can never
--- become the foreground, so giving it a time slice only lets it fight over a
--- console it does not own. That is exactly what happened on the real machine:
--- pressing Enter on `installer` started it, and on every tick the launcher did
--- not repaint (the `key_up` after each key press) the installer's own frame
--- (`s <pkg>` rows, its stale marker) landed on the screen -- which the user saw
--- as "an S in front of every entry" and "the selection does not move".
--- Background work belongs to a kernel service, not to a launched desktop app.
-function D:park(before_all)
-    local rt = self.rt
-    if type(rt) ~= "table" or type(rt.status) ~= "function" then return end
-    local after = self:running_all()
-    for name, entry in pairs(after) do
-        if before_all[name] == nil and name ~= self.name
-            and not D.has_cap(entry, "input") and not self.parked[name] then
-            self.parked[name] = true
-            self.parked_count = self.parked_count + 1
-            self:log("DESKTOP_PARK app=" .. short(name, 24)
-                .. " reason=no_input caps="
-                .. tostring(#(entry.capabilities or {})))
-        end
-    end
-end
-
 -- runs after the tick: did the desktop leave, who owns the keyboard, and did a
 -- launched app have to be parked (it can never own the console)
 function D:settle(before)
@@ -346,6 +454,12 @@ function D:settle(before)
         self:log("DESKTOP_DETACH app=" .. short(self.name, 24)
             .. " reason=" .. short(reason, 24))
         return true, reason
+    end
+
+    -- the screen loan (if any) ended because the app itself stopped
+    if self.loan ~= nil then
+        self:loan_stopped()
+        return false
     end
 
     -- an app that declared input started during this step: the launcher just
@@ -387,6 +501,36 @@ function D:dispatch(event, p1, p2, p3)
             .. short(name, 16) .. " app=-")
         return true, "terminate"
     end
+
+    -- the loan timer: a loaned app has no keyboard, so this is how the screen
+    -- comes back to the desktop when the app never stops on its own
+    if self.loan ~= nil and name == "timer" then
+        local timer = self.loan.timer
+        local mine = (timer == nil) or (a1 == timer)
+        if mine then
+            self:log("DESKTOP_EVENT n=" .. tostring(self.pulled) .. " event=timer"
+                .. " arg=" .. short(a1, 20) .. " app=" .. short(self.loan.name, 24))
+            self:loan_end("timeout")
+            return false
+        end
+    end
+
+    -- a loan is in flight: the loaned app owns the screen and has no keyboard,
+    -- so the event is not delivered to anyone (it is logged, never silent)
+    if self.loan ~= nil then
+        self:log("DESKTOP_EVENT n=" .. tostring(self.pulled) .. " event=" .. short(name, 16)
+            .. " arg=" .. short(a1, 20) .. " app=-")
+        self:tick()
+        if self:loan_stopped() then return false end
+        -- fallback bound: a handful of events is also enough to end a loan when
+        -- the ROM has no startTimer (the timer is the primary one)
+        self.loan.events = (self.loan.events or 0) + 1
+        if self.loan.events >= (self.loan_events or D.LOAN_EVENTS) then
+            self:loan_end("events")
+        end
+        return false
+    end
+
     local before = self:running_inputs()
     local before_all = self:running_all()
     local target = self.foreground
@@ -407,7 +551,9 @@ function D:dispatch(event, p1, p2, p3)
         .. " arg=" .. short(a1, 20) .. " app=" .. short(target, 24))
     self:deliver(name, a1, a2, a3)
     self:tick()
-    self:park(before_all)
+    -- an app started during this tick either takes the keyboard (handover) or
+    -- the screen (loan); the launcher is never left thinking it still owns it
+    self:launched(before_all)
     return self:settle(before)
 end
 

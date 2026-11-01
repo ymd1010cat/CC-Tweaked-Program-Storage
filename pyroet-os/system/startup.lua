@@ -644,6 +644,11 @@ function P.start_desktop_loop(ctx, o, log)
         name = ctx.launcher,
         log = log,
         max_events = o.desktop_events,
+        -- a screen loan has to end by itself when the app cannot take the
+        -- keyboard: the desktop starts one timer per loan (tests inject one)
+        startTimer = o.start_timer or (type(rawget(_G, "os")) == "table"
+            and rawget(_G, "os").startTimer or nil),
+        loan_seconds = o.loan_seconds,
     })
     if not okn or type(desktop) ~= "table" then
         log("STARTUP_DESKTOP_FAIL err=" .. short(desktop))

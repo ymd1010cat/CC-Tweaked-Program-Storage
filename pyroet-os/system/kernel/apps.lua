@@ -97,6 +97,11 @@ An app body's return value is kept: `status().apps[i].result` and the record's
 `"quit"` out of it to hand the machine back to the shell; the runtime itself
 only records the word and never acts on it.
 
+A refused start is never silent: every `start` that answers `nil, err` also
+writes one `APP_START_DENIED name=.. reason=no_such_app|killed|already_running|..`
+line. The `already_running` case is what a desktop app launching *itself* looks
+like, so "press Enter on the launcher again" leaves a record instead of nothing.
+
 Usage:
 
     local apps = dofile("/system/kernel/apps.lua")
@@ -844,9 +849,21 @@ end
 
 function A:start(name)
     local record = self.index[name]
-    if not record then return nil, "no such app: " .. tostring(name) end
-    if record.state == "killed" then return nil, "app is killed: " .. name end
+    if not record then
+        -- D1-fix: a refusal is never silent -- the desktop shows the launcher's
+        -- message and /kernel.log has the one line that says why
+        self:log("APP_START_DENIED name=" .. short(name, 40) .. " reason=no_such_app")
+        return nil, "no such app: " .. tostring(name)
+    end
+    if record.state == "killed" then
+        self:log("APP_START_DENIED name=" .. record.name .. " reason=killed")
+        return nil, "app is killed: " .. name
+    end
     if record.state == "running" or record.state == "paused" then
+        -- this is also the launcher-launched-itself path: the desktop is already
+        -- running, so starting it again is refused and recorded, not ignored
+        self:log("APP_START_DENIED name=" .. record.name .. " reason=already_running"
+            .. " state=" .. tostring(record.state))
         return nil, "app already running: " .. name
     end
     local limit = record.manifest.max_starts or self.max_starts

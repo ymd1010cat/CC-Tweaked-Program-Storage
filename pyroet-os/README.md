@@ -247,12 +247,7 @@ app 的 `api.input.pullEvent` 是这个队列的**弹出一格**——没事件�
 所以 app 永远不会把整机阻塞在别人的事件源里。队列有上限（`INPUT_QUEUE_MAX = 32`），不抽的 app
 只丢掉最旧的事件，不会无限增长。
 
-第三条边界（D1-fix 第二轮）：**桌面是一块屏幕、一套键盘**。本步新启动、却没有声明 `input` 的 app
-永远当不了前台，于是被**停车**（`DESKTOP_PARK app=.. reason=no_input`）：它保持 `running`、但不再
-获得时间片，因此不可能画到桌面的屏幕上。镜像里的 `settings` / `installer` / `net` 都不声明 `input`，
-所以从桌面按 Enter 启动它们只会看到 `started <name>`（它们不会顶掉列表，也不会画自己的界面）；要交互
-的 app 必须自己声明 `input`（启动即接管键盘，退出后键盘回 launcher）。桌面阶段启动链的日志只写
-`/kernel.log`、不再 `print`（`STARTUP_DESKTOP_QUIET`），否则每条事件都会把桌面帧顶上一行。
+第三条边界（D1-fix 第三轮）：**桌面是一块屏幕、一套键盘**。从桌面启动一个声明了 `input` 的 app 就是交接（键盘 + 屏幕都归它）；启动其它 app（形象里 `settings` / `installer` / `net` 都不声明 `input`）时给它**屏幕租借**：`DESKTOP_LOAN app=.. reason=no_input caps=..`，立刻多跑一步把它自己的首帧画上去，期间**只调度它**（launcher 不跑，所以不会被覆盖）；租借结束时它被停车（`DESKTOP_PARK reason=loan_over`）、launcher 收到 `desk_focus` 立刻重画，提示行写`display only: <name>`。结束条件三选一：app 自己停（`reason=stopped`）、定时器（`DESKTOP_LOAN_TIMER seconds=15` → `reason=timeout`，硬兜底）、事件数兜底（`reason=events`）。不会再有“按了 Enter 什么都没有”：要么应用界面出来，要么屏幕上有一行可读状态，要么 `/kernel.log` 有原因（`APP_START_DENIED` / `DESKTOP_LOAN*`）。
 
 compat：manifest **不写** `capabilities` = 声明空列表 = 全部拒绝，**没有隐式授权**；旧包在 `input` /
 `terminal` 存在之前本来就拿不到这两样，现在只是这两个字段以**桩**的形式出现，包照常加载、启动、退出。
@@ -512,7 +507,7 @@ WINDOW_OK  : sum=648380 limit=900000
 | **无 ICMP / 无 ping** | `icmp` 模块已裁；`probe()` 用 UDP 一发一收，所以"端口无响应 / 主机不在线 / 被丢弃"对外都只能表现为 timeout |
 | **无 DHCP / NAT / 路由 / WAN ACL / 多跳** | `nat`/`wan`/`wansec`/`fabric`/`topo`/`qos`/`mcast`/`dv` 全部裁掉；掌机只做端点，不转发、不做网关 |
 | **cap 只是 API 收口，不是沙盒** | app 与内核共享一个 Lua VM 与全局表；`fs`/`net`/`term`/`os.pullEvent` 的约束只对"经过 `api` 的调用"成立，绕过 `api` 直接摸全局拦不住（`input`/`terminal` 与另外七个 cap 同一强度） |
-| **桌面只有 launcher 是交互的** | D1 之后整机有事件循环（`kernel/desktop.lua`），键盘归**前台应用**，而镜像里只有 launcher 声明了 `input`。从桌面启动一个**没有** `input` 的 app（settings / installer / net）会被**停车**（`DESKTOP_PARK app=.. reason=no_input`）：它保持 running、但不再获得时间片，所以不会画出界面、也不会顶掉桌面（D1-fix 第二轮；此前它们每 tick 重画自己的帧，表现正是"每行前面一个 s、方向键选不动"）。要交互，包必须自己声明 `input`，启动时就会**接管键盘**，停掉再把键盘交回 launcher |
+| **桌面只有 launcher 是交互的** | D1 之后整机有事件循环（`kernel/desktop.lua`），键盘归**前台应用**，而镜像里只有 launcher 声明了 `input`。从桌面启动一个**没有** `input` 的 app（settings / installer / net）会得到**屏幕租借**：它的首帧会出现在屏幕上（launcher 让位），但它拿不到键盘，所以租借由定时器（15 s）或它自己停下来结束，然后 launcher 重画并提示 `display only: <name>`。**要交互**，包必须自己声明 `input`（启动即**接管键盘**，停掉再把键盘交回 launcher） |
 | **没有 `/etc/network.conf` 就没有网络** | `net` 服务由启动链默认注册（§3.1），但配置是用户数据：文件不存在就跳过（`STARTUP_NET_SKIP reason=no_config`），不猜默认地址、不写默认配置 |
 | **settings 严格只读** | 只声明 `fs.read`，没有任何写路径；看得到配置，改不了配置 |
 | **无中文** | CJK 字库与三件套全部删除（省 1,440,360 B）；界面与日志纯 ASCII，原版 CC 字体即可显示 |
@@ -585,15 +580,15 @@ python tools/build_release.py --project pyroet-os --out dist/release
 | --- | --- |
 | 发布版本 | 1.0.0（`pyroet-os-v1.0.0.zip`） |
 | `/startup.lua` starter | 1,070 B（`DECISIONS.md` §13.11 的 1,071 B 为旧读数） |
-| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，40,117 B（D1：+8,896 B，输入队列宿主 + 第 9 步常驻循环；D1-fix：+786 B，进循环前的授予集检查；T4：+2,345 B；O3：+821 B） |
+| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，40,435 B（D1：+8,896 B，输入队列宿主 + 第 9 步常驻循环；D1-fix：+786 B，进循环前的授予集检查；T4：+2,345 B；O3：+821 B） |
 | bootloader | `M.VERSION = 2.0`，45,623 B |
-| kernel / apps / permissions / desktop | 1.0 / 1.0 / 1.0 / 1.0（13,958 / 38,841 / 21,449 / 16,970 B；D1：apps +808 B 记录 body 返回值、新增 desktop.lua；D1-fix：permissions +2,628 B，陈旧决策文件按"未决定"迁移） |
+| kernel / apps / permissions / desktop | 1.0 / 1.0 / 1.0 / 1.0（13,958 / 39,475 / 21,449 / 22,802 B；D1：apps +808 B 记录 body 返回值、新增 desktop.lua；D1-fix：permissions +2,628 B，陈旧决策文件按"未决定"迁移） |
 | installer / ota | 1.0 / 2.0（17,295 / 31,877 B；N1：+3,854 / +3,566 B，size 校验） |
 | rpv 子集 | 10 文件 / 131,590 B（9 模块 + loader） |
-| 系统应用 | launcher 0.2.0（D1：+5,209 B；D1-fix 第二轮：+2,476 B，两种按键形态；常驻桌面循环）/ settings 0.1.0 / installer 0.1.0 / net 0.1.0 |
+| 系统应用 | launcher 0.2.0（D1：+5,209 B；D1-fix 第二轮：+2,476 B，两种按键形态；第三轮：+403 B，desk_focus；常驻桌面循环）/ settings 0.1.0 / installer 0.1.0 / net 0.1.0 |
 | `installer.app`（T1/T4） | 0.1.0，34,853 B（main.lua 33,774 + manifest.lua 1,079） |
 | OTA 服务端（`ota/server.lua`） | 1.0，27,927 B（不进镜像） |
-| 镜像 | 29 条 / 501,795 B / `SIZE_WARN` / `WINDOW_OK sum=701795` |
+| 镜像 | 29 条 / 509,303 B / `SIZE_WARN` / `WINDOW_OK sum=709303` |
 
 设计口径以 [`DECISIONS.md`](DECISIONS.md)（架构、门禁、发布）与 [`P6-design.md`](P6-design.md)
 （文件集更新、journal、崩溃窗口、bootloader 决策表）为准；本文是面向使用者的入口，

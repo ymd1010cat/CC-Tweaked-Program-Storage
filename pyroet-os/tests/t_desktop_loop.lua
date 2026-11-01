@@ -325,9 +325,12 @@ return function(H)
         local pulls = 0
         local committed_at_first_pull = false
         local events = {
-            { "key", 11 },  -- down: the launcher moves to "net"
-            { "key", 14 },  -- enter: start net.app through api.sys.launch
-            { "key", 15 },  -- escape: quit, hand the machine back
+            { "key", 11 },   -- down: the launcher moves to "net"
+            { "key", 14 },   -- enter: start net.app through api.sys.launch
+            -- net declares no `input`, so it gets a screen loan; a keyboard-less
+            -- app can never hand the screen back, so the loan timer ends it
+            { "timer", 7 },
+            { "key", 15 },   -- escape: quit, hand the machine back
         }
         local pull = function()
             pulls = pulls + 1
@@ -347,6 +350,7 @@ return function(H)
             apps_root = dir .. "/apps",
             input = host,
             pull_event = pull,
+            start_timer = function() return 7 end,
             desktop_events = 8,
             reboot = function() error("rebooted unexpectedly") end,
             frame = function() return true end,
@@ -356,15 +360,18 @@ return function(H)
         H.eq("boot_committed", result.committed, true)
         H.table("boot_desktop", result.desktop)
         H.eq("boot_desktop_reason", result.desktop_reason, "quit")
-        H.eq("boot_pulled", result.desktop and result.desktop.pulled, 3)
-        H.eq("boot_ticked", result.desktop and result.desktop.ticked, 3)
-        H.eq("boot_delivered", result.desktop and result.desktop.delivered, 3)
-        H.eq("boot_handovers", result.desktop and result.desktop.handovers, 0)
+        H.eq("boot_pulled", result.desktop and result.desktop.pulled, 4)
+        -- 4 events + the loan's first frame + the loan-end repaint
+        H.ge("boot_ticked", result.desktop and result.desktop.ticked, 4)
+        H.eq("boot_delivered", result.desktop and result.desktop.delivered, 4)
+        H.eq("boot_handovers", result.desktop and result.desktop.handovers, 1)
+        H.eq("boot_loans", result.desktop and result.desktop.loans, 1)
+        H.eq("boot_loan_ends", result.desktop and result.desktop.loan_ends, 1)
         H.check("boot_commit_before_first_pull", committed_at_first_pull,
             "the desktop pulled before the commit")
 
-        -- three events, three pulls: no polling, no extra scheduler steps
-        H.eq("boot_pulls", pulls, 3)
+        -- four events, four pulls: no polling, no extra scheduler steps
+        H.eq("boot_pulls", pulls, 4)
 
         -- the loop is entered after the commit and only logs its exit when it
         -- comes back
@@ -384,15 +391,22 @@ return function(H)
             and exit_at < chain_exit, "exit=" .. tostring(exit_at)
             .. " chain=" .. tostring(chain_exit))
 
-        -- down moved the selection to net, enter started it, escape quit
+        -- down moved the selection to net, enter started it (screen loan, net is
+        -- visible), the timer took the screen back, escape quit
         H.has(lines, "DESKTOP_EVENT n=1 event=key arg=down app=launcher")
         H.has(lines, "DESKTOP_EVENT n=2 event=key arg=enter app=launcher")
-        H.has(lines, "DESKTOP_EVENT n=3 event=key arg=escape app=launcher")
+        H.has(lines, "DESKTOP_EVENT n=3 event=timer arg=7 app=net")
+        H.has(lines, "DESKTOP_EVENT n=4 event=key arg=escape app=launcher")
         H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=net")
         H.has(lines, "APP_LOG app=launcher msg=key=enter action=launch"
             .. " index=2 sel=net detail=net")
         H.has(lines, "APP_START name=net")
         H.eq("boot_net_running", result.apps:app("net").state, "running")
+        -- the loan: net gets the screen, and the launcher is told why it is back
+        H.has(lines, "DESKTOP_LOAN app=net reason=no_input caps=2")
+        H.has(lines, "DESKTOP_LOAN_END app=net reason=timeout")
+        H.has(lines, "DESKTOP_FOREGROUND app=launcher reason=loan_end")
+        H.has(lines, "APP_LOG app=launcher msg=focus msg=display only: net")
         H.has(lines, "APP_LOG app=launcher msg=quit key=escape")
         H.has(lines, "APP_EXIT app=launcher")
         H.has(lines, "DESKTOP_DETACH app=launcher reason=quit")
@@ -424,7 +438,9 @@ return function(H)
         host.keys = KEYS
         local log, lines = H.logger()
         local pulls = 0
-        local events = { { "key", 11 }, { "key", 14 }, { "key", 15 } }
+        local events = {
+            { "key", 11 }, { "key", 14 }, { "timer", 7 }, { "key", 15 },
+        }
         local pull = function()
             pulls = pulls + 1
             local event = events[pulls]
@@ -438,6 +454,7 @@ return function(H)
             apps_root = dir .. "/apps",
             input = host,
             pull_event = pull,
+            start_timer = function() return 7 end,
             reboot = function() error("rebooted unexpectedly") end,
             frame = function() return true end,
         })
@@ -453,16 +470,19 @@ return function(H)
         H.lacks("migrate_no_terminal_denial", lines,
             "APP_CAP_DENIED app=launcher cap=terminal")
 
-        -- and the keyboard works: down moved the selection, enter started net,
-        -- escape left the desktop
+        -- and the keyboard works: down moved the selection, enter started net on
+        -- a screen loan, the timer returned the screen, escape left the desktop
         H.eq("migrate_desktop_reason", result.desktop_reason, "quit")
         H.has(lines, "STARTUP_DESKTOP_ENTER name=launcher source=injected")
         H.has(lines, "DESKTOP_EVENT n=1 event=key arg=down app=launcher")
         H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=net")
         H.has(lines, "APP_START name=net")
+        H.has(lines, "DESKTOP_LOAN app=net reason=no_input caps=2")
+        H.has(lines, "DESKTOP_LOAN_END app=net reason=timeout")
+        H.has(lines, "APP_LOG app=launcher msg=focus msg=display only: net")
         H.eq("migrate_net_running", result.apps:app("net").state, "running")
         H.eq("migrate_launcher_result", result.apps:app("launcher").result, "quit")
-        H.eq("migrate_pulls", pulls, 3)
+        H.eq("migrate_pulls", pulls, 4)
         H.ascii_check("migrate_logs_ascii", H.joined(lines))
     end
 
@@ -514,165 +534,184 @@ return function(H)
 
     -- -----------------------------------------------------------------
     H.group("desktop_loop.screen")
-    -- The D1-fix regression, at the only level where the bug is visible: the
-    -- screen. A launched app that cannot own the console must not paint over the
-    -- desktop. `_G.term` is the buffer here, so an app that grabs the ROM
-    -- terminal directly (which the image's installer/settings apps do) paints
-    -- into the same frame the user would see.
+    -- D1-fix round 3: a launched app that declares no `input` used to be parked,
+    -- which read as "Enter did nothing". It now gets a SCREEN LOAN: it is
+    -- scheduled for real, its own frame lands on the screen, the launcher is not
+    -- scheduled while the loan lasts, and the loan ends when the app stops by
+    -- itself or when the loan timer fires (an app without a keyboard can never
+    -- hand the screen back). `_G.term` is the buffer here, so an app that paints
+    -- the ROM terminal directly lands in the frame the user would see.
     do
-        H.rmrf("/etc/perms")
-        H.rmrf("/apps")
-        -- a stand-in for the real installer: it paints every row with an `s` tag
-        -- and never takes the keyboard, exactly like the image's `installer.app`
-        H.app_package("/apps/aaa.app", {
-            manifest = 'return { name = "aaa", version = "0.1.0",'
-                .. ' capabilities = { "fs.read" } }',
-            main = [[
+        local function painter(name, text, stop)
+            return {
+                manifest = 'return { name = "' .. name .. '", version = "0.1.0",'
+                    .. ' capabilities = { "fs.read" } }',
+                main = string.format([[
 return function(manifest, api)
     local t = rawget(_G, "term")
-    while true do
-        for y = 1, 6 do
-            t.setCursorPos(1, y)
-            t.write("s row " .. tostring(y) .. "                    ")
-        end
-        api.yield()
+    for y = 1, 19 do
+        t.setCursorPos(1, y)
+        t.write(%q .. " " .. tostring(y) .. string.rep(" ", 40))
     end
+    if %s then
+        api.yield()
+        return "quit"
+    end
+    while true do api.yield() end
 end
-]],
-        })
-        local dir = H.case_dir("loop", "screen")
-        bootable(dir)
-        local host = new_host()
-        host.keys = KEYS
-        local log, lines = H.logger()
-        local K = rawget(_G, "keys")
-        -- the real event stream: CraftOS-PC sends key + key_up for every press,
-        -- and the key_up tick is the one the launcher does not repaint on
-        local events = {
-            { "key", 14 },                -- enter: index 1 is "aaa"
-            { "key_up", 14 },
-            { "key", 11 },                -- down: the marker must move
-            { "key_up", 11 },
-            { "key", 10 },                -- up
-            { "key_up", 10 },
-            { "terminate" },
-        }
-        local pulls = 0
-        local frames = {}
-        local buf = nil
-        local function snap()
-            local out = {}
-            for y = 1, 19 do out[y] = buf.row(y) end
-            return out
+]], text, stop and "true" or "false"),
+            }
         end
-        local pull = function()
-            frames[pulls + 1] = snap()
-            pulls = pulls + 1
-            local event = events[pulls]
-            if event == nil then return "terminate" end
-            return event[1], event[2]
-        end
-        buf = S.buffer(51, 19)
-        local saved_nopaint = rawget(_G, "PYROET_APP_NOPAINT")
-        rawset(_G, "PYROET_APP_NOPAINT", nil)
-        local result = nil
-        local okrun, why = pcall(function()
-            local okw, value = S.with_term(buf, function()
-                return startup.run({
-                    fs = F,
-                    root = dir,
-                    log = log,
-                    apps_root = "/apps",   -- the launcher scans the literal roots
-                    input = host,
-                    pull_event = pull,
-                    terminal = buf,
-                    reboot = function() error("rebooted unexpectedly") end,
-                    frame = function() return true end,
-                })
-            end)
-            result = value
-            return okw
-        end)
-        rawset(_G, "PYROET_APP_NOPAINT", saved_nopaint)
-        H.check("screen_run_ok", okrun and why == true, tostring(result))
-        H.eq("screen_desktop_reason", result and result.desktop_reason, "terminate")
 
-        -- the list the launcher draws: aaa(1) launcher(2) net(3) settings(4)
+        local function boot(apps, events, tag)
+            H.rmrf("/apps")
+            for i = 1, #apps do
+                H.app_package("/apps/" .. apps[i].name .. ".app", apps[i].spec)
+            end
+            H.rmrf("/etc/perms")
+            local dir = H.case_dir("loop", "screen_" .. tostring(tag))
+            bootable(dir)
+            local host = new_host()
+            host.keys = KEYS
+            local log, lines = H.logger()
+            local buf = S.buffer(51, 19)
+            local frames, pulls = {}, 0
+            local function snap()
+                local out = {}
+                for y = 1, 19 do out[y] = buf.row(y) end
+                return out
+            end
+            local pull = function()
+                frames[pulls + 1] = snap()
+                pulls = pulls + 1
+                local event = events[pulls]
+                if event == nil then return "terminate" end
+                return event[1], event[2], event[3]
+            end
+            local result = nil
+            local saved = rawget(_G, "PYROET_APP_NOPAINT")
+            rawset(_G, "PYROET_APP_NOPAINT", nil)
+            local okrun, why = pcall(function()
+                local okw, value = S.with_term(buf, function()
+                    return startup.run({
+                        fs = F,
+                        root = dir,
+                        log = log,
+                        apps_root = "/apps",
+                        input = host,
+                        pull_event = pull,
+                        terminal = buf,
+                        start_timer = function() return 7 end,
+                        reboot = function() error("rebooted unexpectedly") end,
+                        frame = function() return true end,
+                    })
+                end)
+                result = value
+                return okw
+            end)
+            rawset(_G, "PYROET_APP_NOPAINT", saved)
+            return {
+                result = result, lines = lines, frames = frames, buf = buf,
+                pulls = pulls, ok = okrun and why == true,
+            }
+        end
+
         local list_rows = { 3, 4, 5, 6 }
+        local function heads(frame)
+            local out = {}
+            for i = 1, #list_rows do
+                out[i] = ((frame or {})[list_rows[i]] or ""):sub(1, 2)
+            end
+            return table.concat(out, "|")
+        end
         local function markers(frame)
             local count, where = 0, nil
             for i = 1, #list_rows do
-                local row = (frame and frame[list_rows[i]]) or ""
+                local row = (frame or {})[list_rows[i]] or ""
                 if row:sub(1, 1) == ">" then count = count + 1; where = i end
             end
             return count, where
         end
 
-        -- the launched app is parked, not scheduled: it never paints
-        H.has(lines, "DESKTOP_PARK app=aaa reason=no_input")
-        H.eq("screen_parked_count", result.desktop and result.desktop.parked_count, 1)
+        -- 1) three packages that declare no `input` are each *visible* when
+        --    launched, the loan timer brings the launcher back, and the launcher
+        --    refuses to start itself (logged, not silent)
+        local run1 = boot({
+            { name = "aainstaller", spec = painter("aainstaller", "installer ui", false) },
+            { name = "aanet", spec = painter("aanet", "net probe", false) },
+            { name = "aasettings", spec = painter("aasettings", "settings ui", false) },
+        }, {
+            { "key", 14 },    -- 1: launch aainstaller (index 1)
+            { "timer", 7 },   -- 2: loan ends, launcher back
+            { "key", 11 },    -- 3: down -> aanet (index 2)
+            { "key", 14 },    -- 4: launch aanet
+            { "timer", 7 },   -- 5: loan ends
+            { "key", 11 },    -- 6: down -> aasettings (index 3)
+            { "key", 14 },    -- 7: launch aasettings
+            { "timer", 7 },   -- 8: loan ends
+            { "key", 11 },    -- 9: down -> launcher (index 4)
+            { "key", 14 },    -- 10: self-launch, refused
+            { "terminate" },  -- 11
+        }, "visible")
 
-        -- frame after enter + its key_up (the tick that used to show the app's
-        -- `s` rows): still the launcher's list, one marker, no `s` prefix
-        local after_enter = frames[3]
-        H.table("screen_frame3", after_enter)
-        H.eq("screen_one_marker_after_launch", markers(after_enter), 1)
-        for i = 1, #list_rows do
-            local row = (after_enter and after_enter[list_rows[i]]) or ""
-            local head = row:sub(1, 2)
-            H.check("screen_row" .. tostring(list_rows[i]) .. "_marker",
-                head == "> " or head == "  ", "row=[" .. row .. "]")
-            H.check("screen_row" .. tostring(list_rows[i]) .. "_no_s_tag",
-                row:sub(1, 2) ~= "s ", "row=[" .. row .. "]")
+        H.check("screen_ok", run1.ok, tostring(run1.result))
+        H.eq("screen_reason", run1.result and run1.result.desktop_reason, "terminate")
+        -- after each Enter the app's own frame is on screen, not the launcher
+        for i = 1, 3 do
+            local at = ({ 2, 5, 8 })[i]
+            local want = ({ "installer ui", "net probe", "settings ui" })[i]
+            local joined = table.concat(run1.frames[at] or {}, "\n")
+            H.contains("screen_visible_" .. tostring(i), joined, want)
+            H.absent("screen_no_list_" .. tostring(i), joined, "apps sel")
         end
-        H.contains("screen_list_intact", (after_enter and after_enter[4]) or "",
-            "launcher")
-        local joined3 = table.concat(after_enter or {}, "\n")
-        H.absent("screen_no_painter_rows", joined3, "s row")
+        H.eq("screen_loans", run1.result and run1.result.desktop.loans, 3)
+        H.eq("screen_loan_ends", run1.result and run1.result.desktop.loan_ends, 3)
+        for _, name in ipairs({ "aainstaller", "aanet", "aasettings" }) do
+            H.has(run1.lines, "DESKTOP_LOAN app=" .. name .. " reason=no_input caps=1")
+            H.has(run1.lines, "DESKTOP_LOAN_END app=" .. name .. " reason=timeout")
+            H.has(run1.lines, "APP_LOG app=launcher msg=focus msg=display only: " .. name)
+        end
+        -- the launcher's list is back after the last loan: exactly one marker,
+        -- and the verbatim first two characters of every row
+        local back = run1.frames[9]
+        H.eq("screen_back_markers", (markers(back)), 1)
+        H.eq("screen_back_heads", heads(back), "  |  |> |  ")
+        H.contains("screen_back_status", (back or {})[19] or "", "6 apps sel 3/6")
+        -- the launcher launched itself: refused, logged, the screen stays
+        H.has(run1.lines, "APP_START_DENIED name=launcher reason=already_running")
+        H.contains("screen_self_message", (run1.frames[11] or {})[18] or "",
+            "cannot start launcher")
+        H.contains("screen_self_status", (run1.frames[11] or {})[19] or "",
+            "6 apps sel 4/6")
+        H.ascii_check("screen_logs_ascii", H.joined(run1.lines))
 
-        -- and the selection really moves: after `down` the marker is one row lower
-        local after_down = frames[4]
-        local mcount, mwhere = markers(after_down)
-        H.eq("screen_marker_row_index", mwhere, 2)
-        H.eq("screen_marker_count_after_down", mcount, 1)
-        H.contains("screen_marker_text", (after_down and after_down[4]) or "",
-            "> launcher")
-        -- the terminal accepted the mark: first characters, verbatim
-        H.eq("screen_row3_head", ((after_down and after_down[3]) or ""):sub(1, 2), "  ")
-        H.eq("screen_row4_head", ((after_down and after_down[4]) or ""):sub(1, 2), "> ")
-        H.eq("screen_row5_head", ((after_down and after_down[5]) or ""):sub(1, 2), "  ")
-        H.eq("screen_row6_head", ((after_down and after_down[6]) or ""):sub(1, 2), "  ")
-
-        -- both key shapes move the selection: the *name* the dispatcher sends and
-        -- the raw *keycode* a key_up / another host / a test can carry. The map
-        -- comes from the ROM's own keys table, so nothing is hardcoded.
-        local api = {
-            input = { keys = K },
-            fs = F,
-            sys = { apps = function() return {} end },
-        }
-        local state = LAUNCHER.build(api)
-        state.entries = { { name = "a", version = "1" }, { name = "b", version = "1" } }
-        state.index = 1
-        H.eq("keys_name_down", LAUNCHER.handle_key(state, "down", api), "move")
-        H.eq("keys_name_index", state.index, 2)
-        H.eq("keys_name_up", LAUNCHER.handle_key(state, "up", api), "move")
-        H.eq("keys_name_index_back", state.index, 1)
-        H.eq("keys_code_mapped", LAUNCHER.code_name(K.down, api), "down")
-        H.eq("keys_code_down", LAUNCHER.handle_key(state, K.down, api), "move")
-        H.eq("keys_code_index", state.index, 2)
-        H.eq("keys_code_up", LAUNCHER.handle_key(state, K.up, api), "move")
-        H.eq("keys_code_index_back", state.index, 1)
-        H.eq("keys_code_event", LAUNCHER.dispatch_event(state, "key", K.down, nil, api),
-            "move")
-        H.eq("keys_code_event_index", state.index, 2)
-        -- a different keys table is honoured too (no hardcoded numbers anywhere)
-        local fake = { input = { keys = { up = 10, down = 11, enter = 12 } } }
-        state.index = 1
-        H.eq("keys_code_fake_down", LAUNCHER.handle_key(state, 11, fake), "move")
-        H.eq("keys_code_fake_index", state.index, 2)
-        H.eq("keys_code_fake_unknown", LAUNCHER.handle_key(state, 999, fake), "none")
-        H.ascii_check("screen_logs_ascii", H.joined(lines))
+        -- 2) an app that stops by itself ends the loan without any timer, and the
+        --    keyboard works again on the next key
+        local run2 = boot({
+            { name = "aastop", spec = painter("aastop", "stop ui", true) },
+        }, {
+            { "key", 14 },    -- 1: launch aastop (paints, yields)
+            { "key", 11 },    -- 2: tick it once more -> it returns, loan ends
+            { "key", 11 },    -- 3: the launcher handles this one
+            { "terminate" },
+        }, "stop")
+        H.check("stop_ok", run2.ok, tostring(run2.result))
+        H.eq("stop_reason", run2.result and run2.result.desktop_reason, "terminate")
+        H.contains("stop_visible", table.concat(run2.frames[2] or {}, "\n"), "stop ui")
+        H.has(run2.lines, "DESKTOP_LOAN app=aastop reason=no_input caps=1")
+        H.has(run2.lines, "DESKTOP_LOAN_END app=aastop reason=stopped")
+        H.has(run2.lines, "APP_LOG app=launcher msg=focus msg=display only: aastop")
+        -- frame 3 is after the loan ended: launcher back with the hint;
+        -- frame 4 is after the next key: the marker moved (keyboard is back)
+        H.contains("stop_hint", (run2.frames[3] or {})[18] or "",
+            "display only: aastop")
+        H.eq("stop_back_markers", (markers(run2.frames[3])), 1)
+        local count, where = markers(run2.frames[4])
+        H.eq("stop_moved_markers", count, 1)
+        H.eq("stop_moved_row", where, 2)
+        H.eq("stop_moved_heads", heads(run2.frames[4]), "  |> |  |  ")
+        H.contains("stop_status", (run2.frames[4] or {})[19] or "", "4 apps sel 2/4")
+        H.ascii_check("stop_logs_ascii", H.joined(run2.lines))
         H.rmrf("/apps")
     end
 
