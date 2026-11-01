@@ -486,7 +486,7 @@ end
 M.ITEMS = {
     { key = "prefix", label = "prefix", choices = { "24", "16", "8" } },
     { key = "iface_side", label = "iface", choices = {
-        "back", "top", "front", "bottom", "left", "right" } },
+        "auto", "back", "top", "front", "bottom", "left", "right" } },
 }
 
 function M.conf_path(state, opts)

@@ -241,12 +241,12 @@ return function(H)
         -- the two documented defaults are offered even with no file (the final
         -- frame: the marker moved to the second row, whose value was changed)
         H.eq("fresh_row2", frame[2]:sub(1, 12), "  prefix 24 ")
-        H.eq("fresh_row3", frame[3]:sub(1, 14), "> iface top   ")
+        H.eq("fresh_row3", frame[3]:sub(1, 14), "> iface back  ")
         -- down + enter changed the second row and CREATED the file
         H.contains("fresh_moved", H.joined(lines), "key=down action=move item=2")
-        H.contains("fresh_saved", H.joined(lines), "saved iface_side=top")
+        H.contains("fresh_saved", H.joined(lines), "saved iface_side=back")
         local cfg = H.read("/etc/network.conf") or ""
-        H.contains("fresh_cfg", cfg, "iface_side=top")
+        H.contains("fresh_cfg", cfg, "iface_side=back")
         H.rmrf("/etc/network.conf")
     end
 

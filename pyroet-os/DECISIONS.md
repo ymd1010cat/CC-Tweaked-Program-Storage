@@ -1266,6 +1266,24 @@ GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校�
 
 37.7 **数字**：离线 **5,008 pass / 0 fail / 256 groups**；`install.set` **29 条**（+pkgget 两文件），TOTAL 见 sizecheck。
 
+38. 手持机没有侧面：modem 自动发现（T18）
+
+38.1 **背景**：pyroet-os 的目标是手持电脑（pocket computer），它没有物理侧面，`iface_side=back` 这种假设直接导致网络 degraded。
+
+38.2 **新解析（`system/net/service.lua`）**：`S.DEFAULT_IFACE_SIDE = "auto"`；新增 `S.find_modem(peripheral_api)`（先 `peripheral.find("modem")`，否则遍历 `peripheral.getNames()` + `getType`）与 `S.resolve_side(cfg_side, peripheral_api, log)`：
+- 配置了具体侧面且该处**是 modem** → 用它（方块电脑兼容，零日志）
+- 否则自动发现：找到 → `NET_IFACE_AUTODETECT name=<peripheral>`；配置了侧面但那里不是 modem → `NET_IFACE_FALLBACK configured=<side> detected=<name>`
+- 一个 modem 都没有且宿主提供了 peripheral 表 → 返回 nil，调用方 `degrade("modem")` + `NET_NO_MODEM configured=..`（不崩、不 panic）
+- 宿主完全没给 peripheral 表（headless 调用/测试）→ 保留配置值，不降级
+
+38.3 **settings**：`iface` 的循环改为 `auto → back → top → front → bottom → left → right`，默认 `auto`（屏幕显示 `iface auto`），保存仍只重写 `/etc/network.conf` 的那一行。
+
+38.4 **生效时机**：接口在 **net 服务启动时**解析一次（`create_node`），所以改完 `network.conf` 需要**重启**（或重启 net 服务）才生效；不做热插拔。
+
+38.5 **测试**：`t_net_service` 新增 `net.iface_auto`：`peripheral.find` 找到内置 modem → 选中并记 AUTODETECT；没有 find 时用 getNames/getType 扫描；配置的侧面真是 modem → 优先且无日志；配置的侧面不是 modem → FALLBACK 到发现的；完全没有 modem → nil（调用方降级）；无 peripheral 表的 headless 调用 → 保留配置值；默认常量是 `auto`。原有 net 测试的默认值/`NET_READY iface=` 断言改 auto。
+
+38.6 **数字**：离线 **5,026 pass / 0 fail / 257 groups**；sizecheck 见上（仍远低于 629,145）。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1307,3 +1325,4 @@ GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校�
 - 2026-11-01: **launcher 不再把自己列为可启动项**（口径见 §35）。`launcher.app` 新增 `M.SELF="launcher"`，`M.scan` 按**包名**跳过自身（`/system/system` 与 `/apps` 两份都跳），记 `LAUNCHER_SKIP_SELF name=launcher path=..`，列表少一行、计数随之变化；kernel 的 `APP_START_DENIED reason=already_running` 保留兜底但桌面不再触发。测试同步 `t_launcher`/`t_desktop`/`t_desktop_loop`（screen 组自启动用例改为"列表无自身 + SKIP 日志"）/`t_budget`。真机副本开机日志：`LAUNCHER_SKIP_SELF name=launcher path=/system/system/launcher.app`。离线 **4,909 pass / 0 fail / 249 groups**。未 commit。
 - 2026-11-01: **安装后无需重启（rescan + launch 自动重扫）**（口径见 §36）。`kernel/apps.lua` 新增 `A:rescan()`（同时扫 `/system/system` 与 `/apps`，运行中实例保留，缺失目录的 record 仅非运行时丢弃，日志 `APP_RESCAN count= added= removed=`）与运行时提供的 `api.sys.rescan()`（cap `fs.read`）、`api.sys.launch(name)`（未知名字先自动 rescan，仍无 → `nil, "no such app"`，日志 `APP_LAUNCH_RESCAN`/`APP_LAUNCH_MISS`）。launcher 新增 `M.read_version`：无 runtime record 时直接读包 manifest 的版本（失败才 `?` 并记 `LAUNCHER_MANIFEST_MISS`）。新增 `t_sys_ota.ota.rescan`（自动重扫启动、显式 rescan、运行中保留/停止后清除、未知名字、launcher 版本 1.4.2）。离线 **4,933 pass / 0 fail / 250 groups**。未 commit。
 - 2026-11-01: **新增自带应用 `pkgget`（自选服务器的包下载）**（口径见 §37）。新包 `system/system/pkgget.app/`（caps http/fs.read/fs.write/input/terminal，约 20 KB），纯文本协议：`index.txt`（`app <name> <version> <dir>`）+ `<dir>/files.txt` + 文件 + 可选 `SHA256.txt`；服务器由用户输入（`a` 编辑 `/etc/pkg.servers` 第一行，`s` 轮换多行，默认占位 `http://example.invalid/`）。下载写入 `/pkgs/<name>.app`（`.part` → 回读 → 改名，失败全清），完成后走 `api.sys.install` 桥装到 `/apps`，无桥则 `staged in /pkgs`。`install.set` 27→29、`t_budget` 同步、`/system/system` 计数 2→3 各套件同步；新增 `tests/t_pkgget.lua`（6 组 76 断言）。离线 **5,008 pass / 0 fail / 256 groups**。未 commit。
+- 2026-11-01: **手持机无侧面：modem 自动发现**（口径见 §38）。`net/service.lua` 默认 `iface_side=auto`，新增 `S.find_modem` / `S.resolve_side`：具体侧面是 modem 就用（方块电脑兼容），否则自动发现并记 `NET_IFACE_AUTODETECT name=..`（配置侧面非 modem 时记 `NET_IFACE_FALLBACK configured=.. detected=..`），完全没有 modem 时 degraded + `NET_NO_MODEM`（headless 无 peripheral 表则保留配置值）。`settings.app` 的 iface 循环含 `auto` 且默认 auto。接口在 net 服务启动时解析一次，改配置需重启。新增 `t_net_service.net.iface_auto` 覆盖五种情况。离线 **5,026 pass / 0 fail / 257 groups**。未 commit。

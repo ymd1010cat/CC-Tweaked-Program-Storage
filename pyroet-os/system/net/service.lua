@@ -47,10 +47,70 @@ S.VERSION = "1.0"
 S.NAME = "net"
 S.DEFAULT_CONFIG_PATH = "/etc/network.conf"
 S.DEFAULT_HOSTS_PATH = "/etc/hosts.conf"
-S.DEFAULT_IFACE_SIDE = "back"
+S.DEFAULT_IFACE_SIDE = "auto"
 S.DEFAULT_IFACE_NAME = "NET"
 S.DEFAULT_CHANNEL = 4100
 S.DEFAULT_MTU = 256
+
+-- T18: the modem is found, not assumed. A pocket computer has no sides at all;
+-- a cube computer keeps working because an explicit side is still tried first.
+function S.find_modem(peripheral_api)
+    local p = peripheral_api
+    if type(p) ~= "table" then return nil end
+    if type(p.find) == "function" then
+        local called, found = pcall(p.find, "modem")
+        if called and found ~= nil then
+            local name = "modem"
+            if type(p.getName) == "function" then
+                local ncalled, value = pcall(p.getName, found)
+                if ncalled and type(value) == "string" then name = value end
+            end
+            return name, found
+        end
+    end
+    if type(p.getNames) == "function" and type(p.getType) == "function" then
+        local called, names = pcall(p.getNames)
+        if called and type(names) == "table" then
+            for i = 1, #names do
+                local name = tostring(names[i])
+                local tcalled, kind = pcall(p.getType, name)
+                if tcalled and kind == "modem" then return name, nil end
+            end
+        end
+    end
+    return nil
+end
+
+-- configured side -> the side to hand to the node, or nil when there is no modem
+function S.resolve_side(cfg_side, peripheral_api, log)
+    local side = tostring(cfg_side or S.DEFAULT_IFACE_SIDE)
+    local function logf(fmt, ...)
+        if type(log) == "function" then pcall(log, fmt, ...) end
+    end
+    local function is_modem(name)
+        local p = peripheral_api
+        if type(p) ~= "table" or type(p.getType) ~= "function" then return false end
+        local called, kind = pcall(p.getType, name)
+        return called and kind == "modem"
+    end
+    if side ~= "auto" and is_modem(side) then return side end
+    local name = S.find_modem(peripheral_api)
+    if name ~= nil then
+        if side == "auto" then
+            logf("NET_IFACE_AUTODETECT name=%s", name)
+        else
+            logf("NET_IFACE_FALLBACK configured=%s detected=%s", side, name)
+        end
+        return name
+    end
+    if side ~= "auto" then
+        logf("NET_IFACE_FALLBACK configured=%s detected=none", side)
+    end
+    -- no peripheral information at all (headless callers, tests): keep the
+    -- configured side rather than degrading a machine that never had a modem API
+    if type(peripheral_api) ~= "table" then return side end
+    return nil
+end
 S.DEFAULT_PROBE_PORT = 47100
 S.DEFAULT_HOSTS_INTERVAL = 5
 S.DEFAULT_NEIGHBOR_TTL = 3600
@@ -283,6 +343,7 @@ end
 function S.new(opts)
     local o = opts or {}
     local self = setmetatable({}, { __index = S })
+    self.peripheral = o.peripheral
     self.opts = o
     self.rpv = o.rpv
     self.fs = o.fs or rawget(_G, "fs")
@@ -382,11 +443,22 @@ function S:create_node()
         return nil
     end
     local cfg = self.cfg
+    -- T18: resolve the configured side through the peripheral table; no modem
+    -- anywhere is a degraded network, never a crash
+    if self.iface_side == nil then
+        self.iface_side = S.resolve_side(cfg.iface_side, self.peripheral,
+            function(fmt, ...) self:log(string.format(fmt, ...)) end)
+    end
+    if self.iface_side == nil then
+        self:degrade("modem", "no modem peripheral found")
+        self:log("NET_NO_MODEM configured=%s", tostring(cfg.iface_side))
+        return nil
+    end
     local spec = {
         role = cfg.role,
         gw = cfg.gateway,
         ifaces = { {
-            side = cfg.iface_side,
+            side = self.iface_side,
             name = cfg.iface_name,
             cidr = cfg.ip .. "/" .. tostring(cfg.prefix),
             channel = cfg.channel,

@@ -150,7 +150,7 @@ return function(H)
         H.eq("ip_int", cfg and cfg.ip_int, ip2int("10.0.0.5"))
         H.eq("prefix_default", cfg and cfg.prefix, 24)
         H.eq("gateway_default", cfg and cfg.gateway, nil)
-        H.eq("side_default", cfg and cfg.iface_side, "back")
+        H.eq("side_default", cfg and cfg.iface_side, "auto")
         H.eq("name_default", cfg and cfg.iface_name, "NET")
         H.eq("channel_default", cfg and cfg.channel, 4100)
         H.eq("mtu_default", cfg and cfg.mtu, 256)
@@ -290,7 +290,7 @@ return function(H)
         H.eq("spec_role", spec.role, "host")
         H.eq("spec_gw", spec.gw, "10.0.0.1")
         H.eq("spec_ifaces", #spec.ifaces, 1)
-        H.eq("spec_side", spec.ifaces[1].side, "back")
+        H.eq("spec_side", spec.ifaces[1].side, "auto")
         H.eq("spec_name", spec.ifaces[1].name, "NET")
         H.eq("spec_cidr", spec.ifaces[1].cidr, "10.0.0.5/24")
         H.eq("spec_channel", spec.ifaces[1].channel, 4100)
@@ -318,7 +318,7 @@ return function(H)
         -- defaults: no explicit hosts file, so a missing one is a note, not a fault
         H.has(lines, "NET_HOSTS_MISSING path=/etc/hosts.conf")
         H.has(lines, "NET_PROBE_SOCKET port=47100 ip=10.0.0.5")
-        H.has(lines, "NET_READY ip=10.0.0.5/24 gw=10.0.0.1 iface=back ch=4100 hosts=0")
+        H.has(lines, "NET_READY ip=10.0.0.5/24 gw=10.0.0.1 iface=auto ch=4100 hosts=0")
         H.has(lines, "NET_CONFIG_UNKNOWN key=unknown_key")
         H.check("probe_socket", svc.probe_socket ~= nil, "no probe socket")
         H.eq("probe_socket_port", svc.probe_socket and svc.probe_socket.port, 47100)
@@ -330,7 +330,7 @@ return function(H)
         H.eq("status_ip", status.ip, "10.0.0.5")
         H.eq("status_prefix", status.prefix, 24)
         H.eq("status_gateway", status.gateway, "10.0.0.1")
-        H.eq("status_iface", status.iface, "back")
+        H.eq("status_iface", status.iface, "auto")
         H.eq("status_channel", status.channel, 4100)
         H.eq("status_hosts", status.hosts, 0)
         H.eq("status_probe_port", status.probe_port, 47100)
@@ -634,4 +634,63 @@ return function(H)
             "kernel table required")
         H.ascii_check("service_source_ascii", H.read("/system/net/service.lua") or "")
     end
+    -- -----------------------------------------------------------------
+    H.group("net.iface_auto")
+    -- T18: a pocket computer has no sides. `auto` finds the modem; a configured
+    -- side that is not a modem falls back to the discovered one.
+    do
+        local modem = { type = "modem" }
+        local builtin = { find = function() return modem end,
+            getType = function() return "modem" end,
+            getName = function() return "left" end,
+            getNames = function() return { "left" } end }
+        local logs = {}
+        local function sink(fmt, ...)
+            logs[#logs + 1] = string.format(fmt, ...)
+        end
+        H.eq("auto_builtin", NET.resolve_side("auto", builtin, sink), "left")
+        H.contains("auto_builtin_log", table.concat(logs, "\n"),
+            "NET_IFACE_AUTODETECT name=left")
+
+        -- no `peripheral.find`, but getNames/getType can still see it
+        local scanned = { getNames = function() return { "top", "right" } end,
+            getType = function(name) if name == "right" then return "modem" end
+                return "monitor" end }
+        logs = {}
+        H.eq("auto_scan", NET.resolve_side("auto", scanned, sink), "right")
+        H.contains("auto_scan_log", table.concat(logs, "\n"),
+            "NET_IFACE_AUTODETECT name=right")
+
+        -- a configured side that really is a modem wins
+        local sided = { find = function() return modem end,
+            getType = function(name) if name == "back" then return "modem" end
+                return nil end,
+            getNames = function() return { "back" } end }
+        logs = {}
+        H.eq("side_preferred", NET.resolve_side("back", sided, sink), "back")
+        H.eq("side_preferred_logs", #logs, 0)
+
+        -- a configured side that is not a modem falls back to the discovered one
+        local wrong = { find = function() return modem end,
+            getType = function(name) if name == "left" then return "modem" end
+                return nil end,
+            getName = function() return "left" end,
+            getNames = function() return { "left" } end }
+        logs = {}
+        H.eq("side_fallback", NET.resolve_side("back", wrong, sink), "left")
+        H.contains("side_fallback_log", table.concat(logs, "\n"),
+            "NET_IFACE_FALLBACK configured=back detected=left")
+
+        -- no modem anywhere: the caller degrades (nil), and it is logged
+        local none = { find = function() return nil end,
+            getNames = function() return { "monitor" } end,
+            getType = function() return "monitor" end }
+        logs = {}
+        H.eq("no_modem", NET.resolve_side("auto", none, sink), nil)
+        H.eq("no_modem_not_logged_as_found", #logs, 0)
+        -- a headless caller without a peripheral table keeps its configured side
+        H.eq("headless_side", NET.resolve_side("back", nil, nil), "back")
+        H.eq("default_side_const", NET.DEFAULT_IFACE_SIDE, "auto")
+    end
+
 end
