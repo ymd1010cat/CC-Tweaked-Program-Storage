@@ -585,6 +585,16 @@ function pkg.completeness_warning()
     return nil
 end
 
+-- Print that line at login, or print nothing when the machine is complete.
+-- It exists as a function because usr/psh.lua's main chunk is at Lua's
+-- 200-local ceiling: the shell calls this with one statement and binds no local
+-- of its own. The rule and the wording still live with the store mechanism they
+-- describe (see pkg.completeness_warning and pkg.sys_status).
+function pkg.report_login()
+    local warn = pkg.completeness_warning()
+    if warn then print(warn) end
+end
+
 -- The directory of a package that is already installed. New packages are
 -- written to pkg.root(); this is for the ones that are somewhere already.
 local function package_dir(name)

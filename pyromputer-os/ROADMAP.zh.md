@@ -548,11 +548,15 @@ CraftOS 电脑的文件系统受 `computer_space_limit` 限制（缺省 1,000,00
   `.pkgstore` 会让同一次运行失败，说明标记的**种类**是承重的而不是装饰。较老的
   `_psh-twopart.sh` 同样通过（`commands: echo=0 pwd=0 cat=0 grep=0 sed=0 sort=0 wc=0 ls=0`），
   它"跑通八条命令"的说法是正确的。
-* **未完成**：`sys_required=1` 还没有登录时警告——它的消费者是 `pkg store`、安装预检与
-  `pkg.completeness_warning()`，而 `usr/psh.lua` 从不在登录时调用最后一个，所以机器是"自报不完整"
-  而不是打印一行。验收启动会把 `startup.lua` 换成探针，所以真实启动路径（`marker`、`bios`、
-  bootguard）只被 `shell.run("/usr/psh.lua")` 加九条命令触及到。介质在 CraftOS-PC 2.8.3 里也无法
-  真正弹出："介质缺失"是挂载表项被移除，那是 `lib/pkg.lua` 眼中的弹出，不是硬件事件。
+* **已完成（2026-11-01）**：`sys_required=1` 现在会在登录时说话。`lib/pkg.lua` 新增
+  `pkg.report_login()`（打印 `completeness_warning()` 那一行，完整时什么都不打印），
+  `usr/psh.lua` 在 banner 之后用一条 `pcall(require("pkg").report_login)` 调用它——**不绑定任何
+  local**，因为主 chunk 已在 Lua 的 200 个 local 上限。断言写在 `tests/batch3_check.lua`
+  （"report_login prints the warning instead of returning it"、"and it prints exactly the line
+  completeness_warning returns"、"a complete machine prints no login line"）。
+* **仍然成立的两条限制**：验收启动会把 `startup.lua` 换成探针，所以真实启动路径（`marker`、`bios`、
+  bootguard）只被 `shell.run("/usr/psh.lua")` 加九条命令触及到；介质在 CraftOS-PC 2.8.3 里也无法
+  真正弹出——"介质缺失"是挂载表项被移除，那是 `lib/pkg.lua` 眼中的弹出，不是硬件事件。
 
 ### 6.8 命令集：新增了什么，以及那个说谎的桩（The command set: fifteen additions, and the stub that lied）
 

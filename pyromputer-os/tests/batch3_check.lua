@@ -2169,6 +2169,26 @@ do
           aok == true and tostring(anote):find(".pkgsys", 1, true) ~= nil,
           tostring(aok) .. "/" .. tostring(anote))
 
+    -- The login line itself: pkg.report_login() is what usr/psh.lua calls right
+    -- after the banner (it binds no local there - the shell's main chunk is at
+    -- Lua's 200-local ceiling). It must PRINT the warning, not just return it.
+    local speech, spoken_ok = {}, true
+    local saved_print = print
+    _G.print = function(...)
+        local parts = {}
+        for i = 1, select("#", ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+        speech[#speech + 1] = table.concat(parts, " ")
+    end
+    spoken_ok = pcall(tpkg.report_login)
+    _G.print = saved_print
+    check("report_login prints the warning instead of returning it",
+          spoken_ok == true and #speech == 1 and speech[1]:find(".pkgsys", 1, true) ~= nil,
+          table.concat(speech, " | "))
+    local printed = tpkg.completeness_warning()
+    check("and it prints exactly the line completeness_warning returns",
+          #speech == 1 and speech[1] == printed,
+          tostring(speech[1]) .. " vs " .. tostring(printed))
+
     -- PRECEDENCE: a required store refuses, and that refusal must not be masked by
     -- the system-store warning. (An earlier revision asked about the system store
     -- first and returned early, so the install went ahead.)
@@ -2279,6 +2299,18 @@ do
     tpkg.store_release_all()
     tpkg.set_store_required(false)
     tpkg.set_sys_required(false)
+    -- and a complete machine says nothing at login
+    local quiet, quiet_ok = {}, true
+    local saved_print2 = print
+    _G.print = function(...)
+        local parts = {}
+        for i = 1, select("#", ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+        quiet[#quiet + 1] = table.concat(parts, " ")
+    end
+    quiet_ok = pcall(tpkg.report_login)
+    _G.print = saved_print2
+    check("a complete machine prints no login line",
+          quiet_ok == true and #quiet == 0, table.concat(quiet, " | "))
     check("the section leaves no store and no rules behind",
           tpkg.store() == "auto" and tpkg.sys_status().required == false,
           tpkg.store() .. "/" .. tostring(tpkg.sys_status().required))

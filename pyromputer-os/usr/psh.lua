@@ -8997,6 +8997,12 @@ else
         require("lang").say("psh 1.0 - " .. require("lang").text("banner_hint"))
     end
     if shell and shell.setDir then shell.setDir(cwd.get()) end
+    -- A machine that cannot see its system module store says so once, right
+    -- after the banner, so "sys complete=false" is visible to whoever is
+    -- standing at the computer and not only to "pkg store". pcall keeps a
+    -- broken store from stopping the shell; the statement binds no local on
+    -- purpose (the main chunk is at Lua's 200-local ceiling).
+    pcall(require("pkg").report_login)
     -- From here on this is a session, so the "the shell may not be left" rule
     -- applies to it. It is set here and nowhere else: the "-c" and script entries
     -- above returned before reaching this point, so a one-shot run is never
