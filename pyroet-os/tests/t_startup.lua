@@ -625,4 +625,203 @@ end
         H.contains("marker_v2", H.read(dir .. "/boot.ok"), "PYROET-BOOT-OK-2")
         H.eq("committed", result.committed, true)
     end
+
+    -- -----------------------------------------------------------------
+    -- the net service in the default chain: registered only with a config, and
+    -- never able to turn a good boot into a rollback (DECISIONS.md 9.9)
+    -- -----------------------------------------------------------------
+    local function rpv_stub()
+        local node = {
+            arp = { cache = {} },
+            routes = {},
+            setup = function() return true end,
+            bind = function()
+                return { close = function() end, sendto = function() return true end }
+            end,
+            after = function() return {} end,
+        }
+        return {
+            node_new = function() return node end,
+            route_add = function(routes, prefix, net)
+                routes[#routes + 1] = { prefix = prefix, net = net }
+                return true
+            end,
+        }
+    end
+
+    local function no_reboot() error("rebooted unexpectedly") end
+
+    H.group("startup.net_default")
+    do
+        local dir = system_tree(H.case_dir("startup", "net_default"))
+        commit_marker(dir, "1.0.0", M1)
+        local config = dir .. "/etc/network.conf"
+        H.write(config, "ip=10.0.0.5\nprefix=24\n")
+        local log, lines = H.logger()
+        local result = startup.run({
+            fs = F,
+            root = dir,
+            log = log,
+            apps_root = dir .. "/apps",
+            reboot = no_reboot,
+            frame = function() return true end,
+            net_config = config,
+            rpv = rpv_stub(),
+        })
+        H.check("ok", result.ok == true, "a network config broke the boot")
+        H.has(lines, "STARTUP_NET_REGISTER path=" .. config)
+        H.has(lines, "NET_READY ip=10.0.0.5/24")
+        H.has(lines, "STARTUP_NET_READY state=running")
+        H.has(lines, "STARTUP_KERNEL health=ok running=2")
+        H.eq("net_state", result.kernel:get("net").state, "running")
+        H.eq("net_health", result.kernel:get("net").spec.health(), "ok")
+        H.eq("hello_running", result.kernel:get("hello").state, "running")
+        H.eq("committed", result.committed, true)
+        H.lacks("no_net_skip", lines, "STARTUP_NET_SKIP")
+
+        -- the order the chain promises: permission table, then the service
+        -- registrations (hello, net), then the first frame, then the launcher,
+        -- then the commit
+        local perm_at = H.index_of(lines, "STARTUP_PERMS_READY")
+        local hello_at = H.index_of(lines, "KERNEL_REGISTER name=hello")
+        local net_at = H.index_of(lines, "STARTUP_NET_REGISTER")
+        local ui_at = H.index_of(lines, "STARTUP_UI_READY")
+        -- the launcher comes from /system/system in the staged image; whichever
+        -- of the three outcomes it is, it has to be one log line after the frame
+        local launch_at = H.index_of(lines, "STARTUP_LAUNCHER_STARTED")
+            or H.index_of(lines, "STARTUP_LAUNCHER_MISSING")
+            or H.index_of(lines, "STARTUP_LAUNCHER_FAIL")
+        local commit_at = H.index_of(lines, "STARTUP_COMMITTED")
+        H.check("perms_before_net", perm_at ~= nil and net_at ~= nil
+            and perm_at < net_at, "perms=" .. tostring(perm_at) .. " net=" .. tostring(net_at))
+        H.check("hello_before_net", hello_at ~= nil and net_at ~= nil
+            and hello_at < net_at, "hello=" .. tostring(hello_at) .. " net=" .. tostring(net_at))
+        H.check("frame_before_launcher", ui_at ~= nil and launch_at ~= nil
+            and ui_at < launch_at, "ui=" .. tostring(ui_at) .. " launch=" .. tostring(launch_at))
+        H.check("launcher_before_commit", launch_at ~= nil and commit_at ~= nil
+            and launch_at < commit_at, "launch=" .. tostring(launch_at)
+            .. " commit=" .. tostring(commit_at))
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("startup.net_skip")
+    do
+        -- no /etc/network.conf: the service is simply not registered, and the
+        -- machine boots exactly as it did before net existed
+        local dir = system_tree(H.case_dir("startup", "net_skip"))
+        commit_marker(dir, "1.0.0", M1)
+        local config = dir .. "/etc/network.conf"   -- never written
+        local log, lines = H.logger()
+        local result = startup.run({
+            fs = F,
+            root = dir,
+            log = log,
+            apps_root = dir .. "/apps",
+            reboot = no_reboot,
+            frame = function() return true end,
+            net_config = config,
+        })
+        H.check("ok", result.ok == true, "a missing network config broke the boot")
+        H.has(lines, "STARTUP_NET_SKIP reason=no_config path=" .. config)
+        H.eq("no_net", result.kernel:get("net"), nil)
+        H.eq("names", #result.kernel:names(), 1)
+        H.eq("first_name", result.kernel:names()[1], "hello")
+        H.has(lines, "STARTUP_KERNEL health=ok running=1")
+        H.lacks("no_net_report", lines, "STARTUP_NET_DEGRADED")
+        H.lacks("no_net_ready", lines, "STARTUP_NET_READY")
+        H.eq("committed", result.committed, true)
+        H.check("marker", H.exists(dir .. "/boot.ok"), "no /boot.ok")
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("startup.net_degraded")
+    do
+        -- a config that does not parse: the service starts and reports degraded,
+        -- the kernel aggregates that, and the boot still commits
+        local dir = system_tree(H.case_dir("startup", "net_degraded"))
+        commit_marker(dir, "1.0.0", M1)
+        local config = dir .. "/etc/network.conf"
+        H.write(config, "ip=10.0.0.999\n")
+        local log, lines = H.logger()
+        local reboots = 0
+        local result = startup.run({
+            fs = F,
+            root = dir,
+            log = log,
+            apps_root = dir .. "/apps",
+            reboot = function() reboots = reboots + 1 end,
+            frame = function() return true end,
+            net_config = config,
+        })
+        H.eq("reboots", reboots, 0)
+        H.check("ok", result.ok == true, "a bad network config rolled the boot back")
+        H.has(lines, "NET_CONFIG_BAD path=" .. config)
+        H.has(lines, "STARTUP_NET_DEGRADED state=running health=degraded")
+        H.has(lines, "STARTUP_KERNEL health=degraded")
+        H.eq("health", result.status.health, "degraded")
+        H.eq("net_state", result.kernel:get("net").state, "running")
+        H.eq("hello_running", result.kernel:get("hello").state, "running")
+        H.eq("committed", result.committed, true)
+        H.check("marker", H.exists(dir .. "/boot.ok"), "a degraded net must still commit")
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("startup.net_fail")
+    do
+        -- a net module whose spec() raises: one log line, no service, boot goes on
+        local dir = system_tree(H.case_dir("startup", "net_spec_fail"))
+        commit_marker(dir, "1.0.0", M1)
+        local config = dir .. "/etc/network.conf"
+        H.write(config, "ip=10.0.0.5\n")
+        local log, lines = H.logger()
+        local result = startup.run({
+            fs = F,
+            root = dir,
+            log = log,
+            apps_root = dir .. "/apps",
+            reboot = no_reboot,
+            frame = function() return true end,
+            net_config = config,
+            net = { spec = function() error("boom-spec") end },
+        })
+        H.check("spec_ok", result.ok == true, "a raising spec rolled the boot back")
+        H.has(lines, "STARTUP_NET_FAIL reason=spec")
+        H.eq("spec_no_net", result.kernel:get("net"), nil)
+        H.eq("spec_committed", result.committed, true)
+
+        -- a net service that raises inside start(): the kernel isolates it, the
+        -- machine reports degraded and commits
+        local dir2 = system_tree(H.case_dir("startup", "net_start_fail"))
+        commit_marker(dir2, "1.0.0", M1)
+        local config2 = dir2 .. "/etc/network.conf"
+        H.write(config2, "ip=10.0.0.5\n")
+        local log2, lines2 = H.logger()
+        local result2 = startup.run({
+            fs = F,
+            root = dir2,
+            log = log2,
+            apps_root = dir2 .. "/apps",
+            reboot = no_reboot,
+            frame = function() return true end,
+            net_config = config2,
+            net = {
+                spec = function()
+                    return {
+                        name = "net",
+                        deps = {},
+                        start = function() error("boom-start") end,
+                    }
+                end,
+            },
+        })
+        H.check("raise_ok", result2.ok == true, "a raising net service rolled the boot back")
+        H.has(lines2, "KERNEL_SERVICE_FAIL name=net")
+        H.has(lines2, "STARTUP_NET_DEGRADED state=failed health=n/a")
+        H.has(lines2, "STARTUP_KERNEL health=degraded")
+        H.eq("raise_health", result2.status.health, "degraded")
+        H.eq("raise_net_state", result2.kernel:get("net").state, "failed")
+        H.eq("raise_hello", result2.kernel:get("hello").state, "running")
+        H.eq("raise_committed", result2.committed, true)
+        H.check("raise_marker", H.exists(dir2 .. "/boot.ok"), "no /boot.ok")
+    end
 end

@@ -28,10 +28,11 @@ Order (P6-design sections 3 and 5, and this is the safety argument):
        over the cap is OTA_REJECT stage=cap, again before anything is written.
     4. journal(state=prepare) -- the intent, with old_sha computed LOCALLY.
     5. journal(state=applying), then for every file, in order:
-         a/b download <relpath>.part and prove size + sha256
+         a/b download <relpath>.part and prove the byte count AND sha256
          c/d move /system/<relpath> into /update.backup/<relpath> and prove the
              backup really is old_sha (a bad backup aborts the whole update)
-         e/f move the part into /system/<relpath> and prove sha256 == new_sha
+         e/f move the part into /system/<relpath>, ask the file system for the
+             byte count again, and prove sha256 == new_sha
     6. journal(state=applied). Only then is a reboot allowed to try the new
        version; boot.lua's decision table takes it from there.
 
@@ -39,6 +40,16 @@ Any failure from step 4 on is rolled back immediately with the material the
 journal describes (boot.rollback), and reported as OTA_FAIL stage=.. err=..
 Verification failures (steps 2/3) are OTA_REJECT and leave `retry()` available:
 nothing on disk changed, so the only cost is the download.
+
+The declared `<size>` is checked, never assumed (DECISIONS 13.3). Three places,
+because a byte count is the one thing a digest cannot tell you about:
+  * the DATA loop cannot stop early -- the last chunk has to be exactly `want`;
+  * the assembled .part is measured with `fs.getSize` against `<size>`, and a
+    mismatch is OTA_REJECT stage=verify reason=size file=.. got=.. want=.. while
+    nothing has been applied yet (retryable), or a rollback once something has;
+  * the file that landed in /system is measured again before its digest is
+    trusted, so a write cut short by a full disk cannot hide behind bytes whose
+    digest happens to match.
 
     local c = dofile("/system/kernel/ota.lua").new({ fs = fs, boot = boot,
         rednet = rednet, host = 12, log = print })
@@ -383,6 +394,20 @@ function O:file_sha(path)
     return self:digest(text)
 end
 
+-- The byte count the file system reports for a file: fs.getSize where it exists,
+-- a full read otherwise. nil means "cannot tell", which every caller treats as a
+-- failure -- never as "the declared size must have been right".
+function O:file_size(path)
+    if not self.fs.exists(path) then return nil end
+    if type(self.fs.getSize) == "function" then
+        local ok, size = pcall(self.fs.getSize, path)
+        if ok and type(size) == "number" then return size end
+    end
+    local text = read_all(self.fs, path)
+    if text == nil then return nil end
+    return #text
+end
+
 function O:paths()
     local boot = self:boot_module()
     if type(boot) == "table" and type(boot.paths) == "function" then
@@ -483,17 +508,40 @@ function O:download(f, part)
             at = at + #data.data
         end
         pcall(handle.close)
-        if not err and at == f.size then
+        -- the byte count before the digest: a short or padded write has to be
+        -- named as a size problem, not as a digest problem. `at` only counts what
+        -- this loop handed to write(), so the file system is asked what really
+        -- landed (DECISIONS 13.3).
+        local got_size, kind = nil, nil
+        if not err and at ~= f.size then
+            got_size, kind = at, "size"
+            err = "size got=" .. tostring(at) .. " want=" .. tostring(f.size)
+        end
+        if not err then
+            got_size = self:file_size(part)
+            if got_size ~= f.size then
+                kind = "size"
+                err = "size got=" .. tostring(got_size) .. " want=" .. tostring(f.size)
+            end
+        end
+        if not err then
             local got = self:file_sha(part)
             if got == f.sha256 then return true end
+            kind = "digest"
             err = "digest " .. short(got and got:sub(1, 12) or "?", 12)
-        elseif not err then
-            err = "size " .. tostring(at) .. "/" .. tostring(f.size)
         end
         self.retries = self.retries + 1
         self:log("OTA_RETRY attempt=" .. attempt .. " max=" .. self.max_tries
             .. " err=file " .. short(err, 32))
-        if attempt == self.max_tries then return nil, err end
+        if attempt == self.max_tries then
+            -- the caller needs to know WHICH proof failed: a wrong byte count is
+            -- a verification refusal, a wrong digest or a lost packet is not
+            if kind == "size" then
+                return nil, err, "size", "file=" .. f.relpath
+                    .. " got=" .. tostring(got_size) .. " want=" .. tostring(f.size)
+            end
+            return nil, err, kind
+        end
     end
     return nil, "unreachable"
 end
@@ -505,9 +553,13 @@ function O:apply_one(f)
     if not mkdirp(self.fs, dirname(part)) then
         return nil, "stage", "cannot create " .. short(dirname(part), 40)
     end
-    local okd, derr = self:download(f, part)
+    local okd, derr, dkind, ddetail = self:download(f, part)
     if not okd then
         pcall(self.fs.delete, part)
+        -- a byte count that is not the declared one is a verification refusal
+        -- (the server described N bytes and something else arrived); everything
+        -- else here is a transfer failure
+        if dkind == "size" then return nil, "verify", ddetail end
         return nil, "chunk", derr
     end
 
@@ -534,6 +586,14 @@ function O:apply_one(f)
     -- e/f: install and read back (the only proof of a write CC can give)
     local installed, ierr = self:move(part, target)
     if not installed then return nil, "install", ierr end
+    -- the .part was proven, but the file that landed is a different file: ask the
+    -- file system for its size before trusting the digest, because a write that
+    -- was cut short can still hash to the right value only by accident
+    local landed = self:file_size(target)
+    if landed ~= f.size then
+        return nil, "install", "size got=" .. tostring(landed)
+            .. " want=" .. tostring(f.size)
+    end
     local got = self:file_sha(target)
     if got ~= f.sha256 then
         return nil, "install", "verify " .. short(got and got:sub(1, 12) or "?", 12)
@@ -671,9 +731,21 @@ function O:update()
     self:set_state("applying", "apply")
     self:log("OTA_JOURNAL seq=" .. tostring(seq2) .. " state=applying")
 
+    local applied = 0
     for i = 1, #files do
         local ok, stage, detail = self:apply_one(files[i])
-        if not ok then return self:apply_failure(stage, detail) end
+        if not ok then
+            -- A size refusal before anything was applied leaves the disk exactly
+            -- as it was, so it is the same retryable reject as a bad
+            -- manifest_sha; once a file has landed the only honest answer is the
+            -- rollback (DECISIONS 13.3).
+            if stage == "verify" and applied == 0 then
+                self:cleanup()
+                return self:reject("verify", "size", detail)
+            end
+            return self:apply_failure(stage, detail)
+        end
+        applied = applied + 1
     end
 
     local seq3, jerr3 = boot.write_journal({

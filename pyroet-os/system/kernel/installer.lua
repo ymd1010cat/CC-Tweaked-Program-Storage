@@ -7,11 +7,23 @@ second time here. Sources: opts.dir, then packages[name] (in memory), then
 <media_root>/<name>.app.
 
 Stage in `/apps/.tmp-<name>/`, validate there (files present, manifest valid,
-optional `SHA256SUMS` = `<64 hex>  <relpath>` verified file by file), then replace
+optional `SHA256SUMS` = `<64 hex>  <relpath>` verified file by file, optional
+sizes), then replace
 `/apps/<name>.app`: INSTALL_REPLACE, delete old, `fs.move` the temp in, and when
 move is refused copy + verify + delete the temp (CraftOS `fs.move` never
 overwrites; boot.lua uses the same fallback). Any failure deletes the temp and
 keeps the installed version (INSTALL_FAIL name=... err=...).
+
+A declared size is checked against the bytes that actually landed, in the two
+places a package can declare one (DECISIONS.md 5.2):
+
+  * per file, as a third column of `SHA256SUMS`:
+    `<64 hex>  <size>  <relpath>` or `<64 hex>  <relpath>  <size>`;
+  * once for the package, as the manifest's `size`: the byte total of everything
+    except `manifest.lua` itself (a file cannot contain its own final length).
+
+Neither is required: without them the package is verified by digest only, which
+is what every package written before the field existed relies on.
 
 uninstall deletes only `/apps/<name>.app`; `/system/system/<name>.app` is refused
 (INSTALL_REMOVE_DENIED ... reason=system) because system apps move only through an
@@ -107,6 +119,34 @@ local function digest(fn, text)
     return out:lower()
 end
 
+-- the byte count a package file really has: fs.getSize where the file system
+-- offers one, a full read otherwise. nil means "cannot tell", which is a
+-- verification failure and never an excuse to accept the declared number.
+local function size_of(fsx, path)
+    if not fsx.exists(path) then return nil end
+    if type(fsx.getSize) == "function" then
+        local ok, size = pcall(fsx.getSize, path)
+        if ok and type(size) == "number" then return size end
+    end
+    local text = read_all(fsx, path)
+    if text == nil then return nil end
+    return #text
+end
+
+-- one `SHA256SUMS` line: "<hex>  <rel>" with an optional size, in either the
+-- middle or the last column. nil means the line is not a sums line at all.
+local function parse_sums_line(line)
+    local hex, one, two = line:match("^(%x+)%s+(%S+)%s+(%S+)%s*$")
+    if hex then
+        if two:match("^%d+$") then return hex, one, tonumber(two) end
+        if one:match("^%d+$") then return hex, two, tonumber(one) end
+        return nil
+    end
+    hex, one = line:match("^(%x+)%s+(%S+)%s*$")
+    if hex then return hex, one, nil end
+    return nil
+end
+
 function I.new(opts)
     local o = opts or {}
     local self = setmetatable({}, { __index = I })
@@ -143,8 +183,9 @@ function I:valid_name(name)
         and name:match("^[%w_%.%-]+$") ~= nil and name:find("..", 1, true) == nil
 end
 
--- `<64 hex>  <relpath>` per line: every listed file must exist and match, and
--- every file must be listed -- a manifest that may skip a file proves nothing
+-- `<64 hex>  <relpath>` per line (an optional size may be a third column: every
+-- listed file must exist and match, and every file must be listed -- a manifest
+-- that may skip a file proves nothing). A declared size has to be the real one.
 function I:verify_sums(dir)
     local fsx, sha, want, count = self.fs, self.sha, {}, 0
     if type(sha) ~= "function" then
@@ -152,9 +193,10 @@ function I:verify_sums(dir)
         return nil, "no sha256"
     end
     for line in (read_all(fsx, join(dir, SUMS)) or ""):gmatch("[^\r\n]+") do
-        local hex, rel = line:match("^(%x+)%s+(%S+)%s*$")
         count = count + 1
-        if not hex or #hex ~= 64 or rel:find("..", 1, true) or rel:sub(1, 1) == "/" then
+        local hex, rel, declared = parse_sums_line(line)
+        if not hex or #hex ~= 64 or not rel or rel:find("..", 1, true)
+            or rel:sub(1, 1) == "/" then
             self:log("INSTALL_HASH_BAD file=" .. SUMS .. " line=" .. count)
             return nil, "bad sums line"
         end
@@ -162,20 +204,29 @@ function I:verify_sums(dir)
             self:log("INSTALL_HASH_BAD file=" .. short(rel, 48) .. " reason=duplicate")
             return nil, "duplicate " .. rel
         end
-        want[rel] = hex:lower()
+        want[rel] = { sha = hex:lower(), size = declared }
     end
     if count == 0 then
         self:log("INSTALL_HASH_BAD file=" .. SUMS .. " reason=empty")
         return nil, "empty sums"
     end
-    for rel, hex in pairs(want) do
-        local body = read_all(fsx, join(dir, rel))
+    for rel, entry in pairs(want) do
+        local path = join(dir, rel)
+        local body = read_all(fsx, path)
         local got = body and digest(sha, body)
-        if got ~= hex then
+        if got ~= entry.sha then
             self:log("INSTALL_HASH_BAD file=" .. short(rel, 48)
-                .. (got and (" want=" .. hex:sub(1, 12) .. " got=" .. got:sub(1, 12))
+                .. (got and (" want=" .. entry.sha:sub(1, 12) .. " got=" .. got:sub(1, 12))
                     or " reason=missing"))
             return nil, "digest " .. rel
+        end
+        if entry.size ~= nil then
+            local actual = size_of(fsx, path)
+            if actual ~= entry.size then
+                self:log("INSTALL_SIZE_BAD file=" .. short(rel, 48)
+                    .. " got=" .. tostring(actual) .. " want=" .. tostring(entry.size))
+                return nil, "size " .. rel
+            end
         end
     end
     local listed = tree(fsx, dir)
@@ -186,6 +237,33 @@ function I:verify_sums(dir)
         end
     end
     return true
+end
+
+-- DECISIONS.md 5.2: a package may declare `size`, the byte total of everything it
+-- ships. `manifest.lua` is excluded because a file cannot contain its own final
+-- length, so counting it would make the field impossible to fill in. An
+-- undeclared size is not an error: a package written before the field existed
+-- installs on its digests alone.
+function I:verify_total(dir, declared)
+    local want = tonumber(declared)
+    if not want or want < 0 or want ~= math.floor(want) then
+        self:log("INSTALL_SIZE_BAD scope=package reason=declared value="
+            .. short(declared, 16))
+        return nil, "bad size"
+    end
+    local total = 0
+    local listed = tree(self.fs, dir)
+    for i = 1, #listed do
+        if listed[i] ~= "manifest.lua" then
+            total = total + (size_of(self.fs, join(dir, listed[i])) or 0)
+        end
+    end
+    if total ~= want then
+        self:log("INSTALL_SIZE_BAD scope=package got=" .. tostring(total)
+            .. " want=" .. tostring(want))
+        return nil, "size " .. tostring(total) .. "/" .. tostring(want)
+    end
+    return true, total
 end
 
 function I:fail(name, tmp, err, extra)
@@ -250,6 +328,19 @@ function I:install(name, opts)
     if manifest and fsx.exists(join(tmp, SUMS)) then
         local oks, serr = self:verify_sums(tmp)
         if not oks then manifest, verr = nil, serr end
+    end
+    if manifest then
+        -- the runtime validates a manifest and keeps the caller's table in
+        -- `manifest.raw`, so a declared size is read from whichever of the two
+        -- carries it
+        local declared = manifest.size
+        if declared == nil and type(manifest.raw) == "table" then
+            declared = manifest.raw.size
+        end
+        if declared ~= nil then
+            local okt, terr = self:verify_total(tmp, declared)
+            if not okt then manifest, verr = nil, terr end
+        end
     end
     if not manifest then return self:fail(name, tmp, verr or "invalid package") end
     if manifest.name ~= name then

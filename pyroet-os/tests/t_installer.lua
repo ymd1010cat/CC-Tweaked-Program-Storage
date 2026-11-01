@@ -441,4 +441,137 @@ return function(H)
         H.eq("b_sees_one", #b:list(), 1)
         H.eq("a_packages", type(a.packages.x), "nil")
     end
+
+    -- -----------------------------------------------------------------
+    H.group("installer.size")
+    do
+        -- A declared size is checked against the bytes that actually landed, in
+        -- both places a package can declare one (manifest `size` = package total
+        -- without manifest.lua, SHA256SUMS third column = one file). Neither is
+        -- required, so a package that declares nothing still installs.
+        local dir = H.case_dir("installer", "size")
+        local inst, lines = new_inst(dir)
+        local main = "return function() end\n"
+        local len = #main
+
+        local function pkg(name, opts)
+            local o = opts or {}
+            local path = dir .. "/media/" .. name .. ".app"
+            H.rmrf(path)
+            H.mkdirp(path)
+            local manifest = o.manifest or manifest_for(name, "1.0.0")
+            H.write(path .. "/manifest.lua", manifest)
+            H.write(path .. "/main.lua", o.main or main)
+            if o.sums then
+                local out = {}
+                for i = 1, #o.sums do
+                    local row = o.sums[i]
+                    local text = row.digest or hx(row.file == "main.lua" and main or manifest)
+                    if row.size ~= nil then text = text .. "  " .. tostring(row.size) end
+                    out[#out + 1] = text .. "  " .. row.file
+                end
+                H.write(path .. "/SHA256SUMS", table.concat(out, "\n") .. "\n")
+            end
+            return path
+        end
+
+        -- 1. a per-file size that matches: still installs
+        pkg("sized", { sums = {
+            { file = "main.lua", size = #main },
+            { file = "manifest.lua" },
+        } })
+        local ok1, report1 = inst:install("sized")
+        H.check("sized_ok", ok1 == true, "an exact size was refused: " .. tostring(report1))
+        H.eq("sized_installed", H.exists(dir .. "/apps/sized.app/main.lua"), true)
+
+        -- 2. short: the sums promise more bytes than the file has
+        pkg("sums_short", { sums = {
+            { file = "main.lua", size = len + 4 },
+            { file = "manifest.lua" },
+        } })
+        local ok2, err2 = inst:install("sums_short")
+        H.eq("sums_short_ok", ok2, "nil")
+        H.eq("sums_short_err", err2, "size main.lua")
+        H.has(lines, "INSTALL_SIZE_BAD file=main.lua got=" .. len .. " want=" .. (len + 4))
+        H.has(lines, "INSTALL_FAIL name=sums_short err=size main.lua")
+        H.eq("sums_short_not_installed", H.exists(dir .. "/apps/sums_short.app"), false)
+        H.check("sums_short_temp_gone", not H.exists(dir .. "/apps/.tmp-sums_short"),
+            "temp survived")
+
+        -- 3. long: the sums promise fewer bytes than the file has
+        pkg("sums_long", { sums = {
+            { file = "main.lua", size = len - 5 },
+            { file = "manifest.lua" },
+        } })
+        local ok3, err3 = inst:install("sums_long")
+        H.eq("sums_long_ok", ok3, "nil")
+        H.eq("sums_long_err", err3, "size main.lua")
+        H.has(lines, "INSTALL_SIZE_BAD file=main.lua got=" .. len .. " want=" .. (len - 5))
+        H.eq("sums_long_not_installed", H.exists(dir .. "/apps/sums_long.app"), false)
+
+        -- 4. the size may also be the last column of a sums line
+        pkg("sums_tail", { sums = {
+            { file = "main.lua", size = len + 1 },
+            { file = "manifest.lua" },
+        } })
+        -- rewrite the file with the size at the end instead of the middle
+        H.write(dir .. "/media/sums_tail.app/SHA256SUMS",
+            hx(main) .. "  main.lua  " .. tostring(len + 1) .. "\n"
+            .. hx(manifest_for("sums_tail", "1.0.0")) .. "  manifest.lua\n")
+        local ok4, err4 = inst:install("sums_tail")
+        H.eq("sums_tail_ok", ok4, "nil")
+        H.eq("sums_tail_err", err4, "size main.lua")
+        H.has(lines, "INSTALL_SIZE_BAD file=main.lua got=" .. len .. " want=" .. (len + 1))
+
+        -- 5. a package total in the manifest: main.lua is all it ships
+        pkg("total_ok", { manifest = 'return { name = "total_ok", version = "1.0.0", size = '
+            .. tostring(len) .. ' }' })
+        H.check("total_ok_install", inst:install("total_ok") == true,
+            "an exact package total was refused")
+
+        -- 6. and a total that is not the payload is a refusal
+        pkg("total_bad", { manifest = 'return { name = "total_bad", version = "1.0.0", size = '
+            .. tostring(len + 9) .. ' }' })
+        local ok6, err6 = inst:install("total_bad")
+        H.eq("total_bad_ok", ok6, "nil")
+        H.contains("total_bad_err", err6, "size " .. len .. "/" .. (len + 9))
+        H.has(lines, "INSTALL_SIZE_BAD scope=package got=" .. len .. " want=" .. (len + 9))
+        H.eq("total_bad_not_installed", H.exists(dir .. "/apps/total_bad.app"), false)
+
+        -- 7. an unparsable declaration is refused instead of ignored
+        pkg("total_junk", {
+            manifest = 'return { name = "total_junk", version = "1.0.0", size = "big" }',
+        })
+        local ok7, err7 = inst:install("total_junk")
+        H.eq("total_junk_ok", ok7, "nil")
+        H.eq("total_junk_err", err7, "bad size")
+        H.has(lines, "INSTALL_SIZE_BAD scope=package reason=declared value=big")
+
+        -- 8. no declaration anywhere: the digest-only path still works, and a
+        -- fresh logger proves it does so without a single size complaint
+        pkg("plain", { sums = { { file = "main.lua" }, { file = "manifest.lua" } } })
+        local inst2, lines2 = new_inst(dir)
+        H.check("plain_ok", inst2:install("plain") == true,
+            "a package without any size was refused")
+        H.eq("plain_installed", H.exists(dir .. "/apps/plain.app/manifest.lua"), true)
+        H.lacks("plain_no_size_line", lines2, "INSTALL_SIZE_BAD")
+
+        -- 9. the total counts every file except manifest.lua, SHA256SUMS included.
+        -- The declaration lives inside the package, so the number and the sums
+        -- line that proves it depend on each other -- two passes settle it, which
+        -- is also what a packaging tool has to do.
+        local manifest_text, sums_text, total = nil, nil, #main
+        for _ = 1, 2 do
+            manifest_text = 'return { name = "total_sums", version = "1.0.0", size = '
+                .. tostring(total) .. ' }'
+            sums_text = hx(main) .. "  main.lua\n"
+                .. hx(manifest_text) .. "  manifest.lua\n"
+            total = #main + #sums_text
+        end
+        H.eq("total_sums_value", total, #main + #sums_text)
+        pkg("total_sums", { manifest = manifest_text })
+        H.write(dir .. "/media/total_sums.app/SHA256SUMS", sums_text)
+        H.check("total_with_sums", inst:install("total_sums") == true,
+            "the package total did not include SHA256SUMS")
+    end
 end

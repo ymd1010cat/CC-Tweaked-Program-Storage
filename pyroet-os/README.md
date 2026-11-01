@@ -2,7 +2,7 @@
 
 Pyroet OS 是 Minecraft CC:Tweaked **掌机（Pocket Computer，屏幕 26×20）**上的一个小型操作系统：
 单棵 `/system` 系统树、capability 权限模型、统一的 `.app` 应用包、文件集网络 OTA，以及一套
-EDL 式的恢复工具。发布版本 **1.0.0**，装机内容 **26 个文件 / 401,778 B**。
+EDL 式的恢复工具。发布版本 **1.0.0**，装机内容 **26 个文件 / 414,566 B**。
 
 它是 `pyromputer-os/`（原 unixshell）的**重度裁剪硬分支**：不是"跟随上游的轻量分支"，而是
 按掌机的现实约束重新分层、大量删改后的独立系统。两者**互不覆盖、互不合并、互不回灌**；
@@ -52,7 +52,7 @@ EDL 式的恢复工具。发布版本 **1.0.0**，装机内容 **26 个文件 / 
 ```
 pyroet-os/
 ├─ startup.lua              ROM 唯一入口的 starter（1,070 B），只加载 /system/startup.lua
-├─ system/                  镜像 payload（25 文件 / 400,708 B）
+├─ system/                  镜像 payload（25 文件 / 413,496 B）
 │  ├─ startup.lua           启动链：boot → kernel → apps → 权限 → 服务 → 首帧 → commit
 │  ├─ boot.lua              bootloader：单树 + journal 决策表 + 按哈希回滚（45,623 B）
 │  ├─ kernel/
@@ -131,7 +131,7 @@ pyroet-os/
        ├─ 2. kernel.new()       构建服务管理器
        ├─ 3. apps.new()         扫描 /apps 与 /system/system/*.app
        ├─ 3c. permissions       在**任何 app 启动之前**挂上权限表（声明 ≠ 授权）
-       ├─ 4/5. 注册并 start_all()  依赖拓扑启动，失败隔离；health=failed 才是硬失败
+       ├─ 4/5. 注册并 start_all()  hello + net（仅 `/etc/network.conf` 存在时）→ 依赖拓扑启动，失败隔离；health=failed 才是硬失败
        ├─ 6. apps tick          给已启动 app 一次调度时间片
        ├─ 7. 首帧               "UI 已起来"（DECISIONS 2.7 的 ready 条件之一）
        ├─ 7b. 桌面              读权限表 → 启动 launcher（整段 pcall；缺失只记日志，回退 hello）
@@ -142,6 +142,14 @@ pyroet-os/
 任何会让机器起不来的错误都走 `os.reboot()`（让 `/boot.tries` 记账生效），而**不** commit；
 `fatal` 计划（`no_system` / `rollback_fail` / 写盘失败）**不** reboot——重启环修不了坏字节——
 它打印三行可 grep 的 ASCII 报告后把控制台留给 ROM shell。
+
+**`net` 是默认注册的第二个服务**（`/system/net/service.lua`），但它的前提是用户数据而不是镜像内容：
+**仅当 `/etc/network.conf` 存在时注册**，不存在就记 `STARTUP_NET_SKIP reason=no_config` 直接跳过
+（缺配置**不是**启动失败；新机本来就没有 `/etc`）。注册之后的一切问题——模块缺失
+（`STARTUP_NET_SKIP reason=no_module`）、`spec()` 抛错或注册被拒（`STARTUP_NET_FAIL reason=spec|register`）、
+服务启动失败（`KERNEL_SERVICE_FAIL name=net` + `STARTUP_NET_DEGRADED state=failed`）——都只让
+`health=degraded` 并继续：掌机的桌面、应用与 OTA 都不依赖网络，**网络问题绝不回滚整机**。
+配好并起网记 `STARTUP_NET_READY state=running`（`net` 服务自己还会记 `NET_READY` / `NET_DEGRADED`）。
 
 ### 3.2 bootloader 决策表（摘要）
 
@@ -237,17 +245,27 @@ P2 运行时没有 input cap，所以"询问"是注入的回调：默认实现�
 | `entry` | 否 | 入口文件名，默认 `main.lua`；不得含路径分隔符 |
 | `capabilities` | 否 | 只能是 §4.1 的 7 个 cap；未知 cap 直接拒绝加载 |
 | `max_starts` | 否 | 正整数，启动次数配额（默认 8，超限 `quota exceeded: starts`） |
+| `size` | 否 | 包内字节总和（**不含 `manifest.lua` 自己**：文件无法包含自己的最终长度）；安装器逐字节核对 |
 
-> `DECISIONS.md` §5.2 的设计口径还列了 `size`（包内字节总和）；当前运行时**不校验** `size`，
-> 完整性靠安装器的可选 `SHA256SUMS`（`<64 hex>  <relpath>`，逐文件校验、包内每个文件都必须列出）。
+> **`size` 是判据，不是说明**（`DECISIONS.md` §5.2 与 §16）：安装器在暂存副本上核对两处声明，
+> 任何不符都拒绝安装且不落盘（`INSTALL_SIZE_BAD ...` + `INSTALL_FAIL ... err=size ...`）：
+>
+> 1. `SHA256SUMS` 的第三列——逐文件字节数，允许 `<64 hex>  <size>  <relpath>` 或
+>    `<64 hex>  <relpath>  <size>` 两种列序（不写第三列就是老格式，仍然只比摘要）；
+> 2. manifest 的 `size`——整包总量，统计暂存目录里除 `manifest.lua` 外的**全部**文件
+>    （含 `SHA256SUMS` 自身）。
+>
+> 两处都**可以不写**：未声明就跳过该项校验、只验 SHA256，这样早于该字段的包照样能装
+> （向后兼容是硬要求，不是宽松）。完整性从来不只靠 `size`：`SHA256SUMS` 逐文件摘要、
+> 包内每个文件都必须列出，才是防篡改的那一层。
 
 ### 5.3 运行时行为
 
 - 每个 app 一个 coroutine，`rt:tick()` 推进；`main.lua` 可以 `while true do api.yield() end`。
 - 配额从"拒绝而不截断"：启动次数、`fs.write` 字节数超限都返回 `nil, "quota exceeded: ..."`。
 - 生命周期钩子失败只记 `APP_HOOK_FAIL`，不中断状态迁移；`kill` 之后不会再被调度。
-- 安装器（`kernel/installer.lua`）：暂存到 `/apps/.tmp-<name>/` → 校验 → 替换；`fs.move` 被拒时
-  降级为 copy + 逐文件校验 + 删临时目录；任何失败保留旧版本。
+- 安装器（`kernel/installer.lua`）：暂存到 `/apps/.tmp-<name>/` → 校验（摘要 + 声明的 `size`）→ 替换；
+  `fs.move` 被拒时降级为 copy + 逐文件校验 + 删临时目录；任何失败保留旧版本。
 
 ### 5.4 三个系统应用的 cap（写死）
 
@@ -285,10 +303,18 @@ P2 运行时没有 input cap，所以"询问"是注入的回调：默认实现�
    与 `META.manifest_sha` 比对；不符 → `OTA_REJECT stage=verify`，系统未动，可 `retry()`。
 3. `BACKUP_CAP` 预检（只算"会被备份的已存在文件"的字节）；超限 → `OTA_REJECT stage=cap`，仍未动盘。
 4. `journal(state=prepare)`：意图落盘，`old_sha` 由**本地现算**、不信服务器。
-5. `journal(state=applying)`，逐文件：a/b 下 `.part` 并回读校验 `new_sha` → c/d 旧文件 move 进
+5. `journal(state=applying)`，逐文件：a/b 下 `.part` 并回读校验**字节数与** `new_sha` → c/d 旧文件 move 进
    `/update.backup/` 并回读校验 `old_sha`（备份不可信就立刻挪回并放弃整次更新）→ e/f `.part`
-   move 进 `/system/` 并回读校验 `new_sha` → g 删残片。
+   move 进 `/system/`、**再量一次字节数**并回读校验 `new_sha` → g 删残片。
 6. `journal(state=applied)`：**只有到这一步才允许重启**去试新版本；bootloader 接手（§3.2）。
+
+**`size` 与摘要同等对待**（声明了就核对，没声明不会凭空拦人）：
+
+- 下载时只按 `size` 请求 DATA，末块必须正好 `want` 字节（短包按坏块重试，不是"少收一点也算完"）。
+- `.part` 写完先量字节再比摘要：`fs.getSize` ≠ 声明 `size` → `OTA_REJECT stage=verify reason=size
+  file=<relpath> got=<实际> want=<声明>`，此时**磁盘一字节未动**，状态 `rejected`，可 `retry()`。
+- move 进 `/system/` 之后**再量一次**（`OTA_FAIL stage=install err=size got=.. want=..` + 回滚）：
+  防的是"写短了但摘要碰巧对上"和替换后被截断——摘要是内容证明，字节数是长度证明，两者都要。
 
 失败语义：`prepare`/`applying` 阶段任何失败立即按 journal 逆序回滚（`OTA_FAIL stage=..` +
 `OTA_ROLLED_BACK`）；回滚本身失败 → `OTA_ROLLBACK_FAIL` + `FLASH_REQUIRED`，只能走 `recovery/flash.lua`。
@@ -362,19 +388,19 @@ inst:install("hello"); inst:uninstall("hello"); inst:list()
 | 更新窗口 | **900,000 B** | `total + BACKUP_CAP ≤ 900,000` = `WINDOW_OK`，超出 exit 1 |
 | 机身配额 | **1,000,000 B** | CC 电脑默认存储配额（含用户数据、日志、已装 app） |
 
-当前实测（v1.0.0）：
+当前实测（v1.0.0 + N1 修正）：
 
 ```
 entries    : 26 (26 files, 0 dirs, 0 missing)
-TOTAL      : 401,778 B   (system 25 文件 400,708 + 根 starter 1,070)
-VERDICT    : SIZE_WARN   (stretch 349,525 < total 401,778 <= upper 629,145)
-MARGIN     : 52,253 bytes over stretch; 227,367 bytes under upper
-WINDOW_OK  : sum=601778 limit=900000
+TOTAL      : 414,566 B   (system 25 文件 413,496 + 根 starter 1,070)
+VERDICT    : SIZE_WARN   (stretch 349,525 < total 414,566 <= upper 629,145)
+MARGIN     : 65,041 bytes over stretch; 214,579 bytes under upper
+WINDOW_OK  : sum=614566 limit=900000
 ```
 
 - **`SIZE_WARN` 不是失败**：超目标线只报差额；硬门禁才是发版阻断线。
-- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`401,778 + 200,000 = 601,778`，
-  距 900,000 还有 298,222 B，距机身 1,000,000 B 还有 398,222 B。
+- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`414,566 + 200,000 = 614,566`，
+  距 900,000 还有 285,434 B，距机身 1,000,000 B 还有 385,434 B。
 - **发布包 ≠ 镜像**：发布 zip 是完整源码集（含 `recovery/` 与两份文档），`install.set` 统计的才是镜像；
   不要拿 zip 体积当门禁，也不要因为包里有 `recovery/` 就以为它在镜像里。
 
@@ -389,18 +415,20 @@ WINDOW_OK  : sum=601778 limit=900000
 | **无 DHCP / NAT / 路由 / WAN ACL / 多跳** | `nat`/`wan`/`wansec`/`fabric`/`topo`/`qos`/`mcast`/`dv` 全部裁掉；掌机只做端点，不转发、不做网关 |
 | **无 `input` capability** | 运行时的 7 个 cap 里没有输入/终端 cap；launcher 的按键是纯函数 + `opts.keys`，Net app 的 probe 目标从 `/etc/net.target` 读一行 |
 | **没有事件循环接管** | 启动链 commit 后返回（starter 不传 `loop` 钩子），ROM shell 接管；首帧与桌面是**静态渲染**，按键事件无处派发 |
-| **net 服务未默认注册** | 默认启动链只注册 `hello` 占位；`net` 服务随镜像提供（`S.spec()` / `S.register()`），需在启动时注入 `services = { ... }` 才启动（见下） |
+| **没有 `/etc/network.conf` 就没有网络** | `net` 服务由启动链默认注册（§3.1），但配置是用户数据：文件不存在就跳过（`STARTUP_NET_SKIP reason=no_config`），不猜默认地址、不写默认配置 |
 | **settings 严格只读** | 只声明 `fs.read`，没有任何写路径；看得到配置，改不了配置 |
 | **无中文** | CJK 字库与三件套全部删除（省 1,440,360 B）；界面与日志纯 ASCII，原版 CC 字体即可显示 |
 | **无 installer UI** | 安装器是模块 API（`inst:install(...)`），没有图形包管理器；安装需要手动执行或等输入服务 |
 | **无进程隔离 / 无法抢占** | app 共享一个 Lua VM；死循环只能重启整机；"杀进程"只是不再调度它的 coroutine |
 | **单文件更新上限 65,536 B** | 任何单文件超过 `F_MAX` 就永远无法通过文件集更新（当前最大 `rpv/node.lua` 60,498 B） |
 
-`net` 服务的注入点（当前镜像**未**默认接线；接上后 net.app 才能拿到 `net.rpv` 宿主对象）：
+`size` 与 `net` 都不在这个表里了：`size` 现在**声明即校验**（三处，见 §5.2 与 §6.1），
+`net` 现在**默认注册**（判据是 `/etc/network.conf` 存在，见 §3.1）。需要手工注入 spec 的场景仍然
+存在——但那只是为了**替换**默认服务（例如注入带自定义 `rpv` 的实例），不是为了补上缺失的注册：
 
 ```lua
 local specs = { dofile("/system/net/service.lua").spec({ log = print }) }
--- 启动链的 opts.services 接受这样的 spec 列表
+-- opts.services 里出现同名 "net" 时，默认 registration 会让位给注入的这一份
 ```
 
 ---
@@ -417,7 +445,7 @@ pwsh -NoProfile -File pyroet-os/tests/run-tests.ps1
 脚本把镜像 stage 到 `pyroet-os/.tests/computer/20`（与真机同布局：`/system` + `/system/system/*.app`），
 headless 启动、读取 `/offline-report.txt` 判分，**PASS 后自动删除 staging**（`-Keep` 保留）。
 
-基线（v1.0.0）：**OFFLINE_PASS 2890 / FAIL 0 / GROUPS 158**。
+基线（v1.0.0 + N1 修正）：**OFFLINE_PASS 3379 / FAIL 0 / GROUPS 176**。
 
 另有 P1 的 rpv 子集冒烟测试（可选）：
 
@@ -456,13 +484,14 @@ python tools/build_release.py --project pyroet-os --out dist/release
 | --- | --- |
 | 发布版本 | 1.0.0（`pyroet-os-v1.0.0.zip`） |
 | `/startup.lua` starter | 1,070 B（`DECISIONS.md` §13.11 的 1,071 B 为旧读数） |
-| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，20,654 B |
+| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，26,022 B（N1：+5,368 B，net 默认注册） |
 | bootloader | `M.VERSION = 2.0`，45,623 B |
 | kernel / apps / permissions | 1.0 / 1.0 / 1.0（13,958 / 28,804 / 18,387 B） |
-| installer / ota | 1.0 / 2.0（13,441 / 28,311 B） |
+| installer / ota | 1.0 / 2.0（17,295 / 31,877 B；N1：+3,854 / +3,566 B，size 校验） |
 | rpv 子集 | 10 文件 / 131,590 B（9 模块 + loader） |
 | 系统应用 | launcher / settings / net，均 0.1.0 |
-| 镜像 | 26 条 / 401,778 B / `SIZE_WARN` / `WINDOW_OK` |
+| OTA 服务端（`ota/server.lua`） | 1.0，27,927 B（不进镜像） |
+| 镜像 | 26 条 / 414,566 B / `SIZE_WARN` / `WINDOW_OK` |
 
 设计口径以 [`DECISIONS.md`](DECISIONS.md)（架构、门禁、发布）与 [`P6-design.md`](P6-design.md)
 （文件集更新、journal、崩溃窗口、bootloader 决策表）为准；本文是面向使用者的入口，

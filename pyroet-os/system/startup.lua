@@ -6,7 +6,8 @@ a thin sequence and pushes every real decision into the modules it loads:
     1. boot.begin()      decide from /system + update journal + /boot.ok
     2. kernel.new()      build the service manager
     3. apps.new()        build the app runtime, scan <apps_root> for *.app
-    4. register          the system services (currently one: the hello app)
+    4. register          the system services: hello, plus net when
+                         /etc/network.conf exists (then opts.services)
     5. start_all()       topological start, failure isolation
     6. apps tick         give the hello app its first time slice
     7. first frame       "UI is up" (DECISIONS.md 2.7 item 3)
@@ -30,6 +31,13 @@ Readiness before commit is exactly: kernel not `failed`, every service that had
 to start started (degraded is acceptable and logged), the app runtime made a
 scheduling pass, and the frame callback returned non-false.
 
+The network is the one service whose absence is normal (DECISIONS.md 9.9): the
+config it needs is user data, so `net` is registered only when `/etc/network.conf`
+is there, and anything that goes wrong afterwards -- no module, a raising spec, a
+start that fails -- is a `STARTUP_NET_DEGRADED` line and a degraded kernel
+health, never a reboot. A machine with no modem, no config or a bad config still
+reaches its first frame, its launcher and `boot.commit()`.
+
 The desktop step (8) is deliberately after the first frame and before the
 commit: the machine is provably up before anything interactive runs, a launcher
 that is missing only costs a log line (the hello placeholder is the fallback),
@@ -51,7 +59,8 @@ Usage under test (returns the module instead of booting):
 Options accepted by run(opts): fs, root (boot state prefix), boot, kernel, apps,
 boot_path, kernel_path, apps_path, apps_root, system_root, log, now, term,
 frame, loop, reboot, version, services, rpv, rednet, redstone, peripheral, http,
-write_limit, permissions, permissions_path, perms_root, ask, launcher.
+write_limit, permissions, permissions_path, perms_root, ask, launcher,
+net, net_path, net_config, net_hosts.
 
 No non-ASCII bytes in this file.
 ]]
@@ -72,6 +81,11 @@ P.SYSTEM_APPS_ROOT = "/system/system"
 P.LOG_PATH = "/kernel.log"
 P.LAUNCHER = "launcher"
 P.FALLBACK_APP = "hello"
+-- the second default service: image content (`system/net/service.lua`), started
+-- only when the user data it needs exists (`/etc/network.conf`)
+P.NET_NAME = "net"
+P.NET_SERVICE_PATH = "/system/net/service.lua"
+P.NET_CONFIG_PATH = "/etc/network.conf"
 
 local function short(value, max)
     local s = tostring(value == nil and "nil" or value)
@@ -90,6 +104,14 @@ local function load_module(path)
         return nil, "module " .. tostring(path) .. " did not return a table: " .. tostring(err)
     end
     return module
+end
+
+-- "is this file there?" without assuming the file system answers at all: a
+-- broken fs probe must not look like "no config" any more than like a crash
+local function file_exists(fsx, path)
+    if not fsx or type(fsx.exists) ~= "function" then return false end
+    local ok, exists = pcall(fsx.exists, path)
+    return ok and exists == true
 end
 
 -- default logger: stdout plus an append-only /kernel.log (best effort)
@@ -202,9 +224,80 @@ local function register_hello(k, ctx)
     return ok, err
 end
 
+-- Step 4b: the `net` service, when the machine was given a network config.
+--
+-- `/etc/network.conf` is user data (DECISIONS.md 9.4), so a fresh machine has
+-- none; registering `net` anyway would make every boot degrade on a missing file,
+-- which is exactly the kind of boot-to-boot noise that hides real failures. The
+-- file decides: present -> register, absent -> one log line and move on.
+--
+-- Everything after that decision is degraded, never fatal: a missing module, a
+-- raising `spec()`, a refused registration and a service that fails to start all
+-- leave the machine usable (the launcher, the apps and the OTA client never
+-- needed the network). Nothing here can turn a good boot into a rollback loop.
+function P.register_net(k, ctx)
+    if type(k) ~= "table" or type(k.register) ~= "function" then return false end
+    local log = ctx.log or function() end
+    local provided = false
+    local extra = ctx.services
+    if type(extra) == "table" then
+        for i = 1, #extra do
+            if type(extra[i]) == "table" and extra[i].name == P.NET_NAME then
+                provided = true
+            end
+        end
+    end
+    if provided then
+        ctx.net_state = "injected"
+        return false
+    end
+    local config = ctx.net_config or P.NET_CONFIG_PATH
+    if not file_exists(ctx.fs, config) then
+        log("STARTUP_NET_SKIP reason=no_config path=" .. short(config, 48))
+        ctx.net_state = "no_config"
+        return false
+    end
+    local mod = ctx.net_module
+    if mod == nil then
+        local path = ctx.net_path or P.NET_SERVICE_PATH
+        local err
+        mod, err = load_module(path)
+        if type(mod) ~= "table" or type(mod.spec) ~= "function" then
+            log("STARTUP_NET_SKIP reason=no_module err=" .. short(err or "not a module"))
+            ctx.net_state = "no_module"
+            return false
+        end
+    end
+    local ok, spec = pcall(mod.spec, {
+        fs = ctx.fs,
+        log = log,
+        rpv = ctx.rpv,
+        config_path = config,
+        hosts_path = ctx.net_hosts,
+    })
+    if not ok or type(spec) ~= "table" then
+        log("STARTUP_NET_FAIL reason=spec err=" .. short(spec))
+        ctx.net_state = "spec_failed"
+        return false
+    end
+    local okr, errr = k:register(P.NET_NAME, spec)
+    if not okr then
+        log("STARTUP_NET_FAIL reason=register err=" .. short(errr))
+        ctx.net_state = "register_failed"
+        return false
+    end
+    ctx.net_state = "registered"
+    log("STARTUP_NET_REGISTER path=" .. short(config, 64))
+    return true
+end
+
+-- Step 4: the services this chain always has. `hello` first (it is the desktop's
+-- fallback), then `net` when the machine has a config, then whatever the caller
+-- injected through opts.services (a spec named "net" wins over the default one).
 function P.register_system(k, ctx)
     local ok, err = register_hello(k, ctx)
     if not ok then return nil, err end
+    P.register_net(k, ctx)
     local extra = ctx.services
     if extra then
         for i = 1, #extra do
@@ -214,6 +307,28 @@ function P.register_system(k, ctx)
         end
     end
     return true
+end
+
+-- After start_all: say out loud whether the network came up, and keep the boot
+-- chain's promise that `degraded` is not a reason to reboot.
+function P.report_net(k, ctx)
+    if type(k) ~= "table" or type(k.get) ~= "function" then return nil end
+    local log = ctx.log or function() end
+    local record = k:get(P.NET_NAME)
+    if type(record) ~= "table" then return nil end
+    local healthy = "n/a"
+    if record.state == "running" and type(record.spec) == "table"
+        and type(record.spec.health) == "function" then
+        local ok, value = pcall(record.spec.health, k)
+        healthy = ok and tostring(value) or "failed"
+    end
+    if record.state == "running" and healthy == "ok" then
+        log("STARTUP_NET_READY state=running")
+        return "ok"
+    end
+    log("STARTUP_NET_DEGRADED state=" .. tostring(record.state)
+        .. " health=" .. healthy)
+    return "degraded"
 end
 
 -- ---------------------------------------------------------------------------
@@ -362,6 +477,14 @@ function P.run(opts)
         rt = nil,
         perms = nil,
         launcher = nil,
+        -- nothing network-related is required: these are the hooks the tests (and
+        -- a future input service) use to point the net service at another config
+        rpv = o.rpv,
+        net_config = o.net_config,
+        net_path = o.net_path,
+        net_module = o.net,
+        net_hosts = o.net_hosts,
+        net_state = nil,
         boot_opts = { fs = fsx, root = o.root or "", log = log, now = o.now },
         reboot = o.reboot or function()
             if os and os.reboot then os.reboot() end
@@ -456,6 +579,9 @@ function P.run(opts)
     if status.fatal then
         return reboot(ctx, "kernel_health")
     end
+    -- 5b. the network is the one service allowed to be missing or broken: report
+    -- it and keep going (DECISIONS.md 9.9)
+    P.report_net(k, ctx)
 
     -- 6. one scheduling pass so on_start bodies are running before the frame
     if ctx.rt then

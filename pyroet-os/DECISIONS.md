@@ -18,6 +18,12 @@
 4. **容量三层门禁（G1 起；唯一口径 = `pyroet-os/tools/sizecheck.py`）**：硬门禁 **3/5 MiB = 629,145 B**（`>629,145` = `SIZE_FAIL`，发版阻断）；目标线 **1/3 MiB = 349,525 B**（`349,525 < total ≤ 629,145` = `SIZE_WARN`，只提示不判死）；`≤349,525` = `SIZE_PASS`。另有独立判定的更新窗口 **镜像 + BACKUP_CAP(200,000) ≤ 900,000 B**（`WINDOW_OK`/`WINDOW_FAIL` 行，见 §7.1/§8.4）。超目标线不判死，但必须报差额（MARGIN 行）。
 5. **类 Android 的分层与权限模型**（§1）。
 
+0.5 **网络定位（显式声明，不再动摇）**：**本项目不做设备入网鉴权**。网络层只做**连接**（rpv/UDP，
+有界超时、重试）与**加密**（crypto/wrps 之于报文），**不做准入判定**——没有 radius/EAP 式的
+认证服务器、没有"设备/终端 id 白名单"门禁、不要求凭证才能联网，也不存在"没有许可证就断网"的
+分支。需要"这张盘能装几次"的那类额度属于装机侧（见 `itn-pass/` 的装机/分发凭证），与本系统的
+联网能力**没有耦合**：网络通不通只取决于链路与配置，不取决于任何凭证状态。
+
 ## 1. 架构分层
 
 1.1 启动链（自上而下，单向）：
@@ -227,7 +233,7 @@ python pyroet-os/tools/sizecheck.py                                      # 门�
 | `version` | string | `MAJOR.MINOR.PATCH`，安装器只比较、不解析语义 |
 | `capabilities` | table of string | 只能取自 §1.2(b) 的 7 个 cap，未知 cap 直接拒绝安装 |
 | `entry` | string | 入口文件名，默认 `"main.lua"` |
-| `size` | integer | 包内所有文件的字节总和（安装前先校验，失败即拒绝） |
+| `size` | integer | 包内字节总和，**不含 `manifest.lua` 自己**（文件无法包含自己的最终长度）；安装前核对，不符即拒绝（口径见 §16.3） |
 
 5.3 安装器校验：先比 `size`，再对**每个文件**算 SHA256（值来自分发清单）并与清单比对，最后对整包再算一次；任何不一致 → 拒绝安装且不落盘（先写 `.staging/` 再 move；改版是“先删旧目录再 move”，因为 CC 的 `fs.move` 不能覆盖已存在目标——与 §2.3 的 `/boot.slot` 原子写同一约束）。运行时启动前再验一次 `entry` 的 SHA256，防止落盘后被改。
 
@@ -441,7 +447,7 @@ META/DATA 解析、`P.target`、原子写与文件集事务（成功、幂等第
 
 journal 行格式 `<relpath> <old_sha> <new_sha> <bytes>`；`old_sha = -` 表示本次新增（回滚 = 删除该文件）。**写 journal 永远“写新一代 + 保留上一代”**，不原地重写：CraftOS 的 `fs.move` 不能覆盖，原地替换必然有“目标已删、新的还没挪进来”的窗口，一次断电就丢回滚意图。bootloader 取“能解析且 seq 最大”的一代，坏代忽略；两代都坏且磁盘上有 `/update.backup` 素材时按回滚失败处理。
 
-13.3 **校验时机（写死）**：清单校验必须在**下载完成时、`/system` 一字节未动之前**：收齐全部 `FILE` 行后按 P6-design §3.2 算聚合哈希（按 `relpath` 升序拼 `<relpath>\0<size>\0<sha 小写>\n`，整串一次 SHA-256）与 `META.manifest_sha` 比对，不符即 `OTA_REJECT stage=verify reason=manifest_sha got=.. want=..`、状态 `rejected`、可 `retry()` 从第 0 块重来，系统不动。理由：`old_sha`/`new_sha` 是回滚能力的来源；一旦进入 `applying`，系统随时处于中间态，那时才发现内容不可信，唯一出路是用备份回旧版本，而备份的可信度取决于 `old_sha` 在动手之前就是对的。同理 `old_sha` 一律**本地现算**，不信服务器。
+13.3 **校验时机（写死）**：清单校验必须在**下载完成时、`/system` 一字节未动之前**：收齐全部 `FILE` 行后按 P6-design §3.2 算聚合哈希（按 `relpath` 升序拼 `<relpath>\0<size>\0<sha 小写>\n`，整串一次 SHA-256）与 `META.manifest_sha` 比对，不符即 `OTA_REJECT stage=verify reason=manifest_sha got=.. want=..`、状态 `rejected`、可 `retry()` 从第 0 块重来，系统不动。理由：`old_sha`/`new_sha` 是回滚能力的来源；一旦进入 `applying`，系统随时处于中间态，那时才发现内容不可信，唯一出路是用备份回旧版本，而备份的可信度取决于 `old_sha` 在动手之前就是对的。同理 `old_sha` 一律**本地现算**，不信服务器。同一个时机还校验**字节数**：`.part` 必须恰是 `FILE` 行声明的 `size`（`fs.getSize` 复核），不符即 `OTA_REJECT stage=verify reason=size file=.. got=.. want=..`；`move` 进 `/system/` 之后再量一次（`OTA_FAIL stage=install err=size ..` + 回滚）——摘要证明内容、字节数证明长度，缺一不可（§16.1）。
 
 13.4 **BACKUP_CAP = 200,000 B（策略上限，写死）**：在收到全部 `FILE`、算出“会被备份的字节数”（只算已存在的目标文件）之后、写 `prepare` 之前检查；超限即 `OTA_REJECT stage=cap reason=too_big need=<b> cap=200000`，系统一字节不动。与 `sizecheck.py` 的窗口门禁同口径：`TOTAL + 200,000 ≤ 900,000`（当前 `592,500`）。物理上限仍是机身配额；单文件上限 `F_max = 65,536 B`，超限 `stage=file`。
 
@@ -552,6 +558,65 @@ stub rednet 只替换 modem（客户端 `send` → 服务端 `dispatch` → 回�
 字节被改 → 下载校验失败 → 回滚到原字节、丢 DATA 回包 / 丢请求 → 重传后成功、`files=0`（服务端合法 `sha256("")`、客户端拒 `bad files`）、
 超大文件与非法路径两侧都拒、越界 idx、`retry()` 从 `rejected` 恢复、`serve()/stop()` 循环与 `receive` 抛错。基线见修订记录。
 
+## 16. N1 修正（size 校验与 net 默认注册）
+
+> 两条此前写在 README「已知限制」里的缺口，N1 起不再是缺口：manifest 的 `size` 运行时会校验，
+> `net` 服务由默认启动链注册。本节是这两件事的权威口径；README 面向使用者，这里是给实现者的。
+
+16.1 **OTA 客户端（`system/kernel/ota.lua`）：三处字节数校验，全部 fail-closed**
+
+1. **下载请求**只按声明 `size` 推进，末块长度必须正好 `want`；短包按坏块重试（`OTA_RETRY ... err=file size ...`），
+   不是"少收一点也算完"。
+2. **`.part` 写完先量字节**（`fs.getSize`，取不到则整文件回读计数）再比摘要：不等即
+   `OTA_REJECT stage=verify reason=size file=<relpath> got=<实际> want=<声明>`。此时磁盘一字节未动：
+   若本次更新**还没有任何文件落地**，先 `boot.cleanup()` 丢掉 journal/stage，再进 `rejected`（可 `retry()`）；
+   已经有文件落地则改走 `OTA_FAIL stage=verify` + `OTA_ROLLED_BACK`（备份已存在，必须回滚）。
+3. **`move` 进 `/system/<relpath>` 之后再量一次**：不等即 `OTA_FAIL stage=install err=size got=.. want=..` + 回滚。
+   防的是"写短了但摘要碰巧对上"以及替换后被截断——摘要证明内容，字节数证明长度，两者都要。
+
+16.2 **安装器（`system/kernel/installer.lua`）：两处声明，缺省即跳过**（向后兼容是硬要求，不是宽松）
+
+- `SHA256SUMS` 第三列：`<64 hex>  <size>  <relpath>` 或 `<64 hex>  <relpath>  <size>`（两种列序都收，
+  不写第三列就是老格式）。逐文件比对，不符 → `INSTALL_SIZE_BAD file=<rel> got=.. want=..` +
+  `INSTALL_FAIL ... err=size <rel>`，不落盘、保留旧版本。
+- manifest 的 `size`：整包总量，统计暂存目录里除 `manifest.lua` 外的全部文件（含 `SHA256SUMS` 自身）。
+  运行时校验后的 manifest 只保留白名单字段，原始表放在 `manifest.raw`，安装器从那里读声明值
+  （`manifest.size` 与 `manifest.raw.size` 都认）。不符 → `INSTALL_SIZE_BAD scope=package got=.. want=..` +
+  `INSTALL_FAIL ... err=size <实际>/<声明>`；声明值不是整数 → `INSTALL_SIZE_BAD scope=package
+  reason=declared value=..`（拒绝，不静默忽略）。
+- 两处都可以不写；不写就是只验摘要的老行为。
+
+16.3 **`size` 的口径**：`manifest.lua` **不计入**包总量。这是实现约束而非口味——文件无法包含自己的
+最终长度，把 `manifest.lua` 计入会让声明值自指。`SHA256SUMS` 计入是安全的：它的长度只取决于摘要
+字面长度（恒 64）与被列文件名的长度，不取决于内容（打包工具因此可以两遍定稿）。
+
+16.4 **OTA 服务端（`ota/server.lua`）同样 fail-closed**：`size` 与持有的字节数不符一律
+`OTA_SERVER_BAD_FILE path=.. reason=size got=.. want=..`，并在三个时机各查一次——按目录构建清单时
+（文件系统报的字节数 vs 实际读到的字节数）、装载清单时（声明 vs 载荷）、FILE/DATA 应答前（防加载后
+被改写）。构建/装载失败即 `self.error`，一个请求也不服务（`ERR reason=size`）。
+
+16.5 **`net` 服务默认注册（`system/startup.lua`）**
+
+- 判据是**用户数据**：仅当 `/etc/network.conf` 存在时注册 `net`（`/system/net/service.lua` 的 `spec()`），
+  否则记 `STARTUP_NET_SKIP reason=no_config path=..` 并继续。缺配置**不是**启动失败（新机本来没有 `/etc`）。
+- 之后的任何问题都只记日志并让 `health=degraded`，**绝不 reboot、绝不回滚整机**：模块缺失
+  `STARTUP_NET_SKIP reason=no_module`、`spec()` 抛错 `STARTUP_NET_FAIL reason=spec`、注册被拒
+  `STARTUP_NET_FAIL reason=register`、启动失败 `KERNEL_SERVICE_FAIL name=net` +
+  `STARTUP_NET_DEGRADED state=failed health=n/a`；跑起来但没起网 `STARTUP_NET_DEGRADED state=running
+  health=degraded`；起网 `STARTUP_NET_READY state=running`（服务自己另有 `NET_READY`/`NET_DEGRADED`）。
+- 顺序不变：权限表 → 服务注册（hello + net）→ 首帧 → 启动 launcher → `boot.commit()`。
+- `opts.services` 里若已含同名 `net`，默认注册让位给注入的那一份（不重复注册）。
+- 为什么不同时加载 rpv：注册服务不等于替它准备 `rpv` 表——注入 `opts.rpv` 才真起网。把 131 KB 的
+  rpv 栈绑进每次开机不在 N1 范围内；没有 rpv 时 `net` 服务自己记 `NET_RPV_MISSING` 并 degraded。
+
+16.6 **测试与体积口径（N1 实测）**：`OFFLINE_PASS 3,379 / FAIL 0 / GROUPS 176`（O2 基线 3,258/168，
++121 断言 / +8 组：`t_ota` 的 `ota.size_verify`、`ota.size_apply`，`t_installer` 的 `installer.size`，
+`t_ota_server` 的 `ota_server.size`，`t_startup` 的 `startup.net_default`/`net_skip`/`net_degraded`/`net_fail`）；
+`python pyroet-os/tools/sizecheck.py` → `install.set` 仍 26 条、TOTAL **414,566 B / SIZE_WARN /
+MARGIN 65,041**、`WINDOW_OK sum=614,566`（+12,788 B：`startup.lua` 20,654→26,022、
+`kernel/installer.lua` 13,441→17,295、`kernel/ota.lua` 28,311→31,877）；改动 lua 非 ASCII 计数 0；
+门禁参数与 `install.set` 未动。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -566,3 +631,5 @@ stub rednet 只替换 modem（客户端 `send` → 服务端 `dispatch` → 回�
 - 2026-10-29: **G2 清掉槽位时代的兜底读取**。`system/system/launcher.app/main.lua` 与 `system/system/settings.app/main.lua` 删除对 `/boot.slot`、`/slots/<x>/boot.ok`、`/slots/<x>/.image` 的全部读取分支和 `slot <x>`/`slot ?` 文案：`M.SLOT_PATH` → `M.BOOT_OK = "/boot.ok"`，`read_boot()` 只解析全局 `PYROET-BOOT-OK-2 version=.. manifest_sha=.. ts=..`（`manifest_sha` 为主键，P6 之前留在同一文件上的 `sha256` 作同义兜底，`none` 丢弃），新增 `M.short_sha()` 取前 8 位十六进制；launcher 行 1 变 `ver <v> sha <8hex>`（21 列），settings 变 `os <v>` + `image <v> sha <8hex>`（24 列），26x20 不越界、纯 ASCII；两个 app 的 `layout_selftest()` 各加一条“任何行不得再出现 slot”的检查。`tests/t_launcher.lua`/`t_settings.lua` 的 fixture 改全局 `/boot.ok`，槽位断言逐条替换为等价的全局标记断言（`slot a` → `no_slot_field` + `source=/boot.ok` + `sha abababab`、`.image` 兜底 → `manifest_sha=none` 被丢弃、`/boot.slot` 垃圾输入 → `/boot.ok` 垃圾输入、`H.absent(...,"slot")`），断言未删；`t_desktop` 的 fixture 本来已是全局凭据，未改。文档 §1.1/§2.2/§7.4/§10.5/§10.6/§11.2/§11.6 同步或标注 superseded，§13.9 记为已清账。离线 **2,890 pass / 0 fail / 158 groups**（P6-3 2,880/158，+10 断言）；TOTAL **401,769 B / SIZE_WARN**（+129 B）、`WINDOW_OK sum=601,769`；改动 lua 非 ASCII 计数 0。
 - 2026-10-29: **B7 接通发布（CI + 打包 + 根 README），口径见 §14**。`tools/build_release.py`：`VERSIONS` 增 `"pyroet-os": "1.0.0"`，`EXCLUDE_FROM_RELEASE` 增 `"pyroet-os": ("tests/", "tools/")`（按相对路径前缀匹配，`recovery/` 与两份文档保留在包内）。`.github/workflows/release-builds.yml` 按 itn-pass 同一模式补四处：dispatch 选项 `- pyroet-os`、tag `fromJSON` 名单加 `"pyroet-os"`、分支构建循环 `for project in sentinel cardkey pylib itn-pass pyroet-os`、`case` 分派 `sentinel|cardkey|pylib|itn-pass|pyroet-os)`；未重构任何行。根 `README.md` 加项目表一行（掌机类 Android OS、单树 + journal 文件集更新、含 EDL 式 `recovery/`）、构建命令一行（`python tools/build_release.py --project pyroet-os --out dist/release` → `dist/release/pyroet-os-v1.0.0.zip`，注明不含 `tests/`、`tools/`）、tag 名单一处。实测 `pyroet-os-v1.0.0.zip` **33 成员**（32 个 `pyroet-os/` 成员 + 根 `LICENSE`），同一内容重跑字节相同；**zip 的字节数与 sha256 刻意不写进本文档**——`DECISIONS.md` 自己是包内成员，写进去就改变哈希（构建输出与 release 页面才是可信来源）；成员含 `recovery/`(3)、`DECISIONS.md`、`P6-design.md`、`install.set`、`startup.lua`、`system/`(25)，不含 `tests/`、`tools/`。**其它项目零影响**：sentinel / cardkey / pylib / itn-pass 四包用 HEAD 版与新版脚本各构建一次，sha256 逐一相同（`d0fa417d…` / `686e1bb4…` / `e67772f1…` / `46575505…`）。本任务未改任何 `.lua`。
 - 2026-10-29: **O2 落地 OTA 服务端（分发中心侧）**。新增 `ota/server.lua`（636 行纯 ASCII，表模块 `local M = ... return M`）：`M.new{fs,log,rednet,channel,manifest|dir}`、`M.build_manifest(dir)`（发布目录 + `meta.txt` 侧车，按 relpath 排序算逐文件 sha256 与 §3.2 聚合哈希，`files=`/`manifest_sha=` 可选钉，白名单/0 字节/`F_MAX`/`MAX_FILES` 不合一律 fail-closed）、`M.handle(msg,sender)`（`GET meta`/`GET <idx>`/`GET <idx> <offset>` → `META`/`FILE`/`DATA`，非法请求回 `ERR reason=..`，非本协议前缀静默忽略）、`M.serve()`/`M.stop()`；常量、路径白名单、hex 大小写、offset 步长与末块长度全部与客户端逐项对齐（白名单是复制 + 双向差分，来源注释点名 `system/kernel/ota.lua:235-260`）。新增 `tests/t_ota_server.lua`（897 行 / **368 断言 / 10 组**），在同一进程用 stub rednet 把客户端与服务端接起来跑完整更新，含 `valid_path` 与 `manifest_hash` 双向交叉、线上 8 条请求逐条断言、META 说谎/字节改坏/丢 DATA 回包/丢请求/`files=0`/超大文件/非法路径/越界 idx/`retry()`/`serve()` 全路径。`tests/run.lua` 的 FILES 追加 `t_ota_server`，`tests/run-tests.ps1` stage `ota/*.lua` 并把 `ota\server.lua` 列入 `$required`。**不进镜像**：`install.set` 仍 26 条、TOTAL **401,778 B / SIZE_WARN / MARGIN 52,253**、`WINDOW_OK sum=601,778`；离线 **3,258 pass / 0 fail / 168 groups**（基线 2,890/158，**+368 断言 / +10 组**）；新增/改动 lua 非 ASCII 计数 0。文档新增 §15；发布 zip 的 `pyroet-os/` 成员会因 `build_release.py` 的 `rglob` 自动 +1（见 §15.6），本轮不改打包脚本。
+- 2026-11-01: **网络定位声明（N2，跨项目口径）**。在 §0.5 写死：**本项目不做设备入网鉴权**；网络层只做连接（rpv/UDP）与加密，**不做准入判定**（无认证服务器、无设备白名单、不要求凭证才能联网）。同时声明：装机侧额度（`itn-pass/` 的装机/分发凭证）与联网能力无耦合，网络通不通只取决于链路与配置。本条只改本文档，未动 `pyroet-os/` 任何代码或测试。
+- 2026-11-01: **N1 关掉两条「已知限制」——`size` 运行时校验 + `net` 默认注册**（口径见 §16）。`kernel/ota.lua`（+3,566 B）：下载/`.part`/`move` 后三处比字节数，`.part` 不符在"没有文件落地"时 `boot.cleanup()` 后 `OTA_REJECT stage=verify reason=size file=.. got=.. want=..`（可 `retry()`），已有落地则 `OTA_FAIL stage=verify` + 回滚；`move` 进 `/system/` 后再量一次（`OTA_FAIL stage=install`）防截断。`kernel/installer.lua`（+3,854 B）：`SHA256SUMS` 第三列（两种列序）逐文件比对 + manifest `size` 整包总量（`manifest.lua` 不计，原始表从 `manifest.raw` 读），不符 `INSTALL_SIZE_BAD ...` + `INSTALL_FAIL ... err=size ...`、不落盘；两处缺省即跳过（向后兼容）。`ota/server.lua`（不进镜像）：构建（`getSize` vs 实际字节）/装载/应答前三点 fail-closed，`OTA_SERVER_BAD_FILE path=.. reason=size got=.. want=..`（装载拒绝理由由 `size_mismatch` 统一为 `size`）。`startup.lua`（+5,368 B）：仅当 `/etc/network.conf` 存在时注册 `net`（`P.register_net`），否则 `STARTUP_NET_SKIP reason=no_config`；`P.report_net` 在 `start_all()` 后记 `STARTUP_NET_READY` / `STARTUP_NET_DEGRADED`，模块缺失/`spec()` 抛错/注册被拒/启动失败全部只 degraded、不 reboot；`opts.services` 里的同名 `net` 优先于默认注册；顺序仍是权限表 → 注册 → 首帧 → launcher → commit。测试：新增 8 组 121 断言，离线 **3,379 pass / 0 fail / 176 groups**（O2 3,258/168）；TOTAL **414,566 B / SIZE_WARN / MARGIN 65,041**、`WINDOW_OK sum=614,566`；门禁与 `install.set` 未动；改动 lua 非 ASCII 计数 0。

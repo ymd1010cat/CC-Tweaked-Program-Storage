@@ -46,12 +46,17 @@ tests/t_ota_server.lua:
     a silent divergence between the two ends.
 
 Fail-closed on the publishing side, on purpose: a manifest that is internally
-inconsistent (a digest that does not match the bytes, a manifest_sha that does
-not match the records, a file over `F_MAX`, a path outside the whitelist) is
+inconsistent (a digest that does not match the bytes, a declared `size` that is
+not the number of bytes the payload really has, a manifest_sha that does not
+match the records, a file over `F_MAX`, a path outside the whitelist) is
 refused by `M.new`/`M.build_manifest` instead of being served and rejected by
-every client in the field one by one. Nothing is signed: SHA-256 plus framing
-is the whole trust model (DECISIONS.md 15.3), and the "signature" of a publish
-directory is the `manifest_sha` pin in its `meta.txt`.
+every client in the field one by one. A size mismatch is always reported as
+`OTA_SERVER_BAD_FILE path=.. reason=size got=.. want=..`, at build time from the
+directory (the file system's own byte count against the bytes that were read),
+when a manifest is loaded, and again before a FILE/DATA reply leaves. Nothing is
+signed: SHA-256 plus framing is the whole trust model (DECISIONS.md 15.3), and
+the "signature" of a publish directory is the `manifest_sha` pin in its
+`meta.txt`.
 
     local S = dofile("/ota/server.lua")
     local srv = S.new({ fs = fs, rednet = rednet, dir = "/publish" })
@@ -239,6 +244,17 @@ local function walk(fsx, base, rel, out, state)
                 state.bad = { relpath = sub, why = "read_failed" }
                 return
             end
+            -- the byte count the file system reports has to be the number of
+            -- bytes that were just read: a mirror whose metadata and payload
+            -- disagree cannot be published (the client would see a FILE line it
+            -- can never satisfy)
+            if type(fsx.getSize) == "function" then
+                local oks, on_disk = pcall(fsx.getSize, path)
+                if oks and type(on_disk) == "number" and on_disk ~= #data then
+                    state.bad = { relpath = sub, why = "size", got = #data, want = on_disk }
+                    return
+                end
+            end
             if #data < 1 then
                 state.bad = { relpath = sub, why = "bad_size" }
                 return
@@ -312,7 +328,9 @@ function M.build_manifest(dir, opts)
     walk(fsx, dir, "", recs, state)
     if state.bad then
         sink("OTA_SERVER_BAD_FILE path=" .. safe(state.bad.relpath, 96)
-            .. " why=" .. safe(state.bad.why))
+            .. " reason=" .. safe(state.bad.why)
+            .. (state.bad.got ~= nil and (" got=" .. tostring(state.bad.got)
+                .. " want=" .. tostring(state.bad.want)) or ""))
         return nil, state.bad.why, state.bad.relpath
     end
     if #recs > M.MAX_FILES then
@@ -400,7 +418,14 @@ function M:load_manifest(manifest)
         local size = f.size
         if data ~= nil then
             if type(data) ~= "string" then return nil, "bad_data" end
-            if size ~= nil and tonumber(size) ~= #data then return nil, "size_mismatch" end
+            if size ~= nil and tonumber(size) ~= #data then
+                -- a declared size that is not the number of bytes we hold: the
+                -- FILE line would promise something DATA can never deliver
+                self:log("OTA_SERVER_BAD_FILE path=" .. safe(f.relpath, 96)
+                    .. " reason=size got=" .. tostring(#data)
+                    .. " want=" .. tostring(size))
+                return nil, "size"
+            end
             size = #data
         end
         size = tonumber(size)
@@ -516,6 +541,15 @@ function M:request(msg)
     local idx = tonumber(a)
     if not idx or idx < 0 or idx >= #self.files then return nil, "bad_idx" end
     local f = self.files[idx + 1]
+
+    -- last line of defence before a FILE/DATA reply goes out: a record whose
+    -- declared size and payload disagree is not served, whatever put it there
+    if f.data ~= nil and #f.data ~= f.size then
+        self:log("OTA_SERVER_BAD_FILE path=" .. safe(f.relpath, 96)
+            .. " reason=size got=" .. tostring(#f.data)
+            .. " want=" .. tostring(f.size))
+        return nil, "size"
+    end
 
     if b == "" then
         return M.PREFIX .. " FILE " .. f.relpath .. " " .. tostring(f.size)

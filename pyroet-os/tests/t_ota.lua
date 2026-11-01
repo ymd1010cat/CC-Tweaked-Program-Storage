@@ -822,4 +822,109 @@ return function(H)
         H.eq("system_applied", sha_of(dir .. "/system/kernel/a.lua"), sha("-- a v2\n"))
         H.eq("old_was", olds["kernel/a.lua"] ~= sha("-- a v2\n"), true)
     end
+
+    -- -----------------------------------------------------------------
+    H.group("ota.size_verify")
+    do
+        -- The declared <size> is a promise about the number of bytes. The fake
+        -- peer never lies about it (its DATA chunks carry the real bytes), so the
+        -- only way to break it is a write that does not put them all on disk --
+        -- which is what these two proxies do, one byte short and five bytes long.
+        -- Both have to be named as size failures, not as digest failures.
+        local files = { ["kernel/a.lua"] = "-- a v1\n" }
+        local new_text = "-- a v2\n"
+        local want_size = #new_text
+
+        local function lying(name, delta)
+            local real = F.getSize
+            return H.fs({ overrides = {
+                getSize = function(path)
+                    local size = real(path)
+                    if size == nil then return nil end
+                    if type(path) == "string" and path:find("%.part$") then
+                        return size + delta
+                    end
+                    return size
+                end,
+            } })
+        end
+
+        -- short: the part holds fewer bytes than the manifest declares
+        local dir = sandbox("size_short", files)
+        local p = peer({ { relpath = "kernel/a.lua", data = new_text } })
+        local c, log, lines = client(dir, p.rednet, { fs = lying("short", -1) })
+        local ok, err = c:update()
+        H.check("short_ok", ok == nil and type(err) == "string", "ok=" .. tostring(ok))
+        H.eq("short_state", c:status().state, "rejected")
+        H.eq("short_stage", c:status().stage, "verify")
+        H.eq("short_err", err, "size")
+        H.has(lines, "OTA_REJECT stage=verify reason=size file=kernel/a.lua got="
+            .. (want_size - 1) .. " want=" .. want_size)
+        H.has(lines, "OTA_RETRY attempt=1 max=2 err=file size got="
+            .. (want_size - 1) .. " want=" .. want_size)
+        H.eq("short_retries", c:status().retries, 2)
+        -- nothing was written and nothing was left behind: a reject is retryable
+        H.eq("short_system", sha_of(dir .. "/system/kernel/a.lua"), sha("-- a v1\n"))
+        H.eq("short_journal", BOOT.journal_gens({ fs = F, root = dir })[1], nil)
+        H.eq("short_backup", H.exists(dir .. "/update.backup"), false)
+        H.eq("short_stage_dir", H.exists(dir .. "/update.stage"), false)
+
+        -- long: the part holds more bytes than the manifest declares
+        local dir2 = sandbox("size_long", files)
+        local p2 = peer({ { relpath = "kernel/a.lua", data = new_text } })
+        local c2, log2, lines2 = client(dir2, p2.rednet, { fs = lying("long", 5) })
+        local ok2, err2 = c2:update()
+        H.check("long_ok", ok2 == nil, "ok=" .. tostring(ok2))
+        H.eq("long_state", c2:status().state, "rejected")
+        H.eq("long_err", err2, "size")
+        H.has(lines2, "OTA_REJECT stage=verify reason=size file=kernel/a.lua got="
+            .. (want_size + 5) .. " want=" .. want_size)
+        H.eq("long_system", sha_of(dir2 .. "/system/kernel/a.lua"), sha("-- a v1\n"))
+        H.eq("long_journal", BOOT.journal_gens({ fs = F, root = dir2 })[1], nil)
+
+        -- the same update without the lie lands: the check above is not a
+        -- blanket refusal of every download
+        local dir3 = sandbox("size_honest", files)
+        local p3 = peer({ { relpath = "kernel/a.lua", data = new_text } })
+        local c3 = client(dir3, p3.rednet)
+        H.check("honest_ok", c3:update() == true, "an honest size was refused")
+        H.eq("honest_applied", sha_of(dir3 .. "/system/kernel/a.lua"), sha(new_text))
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("ota.size_apply")
+    do
+        -- The part is proven, the move into /system succeeds, and the file that
+        -- landed is then measured again: a write cut short after the digest was
+        -- computed must not be reported as a digest mismatch one file too late.
+        local a1, a2 = "-- a v1\n", "-- a v2\n"
+        local dir, olds = sandbox("size_apply", { ["kernel/a.lua"] = a1 })
+        local p = peer({ { relpath = "kernel/a.lua", data = a2 } })
+        local target = dir .. "/system/kernel/a.lua"
+        local real = F.getSize
+        local lied = false
+        local proxy = H.fs({ overrides = {
+            getSize = function(path)
+                local size = real(path)
+                if size == nil then return nil end
+                -- one lie only: the check itself, so the rollback reads true sizes
+                if path == target and not lied then
+                    lied = true
+                    return size + 3
+                end
+                return size
+            end,
+        } })
+        local c, log, lines = client(dir, p.rednet, { fs = proxy })
+        local ok, err = c:update()
+        H.check("apply_ok", ok == nil and type(err) == "string", "ok=" .. tostring(ok))
+        H.eq("apply_state", c:status().state, "rolled_back")
+        H.eq("apply_stage", c:status().stage, "install")
+        H.has(lines, "OTA_FAIL stage=install err=size got=" .. (#a2 + 3)
+            .. " want=" .. #a2)
+        H.has(lines, "OTA_ROLLED_BACK stage=install")
+        H.eq("apply_back_to_old", sha_of(target), olds["kernel/a.lua"])
+        H.eq("apply_journal", journal_of(dir).state, "rolledback")
+        H.check("apply_lied_once", lied == true, "the size probe was never used")
+    end
 end

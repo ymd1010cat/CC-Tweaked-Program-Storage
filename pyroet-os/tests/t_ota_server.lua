@@ -467,7 +467,7 @@ return function(H)
         reject({ version = "1", files = { { relpath = "kernel/a.lua", size = 9, sha256 = "zz" } } },
             "bad_sha256")
         reject({ version = "1", files = { { relpath = "kernel/a.lua", data = "a", size = 2 } } },
-            "size_mismatch")
+            "size")
         reject({ version = "1", files = { { relpath = "kernel/a.lua", data = "a",
             sha256 = H.HEX64 } } }, "sha_mismatch")
         reject({ version = "1", files = {
@@ -893,5 +893,80 @@ return function(H)
         -- stop() before/after serve is idempotent and harmless
         H.eq("stop_return", s:stop(), true)
         H.eq("stop_again", s:stop(), true)
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("ota_server.size")
+    do
+        -- A declared size that is not the number of bytes the server holds is
+        -- refused on this side, so no client ever sees a FILE line it cannot
+        -- satisfy. Three moments are covered: building from a directory (whose
+        -- file system disagrees with its own bytes), loading a manifest, and
+        -- answering a request.
+        local a = "-- a v1\n"
+
+        -- 1. build: the directory says one thing, the read-back another
+        local pub = publish("size_build", "1.0.0", { ["kernel/a.lua"] = a })
+        local real = F.getSize
+        local bad_fs = H.fs({ overrides = {
+            getSize = function(path)
+                local size = real(path)
+                if size == nil then return nil end
+                if type(path) == "string" and path:find("kernel/a.lua", 1, true) then
+                    return size + 7
+                end
+                return size
+            end,
+        } })
+        local m, why, path, blines = build(pub, { fs = bad_fs })
+        H.eq("build_size_nil", m, nil)
+        H.eq("build_size_why", why, "size")
+        H.eq("build_size_path", path, "kernel/a.lua")
+        H.has(blines, "OTA_SERVER_BAD_FILE path=kernel_a.lua reason=size got="
+            .. tostring(#a) .. " want=" .. tostring(#a + 7))
+
+        -- the same directory through the real file system builds fine
+        local okm, okwhy = build(pub)
+        H.table("build_honest", okm)
+        H.eq("build_honest_why", okwhy, nil)
+
+        -- 2. load: too large and too small are both refused, with the numbers
+        local s, log, lines = server({ manifest = { version = "1", files = {
+            { relpath = "kernel/a.lua", data = a, size = #a + 1 },
+        } } })
+        H.eq("load_long_error", s.error, "size")
+        H.has(lines, "OTA_SERVER_BAD_FILE path=kernel_a.lua reason=size got="
+            .. tostring(#a) .. " want=" .. tostring(#a + 1))
+
+        local s2, _, lines2 = server({ manifest = { version = "1", files = {
+            { relpath = "kernel/a.lua", data = a, size = #a - 1 },
+        } } })
+        H.eq("load_short_error", s2.error, "size")
+        H.has(lines2, "OTA_SERVER_BAD_FILE path=kernel_a.lua reason=size got="
+            .. tostring(#a) .. " want=" .. tostring(#a - 1))
+        -- nothing is served from a refused manifest
+        H.eq("load_short_files", s2.files, nil)
+        H.eq("load_short_reply", s2:handle(PREFIX .. " GET 0", 7),
+            PREFIX .. " ERR reason=size")
+
+        -- a size that is exactly the payload is accepted (the check is a check,
+        -- not a refusal of declared sizes)
+        local s3 = server({ manifest = { version = "1", files = {
+            { relpath = "kernel/a.lua", data = a, size = #a },
+        } } })
+        H.eq("load_exact_error", s3.error, nil)
+        H.eq("load_exact_size", s3.files[1].size, #a)
+
+        -- 3. reply: a record doctored after load is caught before it is served
+        local s4, _, lines4 = server({ manifest = { version = "1", files = {
+            { relpath = "kernel/a.lua", data = a },
+        } } })
+        H.eq("reply_error_before", s4.error, nil)
+        s4.files[1].size = #a + 3
+        H.eq("reply_file", s4:handle(PREFIX .. " GET 0", 7), PREFIX .. " ERR reason=size")
+        H.has(lines4, "OTA_SERVER_BAD_FILE path=kernel_a.lua reason=size got="
+            .. tostring(#a) .. " want=" .. tostring(#a + 3))
+        H.eq("reply_data", s4:handle(PREFIX .. " GET 0 0", 7), PREFIX .. " ERR reason=size")
+        H.check("reply_not_served", s4.served == 0, "served=" .. tostring(s4.served))
     end
 end
