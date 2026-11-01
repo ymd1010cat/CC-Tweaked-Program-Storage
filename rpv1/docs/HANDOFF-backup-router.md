@@ -450,11 +450,11 @@ ARP 拦截重新生效。回切是**立即**的，没有迟滞；防抖靠 `cool
 
 | 项 | 要求 | 代码依据 |
 | --- | --- | --- |
-| 末影 Modem | 主备各一块，接在**同一侧**（默认 `left`）、**同一频道**（默认 `4001`）、同一末影 wire | `M.IFACE_SIDE="left"`、`M.IFACE_CHANNEL=4001`（`backup_router.lua:97-99`） |
+| 末影 Modem | 主备各一块，接在**同一侧**（默认 `left`）、**同一频道**（默认 `241`）、同一末影 wire | `M.IFACE_SIDE="left"`、`M.IFACE_CHANNEL=241`（`backup_router.lua:97-99`） |
 | 网卡 MTU | 256（`boot()` 里写死 256；role.txt 里显式给） | `backup_router.M.boot` 的 `rpv.node_new` |
 | 底部红石锁 | 两台都要：`rs.getInput("bottom")` 为真才继续；**无超时、无 override** | `core_router.wait_for_redstone`、`backup_router.wait_for_redstone` |
 | 红石锁语义 | 只在**启动时**检查；运行中关红石不会停机（不是 kill switch） | `backup_router.start_router` 里的单次 `wait_for_redstone` 调用 |
-| 频道冲突 | 若同机还跑 `wan_acl`，注意其默认只放行 `200..299`，`4001` 会被拒；要么 `acl:allow(4001)`，要么把公网频道改到该频段 | `wan_acl.lua:49` `DEFAULT_BAND = {200, 299}` |
+| 频道冲突 | 公网口频道必须落在 `wan_acl` 默认带内（`200..299`）：默认已由 `4001` 改为 **`241`** | `wan_acl.lua` `DEFAULT_BAND = {200, 299}`；`backup_router.lua` `M.IFACE_CHANNEL = 241` |
 
 ### 6.2 软件清单（拷进电脑的相对路径）
 
@@ -483,7 +483,7 @@ apps/ha_ctl.lua             ← 可选：在线状态 / 手工撤销（见 3.4�
 role=router
 app=core_router
 iface=right|LAN|192.168.1.1/24|4100|256
-iface=left|PUBLIC|10.200.0.1/24|4001|256
+iface=left|PUBLIC|10.200.0.1/24|241|256
 dhcp_pool=10.200.0.50-10.200.0.150
 dhcp_gw=10.200.0.1
 dhcp_dns=10.200.0.1
@@ -499,7 +499,7 @@ dhcp_port=6700
 ```
 role=router
 app=backup_router
-iface=left|PUBLIC|10.200.0.1/24|4001|256
+iface=left|PUBLIC|10.200.0.1/24|241|256
 ```
 
 > 备机的 `dhcp_pool` 可以**不写**：即使写了，`start_router` 也会主动停掉
@@ -528,7 +528,7 @@ iface=left|PUBLIC|10.200.0.1/24|4001|256
 transport=rpv
 rpv_side=left
 rpv_cidr=10.200.0.1/24
-rpv_channel=4001
+rpv_channel=241
 rpv_mtu=256
 ```
 
@@ -676,7 +676,7 @@ node.cfg.dhcp_pool = nil             -- 关键：否则重启时 setup 又会起
   否则备机接管会被拒（4.5、2.5 限制）。租约前缀仍取第一块网卡，见 2.5 限制 1。
 - **`ha_ctl` 是「一次性」CLI**：跑一次执行一条命令就返回，不是常驻交互界面；
   无键盘时靠 `/disk/ha_ctl.cmd` 的第一行（3.4）。它不改任何持久化状态，重启后备机仍是 STANDBY。
-- **`4001` 与 `wan_acl` 默认白名单冲突**：见 6.1。
+- **公网口频道必须在 `wan_acl` 带内**：默认已由 `4001` 改为 `241`，见 6.1。
 
 ### 8.6 接管时刻是 3 个 5 s 周期（15 s），不是 20 s
 

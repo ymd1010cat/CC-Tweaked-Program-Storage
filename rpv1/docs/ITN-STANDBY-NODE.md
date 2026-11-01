@@ -29,7 +29,7 @@
 | 基础服务 | `172.16.1.0/24`（134 = `172.16.1.2`，DNS/RHTP:8080） | 备机不提供这些服务 |
 | DHCP 端口 | `6700` | `dhcp_port=6700` |
 | HA 同步端口 | `6710`（UDP） | `RPV1-HA/1`，默认值，不要改 |
-| 末影 Modem | `side=left`、`channel=4001`、MTU `256` | 主备必须**同侧、同频道、同一末影 wire** |
+| 末影 Modem | `side=left`、`channel=241`、MTU `256` | 主备必须**同侧、同频道、同一末影 wire** |
 
 ## 3. 硬件清单
 
@@ -61,7 +61,7 @@ apps/ha_ctl.lua             <- 可选：在线状态 / 手工撤销
 ```
 role=router
 app=backup_router
-iface=left|PUBLIC|10.200.0.1/24|4001|256
+iface=left|PUBLIC|10.200.0.1/24|241|256
 ```
 
 - **不要写 `dhcp_pool`**：写了也会被 `start_router` 停掉，池子由 SYNC 从主机拿。
@@ -73,7 +73,7 @@ iface=left|PUBLIC|10.200.0.1/24|4001|256
 ```
 role=router
 app=ha_ctl
-iface=left|PUBLIC|10.200.0.1/24|4001|256
+iface=left|PUBLIC|10.200.0.1/24|241|256
 ```
 
 `ha_ctl` 是**一次性** CLI：跑一条命令就返回，不是常驻界面。命令来源优先级：
@@ -111,7 +111,7 @@ setup_router(node, rpv, {
 
 1. **贴盘**：按 §4 的文件树拷齐，`rpv/` 与 `apps/` 分目录。
 2. **写 `role.txt`**：选 §5 的形态；`iface` 的 side/channel 与 §2 计划一致。
-3. **插末影 Modem**：`left`，频道 `4001`（与 133 同一末影 wire）。
+3. **插末影 Modem**：`left`，频道 `241`（与 133 同一末影 wire）。
 4. **接红石锁**：底部输入接一个可控红石源；拉闸前不要通电。
 5. **上电**：先看见红石锁等待，再看见 `HA_*` 日志（§7）。
 6. **等一轮同步**：5 秒一次 SYNC；第一轮回来后会拿到 `pool_start/pool_end/lease_time/gateway/dns/prefix/dhcp_port` 七项。
@@ -146,7 +146,7 @@ master=<VIP|-> synced=<true|false> dhcp=<true|false> misses=<n> silent=<sec>s la
 | `TAKEOVER_DISABLED reason=vip_not_local` | 本机地址不是 VIP | 改 `iface` 的 cidr 为 `10.200.0.1/24` |
 | `TAKEOVER_ABORT reason=no_synced_config` | 从没拿到过主机的配置 | 检查 133 是否配了 `dhcp_pool`、两侧频道是否一致 |
 | `HA_DHCP_POOL_OFF_SUBNET ... hint=needs_pool_iface` | 池不在本机任何接口网段内 | 按 §5.3 配池接口，两侧都要 |
-| `HA_SEND_FAIL` / 一直 `HA_SYNC_MISS n=1/3` | 链路不通 | 查 modem side/channel、`wan_acl` 是否拦了 4001 |
+| `HA_SEND_FAIL` / 一直 `HA_SYNC_MISS n=1/3` | 链路不通 | 查 modem side/channel、`wan_acl` 是否拦了 241 |
 
 ## 8. 演练（接管与回切）
 
@@ -178,8 +178,9 @@ master=<VIP|-> synced=<true|false> dhcp=<true|false> misses=<n> silent=<sec>s la
 2. **单向断链分区未解**：拔线（而不是拔电）会让备机 15 s 后接管，而 133 还在发租约，两边可能发同一个 IP。
 3. **备机不持久化**：重启即待机，重新同步前主机掉线会连续记 `TAKEOVER_ABORT reason=no_synced_config`。
 4. **红石锁不是 kill switch**：只在启动时检查一次；运行中关红石不会停机。
-5. **`4001` 与 `wan_acl` 默认白名单冲突**：`wan_acl` 默认只放行 `200..299`，`4001` 会被拒。
-   要么 `acl:allow(4001)`，要么把公网频道改到 `200..299` 内——**改频道必须主备与 133 同步改**。
+5. **末影公网口频道已改到带内 `241`**（"备机换频道"方案）：`wan_acl` 默认只放行 `200..299`，
+   旧文档里的 `4001` 在带外会被默认策略拦掉；两台 HA 节点必须用**同一个**频道，并与 133 一致。
+   确实要用带外频道时，两台上都要 `acl:allow(<ch>)`，否则会一直 `HA_SEND_FAIL` / `HA_SYNC_MISS`。
 6. **租约前缀取第一块网卡**：池接口不是第一块时，租约前缀可能不对；见 §5.3 的 hint。
 7. **`ha_ctl` 是一次性 CLI**：不是常驻交互界面，也不改持久化状态。
 

@@ -106,7 +106,9 @@ M.REDSTONE_SIDE = "bottom"      -- startup lock side
 M.REDSTONE_POLL = 0.5           -- os.sleep while the lock is closed
 M.IFACE_SIDE = "left"           -- modem side used by boot()
 M.IFACE_NAME = "PUBLIC"         -- interface name used on the public wire
-M.IFACE_CHANNEL = 4001          -- modem channel of the public wire
+M.IFACE_CHANNEL = 241           -- modem channel of the public wire: keep it inside
+                                -- wan_acl's default 200..299 band, otherwise the
+                                -- standby link is silently dropped (HA_SYNC_MISS)
 M.DHCP_PROBE = "0"              -- no ICMP conflict probe on a takeover (fast)
 M.MIN_LEASE = 30
 M.MAX_LEASE = 2592000           -- 30 days

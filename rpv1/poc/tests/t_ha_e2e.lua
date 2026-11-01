@@ -68,7 +68,7 @@ local function make_node(id, addr)
         id = id, mac = id, role = "router", cfg = {}, stats = {},
         logs = {}, binds = {}, tasks = {},
         ifaces = { { side = "left", name = "PUBLIC", ip = addr, prefix = 24,
-                     net = ip("10.200.0.0"), channel = 4001 } },
+                     net = ip("10.200.0.0"), channel = 241 } },
     }
     function node:log(fmt, ...)
         local line = tostring(fmt)
