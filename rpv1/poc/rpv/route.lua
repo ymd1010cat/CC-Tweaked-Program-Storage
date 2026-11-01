@@ -48,6 +48,23 @@ function M.route_upsert(rt, prefix, net, iface, gw, kind, drop)
     return M.route_add(rt, prefix, net, iface, gw, kind)
 end
 
+-- remove every entry of one kind for a destination, whichever interface or gateway it
+-- was installed on. A routing protocol re-learns the whole destination, so a next-hop
+-- change to a different egress interface must not leave the old entry behind: route
+-- lookup keeps the first entry of equal prefix and the stale twin would win.
+function M.route_drop(rt, prefix, net, kind)
+    local kept, dropped = {}, 0
+    for _, r in ipairs(rt.entries) do
+        if r.kind == kind and r.net == net and r.prefix == prefix then
+            dropped = dropped + 1
+        else
+            kept[#kept + 1] = r
+        end
+    end
+    rt.entries = kept
+    return dropped
+end
+
 -- resolve a route into a path {iface=, next_hop=}
 function M.route_path(rt, dst)
     local r = M.route_lookup(rt, dst)

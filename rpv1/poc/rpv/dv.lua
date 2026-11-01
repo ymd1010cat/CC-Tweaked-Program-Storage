@@ -21,6 +21,13 @@ Loop suppression
     came in over that interface
   * **expiry (hold-down)**: a route not refreshed within `dv_timeout` seconds is
     removed (DV_EXPIRE) instead of lingering
+  * **equal-cost alternatives**: when two neighbours advertise the same prefix with
+    the same metric, the first one stays the installed route and the other is kept
+    as an alternative next hop (`DV_ALT`). Forwarding uses it to avoid handing a
+    packet straight back out of the interface it arrived on, and expiry promotes it
+    (`DV_FAILOVER`) instead of dropping the destination. At most 4 per prefix; an
+    alternative dies after `dv_timeout` without its own announce (`DV_ALT_EXPIRE`)
+    or immediately when its neighbour poisons the route (`DV_ALT_REMOVE`).
 
 Config keys (node):
     dv=1                 enable
@@ -86,6 +93,117 @@ local function seed_own(dv)
     end
 end
 
+-- ===== equal-cost alternatives ==============================================
+-- A distance-vector table keeps exactly one next hop per destination, but a grid
+-- has several. The extras below are not routes: they are forwarding hints that let
+-- a router avoid sending a packet back out of the interface it arrived on, and let
+-- an expiring primary fail over without waiting for the next announce.
+local MAX_ALTS = 4
+
+function M.dv_add_alt(dv, key, iface, gw, metric)
+    local r = dv.routes[key]
+    if not r then return false end
+    r.alts = r.alts or {}
+    for _, a in ipairs(r.alts) do
+        if a.gw == gw then
+            a.metric, a.iface, a.via, a.age = metric, iface, iface.name, 0
+            return false
+        end
+    end
+    if #r.alts >= MAX_ALTS then return false end
+    r.alts[#r.alts + 1] = { gw = gw, iface = iface, via = iface.name, metric = metric, age = 0 }
+    return true
+end
+
+function M.dv_drop_alt(dv, key, gw)
+    local r = dv.routes[key]
+    if not r or not r.alts then return false end
+    for i, a in ipairs(r.alts) do
+        if a.gw == gw then
+            table.remove(r.alts, i)
+            return true
+        end
+    end
+    return false
+end
+
+-- called from the announce path for every non-poisoned entry: keep an equal-metric
+-- neighbour as an alternative. The installed route is deliberately NOT touched, so
+-- the announce/poison bookkeeping stays exactly as before.
+function M.dv_alt_candidate(node, dv, iface, src, key, e)
+    local have = dv.routes[key]
+    if not have or have.own or not have.gw or have.gw == src then return false end
+    local candidate = e.metric + 1
+    if candidate >= INF or candidate ~= have.metric then return false end
+    if not M.dv_add_alt(dv, key, iface, src, candidate) then return false end
+    dv.alt_adds = (dv.alt_adds or 0) + 1
+    node:log("DV_ALT net=%s/%d metric=%d gw=%s via=%s alts=%d",
+        M.int2ip(e.net), e.prefix, candidate, M.int2ip(src), iface.name, #have.alts)
+    return true
+end
+
+-- forwarding hint: an equal-cost next hop that does not leave through `ingress`
+function M.dv_forward_alt(dv, dst, prefix, ingress)
+    if not dv or not dst then return nil end
+    local key = M.masked(dst, prefix or 0) .. "/" .. (prefix or 0)
+    local r = dv.routes[key]
+    if not r or r.own or not r.alts then return nil end
+    local best
+    for _, a in ipairs(r.alts) do
+        if a.via ~= ingress and (not best or a.metric < best.metric) then best = a end
+    end
+    return best
+end
+
+-- expiry: promote the best remaining alternative instead of losing the destination
+function M.dv_promote_alt(r)
+    if not r.alts or #r.alts == 0 then return nil end
+    local best, idx
+    for i, a in ipairs(r.alts) do
+        if not best or a.metric < best.metric or (a.metric == best.metric and a.gw < best.gw) then
+            best, idx = a, i
+        end
+    end
+    table.remove(r.alts, idx)
+    return best
+end
+
+-- one expiry evaluation for a learned route (called every interval, once per entry):
+-- age the alternatives, then either promote the best one or drop the destination.
+-- Returns "failover" / "expire" / nil so the task (and the tests) can see what it did.
+function M.dv_expire_route(node, dv, key, r)
+    if not r or r.own then return nil end
+    r.age = (r.age or 0) + dv.interval
+    if r.alts then
+        local keep = {}
+        for _, a in ipairs(r.alts) do
+            a.age = (a.age or 0) + dv.interval
+            if a.age <= dv.timeout then keep[#keep + 1] = a end
+        end
+        if #keep ~= #r.alts then
+            r.alts = keep
+            node:log("DV_ALT_EXPIRE net=%s/%d alts=%d", M.int2ip(r.net), r.prefix, #keep)
+        end
+    end
+    if r.age <= dv.timeout then return nil end
+    local alt = M.dv_promote_alt(r)
+    if alt then
+        dv.routes[key] = { prefix = r.prefix, net = r.net, metric = alt.metric,
+                           iface = alt.iface, gw = alt.gw, via = alt.via, age = 0, alts = r.alts }
+        M.route_drop(node.routes, r.prefix, r.net, "dv")
+        M.route_upsert(node.routes, r.prefix, r.net, alt.iface, alt.gw, "dv")
+        dv.failovers = (dv.failovers or 0) + 1
+        node:log("DV_FAILOVER net=%s/%d metric=%d gw=%s via=%s (primary %s expired)",
+            M.int2ip(r.net), r.prefix, alt.metric, M.int2ip(alt.gw), tostring(alt.via), M.int2ip(r.gw or 0))
+        return "failover"
+    end
+    dv.routes[key] = nil
+    M.route_drop(node.routes, r.prefix, r.net, "dv")
+    dv.expires = dv.expires + 1
+    node:log("DV_EXPIRE net=%s/%d via=%s after=%ds", M.int2ip(r.net), r.prefix, tostring(r.via), r.age)
+    return "expire"
+end
+
 function M.dv_setup(node, opts)
     local dv = M.dv_new(node, opts)
     node.dv = dv
@@ -123,7 +241,7 @@ function M.dv_setup(node, opts)
                 -- made 3+ hop routes flap install/remove forever.
                 if have and not have.own and have.gw == src then
                     dv.routes[key] = nil
-                    M.route_upsert(node.routes, have.prefix, have.net, have.iface, nil, "dv", true)
+                    M.route_drop(node.routes, have.prefix, have.net, "dv")
                     dv.removes = dv.removes + 1
                     node:log("DV_REMOVE net=%s/%d reason=poisoned via=%s gw=%s", M.int2ip(e.net), e.prefix, iface.name, M.int2ip(src))
                 elseif have and not have.own and have.via == iface.name then
@@ -132,6 +250,9 @@ function M.dv_setup(node, opts)
                         node:log("DV_POISON_IGNORED net=%s/%d from=%s (our gw is %s)",
                             M.int2ip(e.net), e.prefix, M.int2ip(src), M.int2ip(have.gw or 0))
                     end
+                end
+                if have and M.dv_drop_alt(dv, key, src) then
+                    node:log("DV_ALT_REMOVE net=%s/%d gw=%s (poisoned)", M.int2ip(e.net), e.prefix, M.int2ip(src))
                 end
                 dv.poisoned = dv.poisoned + 1
             else
@@ -142,7 +263,10 @@ function M.dv_setup(node, opts)
                 end
                 if not is_own then
                     local candidate = e.metric + 1
-                    if candidate < INF and (not have or candidate < have.metric or have.gw == src) then
+                    if M.dv_alt_candidate(node, dv, iface, src, key, e) then
+                        -- equal-cost neighbour: recorded as an alternative next hop,
+                        -- the installed route is unchanged
+                    elseif candidate < INF and (not have or candidate < have.metric or have.gw == src) then
                         -- a hand-configured/connected route of the same prefix always
                         -- wins: don't shadow it (route_lookup keeps first-added order,
                         -- so the priority is enforced here at install time)
@@ -155,6 +279,9 @@ function M.dv_setup(node, opts)
                             local isNew = (not have) or have.own
                             dv.routes[key] = { prefix = e.prefix, net = e.net, metric = candidate,
                                                iface = iface, gw = src, via = iface.name, age = 0 }
+                            -- the egress interface can change when a better next hop
+                            -- appears, so drop the old entry for this destination first
+                            M.route_drop(node.routes, e.prefix, e.net, "dv")
                             M.route_upsert(node.routes, e.prefix, e.net, iface, src, "dv")
                             if isNew then
                                 dv.installs = dv.installs + 1
@@ -205,17 +332,9 @@ function M.dv_setup(node, opts)
                     dv.announces = dv.announces + 1
                 end
             end
-            -- 2. age / expire learned routes
+            -- 2. age / expire learned routes (and their equal-cost alternatives)
             for key, r in pairs(dv.routes) do
-                if not r.own then
-                    r.age = (r.age or 0) + dv.interval
-                    if r.age > dv.timeout then
-                        dv.routes[key] = nil
-                        M.route_upsert(node.routes, r.prefix, r.net, r.iface, nil, "dv", true)
-                        dv.expires = dv.expires + 1
-                        node:log("DV_EXPIRE net=%s/%d via=%s after=%ds", M.int2ip(r.net), r.prefix, tostring(r.via), r.age)
-                    end
-                end
+                M.dv_expire_route(node, dv, key, r)
             end
             -- 3. report (the harness asserts on these lines)
             for _, r in pairs(dv.routes) do

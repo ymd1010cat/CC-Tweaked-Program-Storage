@@ -279,7 +279,7 @@
   **100+ 台仿真**（`poc/run-scale.ps1 -Stage Z|Y|A|B|D`，ID 100–209）：**110 台全部启动、DV 99–100/100 收敛**，
   但计时滞后 3.4 s（最差 27 s）⇒ **100+ 台数据面在本机（12 核）不可用**；22 台滞后仅 26–33 ms 时跨行 ping 仍 0–17% ⇒
   发现 **≥3 跳网格路径的确定性转发问题**（路由表正确、无 `FWD` 记录、`DV_REMOVE reason=poisoned` 大量抖动；
-  `dv-chain` 线性链路全 PASS ⇒ 等代价网格特有，怀疑多跳选路回指入接口），**列为下一步待修项**。
+  `dv-chain` 线性链路全 PASS ⇒ 等代价网格特有，怀疑多跳选路回指入接口）——**已按 §8.6 第 8 条修复**（见下）。
   **WAN 介质**（用户要求）：WAN 端口接受有线/无线 modem，真机 `-Scenario wanlink -WanLink wired|wireless` 双介质全 PASS。
   **P5 三项（多跳桥+STP-lite、桥冗余、大规模压测）全部完成**
 - ✅ **P5 平台**：跨维度多跳桥 + 环路防护（STP-lite）、桥冗余、大规模压测（多路由器网格 / 100+ 电脑）
@@ -301,6 +301,14 @@
    [poc/tests/t_addr.lua](poc/tests/t_addr.lua) + CraftOS-PC [poc/run-addr.ps1](poc/run-addr.ps1)（PASS）。
 4. **规模可行性固化**：`run-scale.ps1` 的 Stage Z 已在 CI；A/B/D 作为按需长测（B 70%、D 46.7% 已记录）。
 5. **真机大规模**：真机上跑 20–30 台路由器网格 + 主机，验证同样的 3 跳路径在真实 tick 下的表现。
+8. ✅ **等代价网格选路"回指入接口"**（已完成，离线可回归）：`rpv/dv.lua` 现在把等代价邻居存成
+   **替代下一跳**（每目的最多 4 条，`DV_ALT`），转发时若路由会从入接口再发出去，就改用另一接口的
+   等代价邻居（`FWD_ALT dst= gw= out= avoid=`，`stats.fwd_alt`）；主下一跳过期时优先**提升**替代路径
+   （`DV_FAILOVER`）而不是直接丢目的；替代路径按自己的时钟老化（`DV_ALT_EXPIRE`），收到毒化回告只删
+   该替代（`DV_ALT_REMOVE`）。同时修了 DV 换出口接口时旧路由残留的隐患（新增 `route_drop(rt, prefix,
+   net, kind)` 按 kind+目的删除所有条目；否则"先加先赢"的查找会让旧下一跳继续生效）。验收：离线
+   [poc/tests/t_dv_multipath.lua](poc/tests/t_dv_multipath.lua)（套件 `OFFLINE_PASS 3072 / FAIL 0 /
+   GROUPS 34`，lint 0 错 50 警 / 71 文件）；真机网格复测仍需按第 5 条进游戏。
 6. ✅ **地址冲突检测 + 可选 IP 头校验和**（已完成，离线可回归）：`poc/rpv/dad.lua` —— DAD
    探测（sender 地址 `0.0.0.0` 的 ARP 请求 ×3 + 一条免费 ARP 公告，由 tick/定时器排空）、外来占用
    检测（`DAD_CONFLICT addr=.. claimer=.. op=.. count=.. winner=us|them`，按 computer id 小者胜出，

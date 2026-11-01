@@ -379,7 +379,26 @@ Logs: `DV_START`, `DV_TX`/`DV_RX` (with `dv_debug=1`), `DV_INSTALL`, `DV_UPDATE`
 `DV_REMOVE`, `DV_EXPIRE`, `DV_ROUTE` (one line per learned route each interval),
 `DV_STATE learned= neighbors= installs= updates= removes= expires= poisoned= announces=`.
 `route_upsert(rt, prefix, net, iface, gw, kind[, drop])` is the helper that keeps
-repeated announcements from duplicating entries.
+repeated announcements from duplicating entries; `route_drop(rt, prefix, net, kind)`
+removes every entry of that kind for a destination regardless of interface, which is
+what a next-hop change to another egress interface needs (otherwise the stale twin
+would win the first-added-wins lookup).
+
+**Equal-cost alternatives (grid forwarding).** A grid gives several next hops with the
+same metric. The table still installs one route, and keeps the others as hints:
+`rpv.dv_add_alt(dv, key, iface, gw, metric)` (max 4 per prefix),
+`rpv.dv_alt_candidate(node, dv, iface, src, key, entry)` (called for every
+non-poisoned announce: equal metric from a *different* neighbour → alternative,
+`DV_ALT`; the installed route is untouched), `rpv.dv_forward_alt(dv, dst, prefix,
+ingress)` (an equal-cost next hop that does **not** leave through `ingress`),
+`rpv.dv_promote_alt(r)` and `rpv.dv_expire_route(node, dv, key, r)` (the per-entry
+hold-down step: ages alternatives, then promotes the best one — `DV_FAILOVER` — or
+drops the destination — `DV_EXPIRE`). `node:ip_deliver` uses `dv_forward_alt` when the
+route would leave through the interface the packet arrived on, logging
+`FWD_ALT dst= gw= out= avoid=` and counting `stats.fwd_alt`.
+Alternatives live on their own clock: an alternative that stops announcing dies after
+`dv_timeout` (`DV_ALT_EXPIRE`), and a poisoned announce removes just that alternative
+(`DV_ALT_REMOVE`). Offline coverage: `tests/t_dv_multipath.lua`.
 
 ### services — DHCP-lite + lookup-lite (`services.lua`)
 Address autoconfiguration and name resolution, both plain rpv UDP services (so they

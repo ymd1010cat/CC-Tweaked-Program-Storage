@@ -871,6 +871,16 @@ function M.node_new(path)    local n = {
             M.icmp_error(self, iface, h, payload, 3, 0)
             return
         end
+        -- equal-cost grid: do not hand the packet back out of the interface it arrived
+        -- on when dv knows another next hop with the same metric (see dv.lua)
+        if self.dv and iface and path.iface and path.iface == iface and M.dv_forward_alt then
+            local alt = M.dv_forward_alt(self.dv, h.dst, path.prefix or 0, iface.name)
+            if alt and alt.iface then
+                self.stats.fwd_alt = (self.stats.fwd_alt or 0) + 1
+                self:log("FWD_ALT dst=%s gw=%s out=%s avoid=%s", int2ip(h.dst), int2ip(alt.gw), alt.via, iface.name)
+                path = { iface = alt.iface, next_hop = alt.gw, prefix = path.prefix }
+            end
+        end
         self.stats.fwd = self.stats.fwd + 1
         local egress
         if path.fabric then egress = "fabric:member" .. tostring(path.member)
