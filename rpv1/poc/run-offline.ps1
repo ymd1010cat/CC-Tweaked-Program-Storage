@@ -33,6 +33,7 @@ Copy-Item (Join-Path $root "poc\apps\hosts.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\wan_acl.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\router.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\rhtp_server.lua") (Join-Path $dir "apps") -Force
+Copy-Item (Join-Path $root "poc\apps\rhtp_client.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\backup_router.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\core_router.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\ha_ctl.lua") (Join-Path $dir "apps") -Force
