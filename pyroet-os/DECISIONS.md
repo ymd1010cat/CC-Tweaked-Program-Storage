@@ -617,6 +617,101 @@ MARGIN 65,041**、`WINDOW_OK sum=614,566`（+12,788 B：`startup.lua` 20,654→2
 `kernel/installer.lua` 13,441→17,295、`kernel/ota.lua` 28,311→31,877）；改动 lua 非 ASCII 计数 0；
 门禁参数与 `install.set` 未动。
 
+## 17. 安装器 UI（`installer.app`，T1）
+
+17.1 **为什么是应用而不是内核功能**：安装器（`kernel/installer.lua`）是事务层，UI 是表现层。
+把 UI 做成普通 `.app` 包（`/system/system/installer.app`，26x20，与桌面/设置同一套布局自检），
+意味着它只能拿到 manifest 声明的两个 capability；删掉它不影响系统的安装能力，也不会把
+"界面代码"塞进内核。代价是它必须通过**宿主桥**才能拿到安装器对象。
+
+17.2 **宿主桥契约（写死）**：应用按顺序取第一个可用来源——
+`opts.installer` → `api.sys.install` / `api.sys.uninstall` / `api.sys.list` → `api.installer`。
+桥函数是**平函数**（不是对象方法）：
+
+    install(name)   -> true, { version = <string> }   或  nil, <错误串>
+    uninstall(name) -> true                            或  nil, <错误串>
+    list()          -> { { name, dir, root, source, version, ok, error }, ... }
+
+即 `kernel/installer.lua` 的返回契约，只是把 `self` 的绑定放在宿主侧完成。**应用绝不
+`dofile`/`loadfile` 任何镜像模块**（能加载内核模块就等于拿到全系统权限），测试对源码做了
+`/system/kernel` 字面量断言。**桥对象完全缺失**（`M.bridge` 返回 nil）→ `installer unavailable`，
+照常运行、照常重扫；桥在但内核没装安装器时，同一行文案由 §17.4 的 `unavailable` 映射给出。
+
+> **T4 已接通。** `kernel/apps.lua` 的 `A.SYS_FUNCTIONS` 现在是
+> `status`/`apps`/`perms`/`launch`/`install`/`uninstall`/`list`：前四个仍由 `opts.sys` 宿主表提供，
+> 后三个由**运行时自己**实现——只有它知道调用方 record 的 cap 集合，授权必须在进安装器之前发生。
+> - **能力要求**：`install`/`uninstall` 需 `fs.write`，`list` 需 `fs.read`；未授权返回
+>   `nil, "capability denied: <cap>"` + `APP_CAP_DENIED`（沿用 §4.2 的拒绝语义，不抛错；拒绝时
+>   安装器一次都不被调用）。
+> - **入口授权**：这三个函数和 api.sys 其余入口走**同一份**授权——宿主只给 `/system/` 下的包
+>   `opts.sys` 表（`startup.lua` 的 `sys_for`），没拿到系统面的用户包仍然只拿到
+>   `nil, "system unavailable: <fn>"` 桩，装/卸能力不会随 `fs.write` 外泄（§8.6 不变）。
+> - **参数**：只接受包名 `[%w_%-]+`、≤40 B（与 `installer.NAME_MAX` 同口径），`..`、`/`、`\`、`.`、
+>   空串、非字符串一律 `nil, "bad name"`——名字在拼成 `<root>/<name>.app` 之前就被拒。
+> - **`/system` 保护**：`uninstall` 只允许卸 `/apps/` 下的包。名字在 `inst.system_root`（默认
+>   `/system/system`）下存在即 `nil, "system app"` + `APP_SYS_PROTECT name=..`，**桥一次都不调用**；
+>   即使同名包同时装在 `/apps` 也照拒（§17.5 的应用层保护之外的第二层）。
+> - **注入**：`startup.lua` 在启动链第 3b 步构造 `/system/kernel/installer.lua`（真实 `fs`、`/apps` 与
+>   `/system/system` 根、`apps` 模块复用）并以 `apps.new({ installer = inst })` 注入；构造失败只记
+>   `STARTUP_INSTALLER_UNAVAILABLE`，**不阻塞启动**，此时三个函数返回
+>   `nil, "installer unavailable"`（T1 的降级文案原样保留）。
+> - **日志**：每次调用恰好一行 `APP_INSTALL name=.. ok=..` / `APP_UNINSTALL name=.. ok=..` /
+>   `APP_LIST n=..`；拒绝走 `APP_CAP_DENIED`，系统包保护额外一行 `APP_SYS_PROTECT`。
+> - **应用侧的触发条件**：`installer unavailable` 只由"桥对象完全缺失"触发（`M.bridge` 返回 nil），
+>   不再表示"内核没暴露"——T4 之后内核恒定暴露三者，桥的 `list` 也算桥。
+
+17.3 **界面口径（26x20，见 §7.2）**：行 1 `installer <version>`；行 2
+`disk <ok|none> <n> installed`；行 3..n-2 列表（`>` 选中；第二列 `d`=来源盘、`i`=/apps、
+`s`=/system/system；26 列时带版本列，窄于 26 列丢掉版本列而不是截名字）；行 n-1 提示或结果文案；
+行 n 计数器 `d<i> i<i> s<i> sel <i>/<total>`。低于 16 列或 6 行折叠成单行；`layout_selftest()`
+不需要终端即可证明"行数 = rows、每行不超过 cols、退化单行、空机可渲染、拒权可渲染"。
+
+17.4 **失败文案单点映射**：`M.error_text(err)` 是唯一映射点，返回 `文案, 分类`：
+`hash check failed`（digest / sums / sha256 / unlisted）、`size check failed`（size）、
+`cancelled`、`cancelled: no source`、`system app locked`、`not installed`、
+`capability denied[: fs.write]`、其他 `failed: <原串>`。分类同时作为动作码返回，测试不必
+重解析文字。判定顺序写死：cancel → no_source → capability denied → hash → size →
+unavailable → system app → not installed → 兜底。
+
+17.5 **卸载保护是双层的**：应用层先拒 `/system/system` 的行（桥一次都不调用，`system app locked`），
+宿主返回 `system app` 时显示同一行。只有 `/apps/<name>.app` 能被卸载——与
+`kernel/installer.lua` 的 `INSTALL_REMOVE_DENIED .. reason=system` 一致，UI 不新增语义。
+
+17.6 **扫描与版本**：来源盘上的包版本从 `manifest.lua` **文本匹配**读取（绝不执行来源盘的代码），
+读不到就是 `?`；已装包的版本来自 `api.sys.apps()`（运行时校验过的那份），未知也是 `?`。
+没有驱动器 = `disk_ok=false`（`no disk, no apps` / `disk none`）；`fs.read` 被拒 =
+`capability denied: fs.read` 直接上屏。扫描按 `M.SCAN_INTERVAL` 节流，安装/卸载后强制重扫。
+
+17.7 **测试口径（T1 实测）**：新增 `tests/t_installer_app.lua`（10 组 **391** 断言：manifest /
+scan / render / install / failures / remove / keys / run / selftest / package），
+`tests/run.lua` 的 FILES 追加 `t_installer_app`；离线 **3,770 pass / 0 fail / 186 groups**
+（N1 基线 3,379/176，+391 断言 / +10 组）。`install.set` 26 → **28 条**、TOTAL
+**448,380 B / SIZE_WARN / MARGIN 98,855**、`WINDOW_OK sum=648,380`（+33,814 B =
+`installer.app/main.lua` 32,735 + `manifest.lua` 1,079）。`tests/t_budget.lua` 的两处
+`install_entries`（26 → 28）随清单同步，断言强度不变。
+
+17.8 **测试 stage 位置（一处必须说明的偏离）**：`installer.app` 在 `run-tests.ps1` 里 stage 到
+**`/tests/installer.app`**，而不是 `/system/system/installer.app`。原因：`t_desktop`
+（`APP_SCAN ... loaded=3`、`STARTUP_PERMS_TABLE apps=3`、launcher 列表 `launcher,net,settings`）、
+`t_settings`（`rt:scan() == 3`）把 stage 后的系统根写死为三个包，而这些文件不在 T1 的修改边界内；
+为了不弱化它们，测试改从 `/tests` 读真实源码，并另加 `installer.package` 组证明它**属于**
+`/system/system/installer.app`：`/install.set` 两条路径断言 + 把源文件复制进 case dir 后用
+真运行时扫一遍（`APP_LOAD name=installer version=0.1.0 caps=fs.read,fs.write`、
+`record.entry_path`、两个 cap 都可用）。将来统一系统根计数时，把 fixture 位置一并挪回去即可。
+
+17.9 **T4 实测口径**：新增 `tests/t_installer_bridge.lua`（9 组 **227** 断言：surface /
+authorization / unavailable / names / system / e2e / ui / startup / shape），`tests/run.lua` 的
+FILES 追加 `t_installer_bridge`（排在 `t_installer_app` 之后）；离线 **3,997 pass / 0 fail /
+195 groups**（T1 基线 3,770/186）。`install.set` 仍 **28 条**，TOTAL **458,100 B / SIZE_WARN /
+MARGIN 108,575**、`WINDOW_OK sum=658,100`（+9,720 B = `kernel/apps.lua` 28,804→35,140
++6,336、`system/startup.lua` 26,022→28,367 +2,345、`installer.app/main.lua` 32,735→33,774
++1,039）；改动 lua 非 ASCII 计数 0。端到端用**真实** `kernel/installer.lua` + 真实文件系统
+（`/t/installer_bridge/<case>` 下的 medium/`/apps`//system 三根）：装包 → `<apps_root>/box.app`
+出现 → `list()` 报 `apps:box`（`list()` 只报两个**已装**根，来源盘不算安装）→ `uninstall` 删除 →
+`list()` 为空，中间断言 `INSTALL_OK`/`INSTALL_REPLACE`/`INSTALL_REMOVE`/`APP_*` 日志与
+`.tmp-box` 不残留；UI 侧再用 `api.sys` 当桥按回车，装/卸都成功，缺 `fs.write` 时显示
+`capability denied: fs.write` 且不落盘。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -633,3 +728,5 @@ MARGIN 65,041**、`WINDOW_OK sum=614,566`（+12,788 B：`startup.lua` 20,654→2
 - 2026-10-29: **O2 落地 OTA 服务端（分发中心侧）**。新增 `ota/server.lua`（636 行纯 ASCII，表模块 `local M = ... return M`）：`M.new{fs,log,rednet,channel,manifest|dir}`、`M.build_manifest(dir)`（发布目录 + `meta.txt` 侧车，按 relpath 排序算逐文件 sha256 与 §3.2 聚合哈希，`files=`/`manifest_sha=` 可选钉，白名单/0 字节/`F_MAX`/`MAX_FILES` 不合一律 fail-closed）、`M.handle(msg,sender)`（`GET meta`/`GET <idx>`/`GET <idx> <offset>` → `META`/`FILE`/`DATA`，非法请求回 `ERR reason=..`，非本协议前缀静默忽略）、`M.serve()`/`M.stop()`；常量、路径白名单、hex 大小写、offset 步长与末块长度全部与客户端逐项对齐（白名单是复制 + 双向差分，来源注释点名 `system/kernel/ota.lua:235-260`）。新增 `tests/t_ota_server.lua`（897 行 / **368 断言 / 10 组**），在同一进程用 stub rednet 把客户端与服务端接起来跑完整更新，含 `valid_path` 与 `manifest_hash` 双向交叉、线上 8 条请求逐条断言、META 说谎/字节改坏/丢 DATA 回包/丢请求/`files=0`/超大文件/非法路径/越界 idx/`retry()`/`serve()` 全路径。`tests/run.lua` 的 FILES 追加 `t_ota_server`，`tests/run-tests.ps1` stage `ota/*.lua` 并把 `ota\server.lua` 列入 `$required`。**不进镜像**：`install.set` 仍 26 条、TOTAL **401,778 B / SIZE_WARN / MARGIN 52,253**、`WINDOW_OK sum=601,778`；离线 **3,258 pass / 0 fail / 168 groups**（基线 2,890/158，**+368 断言 / +10 组**）；新增/改动 lua 非 ASCII 计数 0。文档新增 §15；发布 zip 的 `pyroet-os/` 成员会因 `build_release.py` 的 `rglob` 自动 +1（见 §15.6），本轮不改打包脚本。
 - 2026-11-01: **网络定位声明（N2，跨项目口径）**。在 §0.5 写死：**本项目不做设备入网鉴权**；网络层只做连接（rpv/UDP）与加密，**不做准入判定**（无认证服务器、无设备白名单、不要求凭证才能联网）。同时声明：装机侧额度（`itn-pass/` 的装机/分发凭证）与联网能力无耦合，网络通不通只取决于链路与配置。本条只改本文档，未动 `pyroet-os/` 任何代码或测试。
 - 2026-11-01: **N1 关掉两条「已知限制」——`size` 运行时校验 + `net` 默认注册**（口径见 §16）。`kernel/ota.lua`（+3,566 B）：下载/`.part`/`move` 后三处比字节数，`.part` 不符在"没有文件落地"时 `boot.cleanup()` 后 `OTA_REJECT stage=verify reason=size file=.. got=.. want=..`（可 `retry()`），已有落地则 `OTA_FAIL stage=verify` + 回滚；`move` 进 `/system/` 后再量一次（`OTA_FAIL stage=install`）防截断。`kernel/installer.lua`（+3,854 B）：`SHA256SUMS` 第三列（两种列序）逐文件比对 + manifest `size` 整包总量（`manifest.lua` 不计，原始表从 `manifest.raw` 读），不符 `INSTALL_SIZE_BAD ...` + `INSTALL_FAIL ... err=size ...`、不落盘；两处缺省即跳过（向后兼容）。`ota/server.lua`（不进镜像）：构建（`getSize` vs 实际字节）/装载/应答前三点 fail-closed，`OTA_SERVER_BAD_FILE path=.. reason=size got=.. want=..`（装载拒绝理由由 `size_mismatch` 统一为 `size`）。`startup.lua`（+5,368 B）：仅当 `/etc/network.conf` 存在时注册 `net`（`P.register_net`），否则 `STARTUP_NET_SKIP reason=no_config`；`P.report_net` 在 `start_all()` 后记 `STARTUP_NET_READY` / `STARTUP_NET_DEGRADED`，模块缺失/`spec()` 抛错/注册被拒/启动失败全部只 degraded、不 reboot；`opts.services` 里的同名 `net` 优先于默认注册；顺序仍是权限表 → 注册 → 首帧 → launcher → commit。测试：新增 8 组 121 断言，离线 **3,379 pass / 0 fail / 176 groups**（O2 3,258/168）；TOTAL **414,566 B / SIZE_WARN / MARGIN 65,041**、`WINDOW_OK sum=614,566`；门禁与 `install.set` 未动；改动 lua 非 ASCII 计数 0。
+- 2026-11-01: **T1 图形安装器 `installer.app`**（口径见 §17）。新增 `system/system/installer.app/`（`manifest.lua` 1,079 + `main.lua` 32,735 = **33,814 B**，纯 ASCII，26x20）：扫 `/disk/apps`（无驱动器即 `no disk`）+ `/apps` + `/system/system`，行前缀 `d`/`i`/`s`，回车装/卸/拒，结果与失败文案上屏（`installed <name> <ver>`、`hash check failed`、`size check failed`、`cancelled`、`system app locked`、`installer unavailable`），`layout_selftest()` 与桌面/设置同一套规则；安装器对象只经**宿主桥**取得（`opts.installer` → `api.sys.install`/`api.sys.uninstall` → `api.installer`，平函数 `install(name) -> true, info | nil, err`），源码不含任何内核路径字面量。`install.set` 26 → **28 条**、TOTAL **448,380 B / SIZE_WARN / MARGIN 98,855**、`WINDOW_OK sum=648,380`。新增 `tests/t_installer_app.lua`（10 组 **391** 断言），`tests/run.lua` 的 FILES 追加；`tests/run-tests.ps1` 把 app stage 到 `/tests/installer.app` 并列入 `$required`（理由见 §17.8）；离线 **3,770 pass / 0 fail / 186 groups**（N1 3,379/176）。`tests/t_budget.lua` 的 `install_entries` 26 → 28 随清单同步（强度不变）。README 删掉「无 installer UI」这条限制、新增 §5.5 用法，§2.1/§5.4/§6.3/§7/§9.1/§10 的数字同步。**未接内核桥**：`api.sys` 仍只有四个函数，真机上 UI 显示 `installer unavailable`（§17.2 末尾）。
+- 2026-11-01: **T4 把 `installer.app` 真正接通**（口径见 §17.2/§17.9）。`kernel/apps.lua`：`A.SYS_FUNCTIONS` 增 `install`/`uninstall`/`list`（+6,336 B），后三个由运行时自己实现并按调用方 record 授权——`install`/`uninstall` 需 `fs.write`、`list` 需 `fs.read`，未授权 `nil, "capability denied: <cap>"` + `APP_CAP_DENIED`；包名白名单 `[%w_%-]+`/≤40 B（`..`、路径分隔、绝对路径、空、非字符串 → `nil, "bad name"`）；`uninstall` 对 `<system_root>/<name>.app` 一律 `nil, "system app"` + `APP_SYS_PROTECT name=..` 且不调安装器；无实例时 `nil, "installer unavailable"`（T1 文案）；日志 `APP_INSTALL name=.. ok=..` / `APP_UNINSTALL name=.. ok=..` / `APP_LIST n=..`。`system/startup.lua`：新增第 3b 步 `P.build_installer`（+2,345 B），构造 `/system/kernel/installer.lua` 实例并以 `apps.new({ installer = inst })` 注入，失败只记 `STARTUP_INSTALLER_UNAVAILABLE`、不阻塞启动。`installer.app`（+1,039 B）：`M.bridge` 的检测改为"桥对象是否存在"（`M.BRIDGE_FUNCTIONS = install/uninstall/list`），`installer unavailable` 只由桥完全缺失触发。新增 `tests/t_installer_bridge.lua`（9 组 227 断言，含真实安装器 + 真实 fs 的端到端与 UI 回车链路），离线 **3,997 pass / 0 fail / 195 groups**（T1 3,770/186）；`install.set` 仍 28 条、TOTAL **458,100 B / SIZE_WARN / MARGIN 108,575**、`WINDOW_OK sum=658,100`（+9,720 B）；改动 lua 非 ASCII 计数 0。

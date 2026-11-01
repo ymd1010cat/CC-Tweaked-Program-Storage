@@ -116,6 +116,13 @@ pyroet-os/system/system/launcher.app/manifest.lua
 pyroet-os/system/system/launcher.app/main.lua
 pyroet-os/system/system/settings.app/manifest.lua
 pyroet-os/system/system/settings.app/main.lua
+# T1: the Installer UI (DECISIONS.md 17). Same two files per package as the other
+# desktop packages, listed file by file for the same reason. It is image payload
+# because installing an app must not require a shell command: the package reads
+# the medium, drives kernel/installer.lua through the host bridge and paints the
+# outcome in 26x20. 28 entries total after this block (26 + these two).
+pyroet-os/system/system/installer.app/manifest.lua
+pyroet-os/system/system/installer.app/main.lua
 # G1: the Net system app is image payload again (P5b had moved it out to
 # examples/net.app as an installable example). 15,930 B = main.lua
 # 15,493 + manifest.lua 437, which is where the extra bytes of TOTAL 359,305

@@ -37,7 +37,7 @@ H.mkdirp(H.root)
 local FILES = { "t_boot", "t_kernel", "t_apps", "t_startup",
     "t_net_hosts", "t_net_service", "t_net_app",
     "t_permissions", "t_launcher", "t_settings", "t_desktop",
-    "t_installer", "t_ota", "t_ota_server",
+    "t_installer", "t_installer_app", "t_installer_bridge", "t_ota", "t_ota_server",
     "t_recovery_proto", "t_recovery_flash", "t_recovery_bootstrap",
     "t_layout", "t_budget" }
 

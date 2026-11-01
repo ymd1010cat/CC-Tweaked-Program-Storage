@@ -52,7 +52,7 @@ EDL 式的恢复工具。发布版本 **1.0.0**，装机内容 **26 个文件 / 
 ```
 pyroet-os/
 ├─ startup.lua              ROM 唯一入口的 starter（1,070 B），只加载 /system/startup.lua
-├─ system/                  镜像 payload（25 文件 / 413,496 B）
+├─ system/                  镜像 payload（27 文件 / 447,310 B）
 │  ├─ startup.lua           启动链：boot → kernel → apps → 权限 → 服务 → 首帧 → commit
 │  ├─ boot.lua              bootloader：单树 + journal 决策表 + 按哈希回滚（45,623 B）
 │  ├─ kernel/
@@ -68,6 +68,7 @@ pyroet-os/
 │  └─ system/               系统应用（同一 `.app` 格式）
 │     ├─ launcher.app/      桌面（扫 /apps 与 /system/system）
 │     ├─ settings.app/      设置（严格只读）
+│     ├─ installer.app/     安装器 UI（26x20：来源盘 + 两个已装根，装/卸/拒）
 │     └─ net.app/           网络状态 / hosts 列表 / 单次 UDP probe
 ├─ recovery/                救援工具（**不进镜像、不进 install.set**）
 │  ├─ proto.lua             文件集事务层：META / 校验 / 暂存 / 替换 / 逆序撤销 / journal
@@ -76,7 +77,7 @@ pyroet-os/
 ├─ ota/                     发行端 OTA 服务（开发/发布工具，不跑在掌机上，不进镜像）
 ├─ tests/                   CraftOS-PC 离线套件（开发材料，不进发布包）
 ├─ tools/                   sizecheck.py / smoke.lua / smoke-run.ps1（开发材料）
-├─ install.set              镜像清单（26 条，`sizecheck.py` 的唯一输入）
+├─ install.set              镜像清单（28 条，`sizecheck.py` 的唯一输入）
 ├─ DECISIONS.md             决策记录（架构与门禁的权威口径）
 └─ P6-design.md             文件集更新模型的设计与崩溃窗口分析
 ```
@@ -209,8 +210,12 @@ fs.read=granted
 - 权限表自身抛错：`APP_PERMS_FAIL` + 全拒绝（fail closed），启动继续。
 - 持久化失败只记 `PERMS_SAVE_FAIL`，不阻断启动。
 
-`api.sys`（`status()` / `apps()` / `perms(app)` / `launch(name)`）**不是第 8 个 cap**，而是宿主注入的
-只读内省面，且只交给 `/system/` 下的系统包；用户包拿到桩，`launch` 按**目录**而不是按 cap 授权。
+`api.sys`（`status()` / `apps()` / `perms(app)` / `launch(name)` / `install(name)` /
+`uninstall(name)` / `list()`）**不是第 8 个 cap**，而是宿主注入的只读内省面，且只交给 `/system/`
+下的系统包；用户包拿到桩，`launch` 按**目录**而不是按 cap 授权。后三个由**运行时自己**实现
+（只有它知道调用方 record 的 cap 集合）：`install`/`uninstall` 需 `fs.write`、`list` 需 `fs.read`，
+未授权仍是 `nil, "capability denied: <cap>"` + `APP_CAP_DENIED`；目标对象由启动链构造并以
+`apps.new({ installer = inst })` 注入，缺失时返回 `nil, "installer unavailable"`。详见 §5.5。
 
 ### 4.3 没有键盘这条边界
 
@@ -267,13 +272,62 @@ P2 运行时没有 input cap，所以"询问"是注入的回调：默认实现�
 - 安装器（`kernel/installer.lua`）：暂存到 `/apps/.tmp-<name>/` → 校验（摘要 + 声明的 `size`）→ 替换；
   `fs.move` 被拒时降级为 copy + 逐文件校验 + 删临时目录；任何失败保留旧版本。
 
-### 5.4 三个系统应用的 cap（写死）
+### 5.4 四个系统应用的 cap（写死）
 
 | 包 | version | capabilities |
 | --- | --- | --- |
 | `launcher.app` | 0.1.0 | `fs.read`, `fs.write`（写只用于 `/etc/launcher.recent`，被拒就忽略） |
 | `settings.app` | 0.1.0 | `fs.read`（**严格只读**，没有写路径） |
+| `installer.app` | 0.1.0 | `fs.read`, `fs.write`（读来源盘与两个已装根；写只发生在安装事务里） |
 | `net.app` | 0.1.0 | `net.rpv`, `fs.read` |
+
+### 5.5 安装器 UI（`installer.app`）
+
+图形入口，26x20，与桌面/设置共用同一套布局自检（`layout_selftest()`）。
+
+```
+installer 0.1.0
+disk ok 3 installed
+> d box          0.2.0    <- d = 来源盘 /disk/apps 上的包（Enter 安装/覆盖）
+  d zeta         1.0.0
+  i notes        0.3.0    <- i = 已装在 /apps（Enter 卸载）
+  s launcher     0.1.0    <- s = 镜像自带的系统包（Enter 拒绝）
+  ...
+enter install              <- 或 enter remove / system app locked / 结果文案
+d2 i1 s2 sel 1/5
+```
+
+- **按键是纯函数**（`M.handle_key(state, key, api, opts)`）：上/下（或左/右）移动、数字键跳转、
+  回车/return 执行、`escape`/`q`/`c` 取消当前提示行；`M.run` 的键从 `opts.keys` 取
+  （运行时没有 `input` capability，见 §4.3）。
+- **来源**：`/disk/apps/*.app`（有驱动器时；没有驱动器是正常状态，文案是 `no disk, no apps`）、
+  `/apps`（用户包）、`/system/system`（镜像包）。版本号：来源盘上的包从 `manifest.lua`
+  **按文本匹配**读取（绝不执行来源盘里的代码），已装的包从 `api.sys.apps()` 取。
+- **安装走宿主桥**，三种桥来源按顺序取第一个可用的：`opts.installer` → `api.sys.install` /
+  `api.sys.uninstall` → `api.installer`。桥函数签名为平函数：
+  `install(name) -> true, info | nil, err`、`uninstall(name) -> true | nil, err`、
+  `list() -> entries`，即 `kernel/installer.lua` 的契约（对象绑定由宿主完成）。应用**从不**
+  `dofile`/`loadfile` 内核模块；**桥对象完全缺失**时显示 `installer unavailable` 并继续运行，
+  不报错、不崩；桥在但内核没装安装器时同一行文案由 `M.error_text` 的 `unavailable` 映射给出。
+- **桥已接通（T4）**：`kernel/apps.lua` 的 `A.SYS_FUNCTIONS` 增加 `install`/`uninstall`/`list`，
+  `startup.lua` 启动时构造 `/system/kernel/installer.lua` 实例（真实 fs、`/apps` 与
+  `/system/system` 根）并以 `apps.new({ installer = inst })` 注入，构造失败只记
+  `STARTUP_INSTALLER_UNAVAILABLE`、不阻塞启动。能力：`install`/`uninstall` 需 `fs.write`、
+  `list` 需 `fs.read`（未授权 = `nil, "capability denied: <cap>"` + `APP_CAP_DENIED`）；参数只接受
+  包名 `[%w_%-]+`、≤40 B（`..`、`/`、`\`、`.`、空串、非字符串 = `nil, "bad name"`）；`uninstall`
+  拒绝 `/system/system` 下的包（`nil, "system app"` + `APP_SYS_PROTECT name=..`，桥一次都不调用）。
+  日志每次调用恰好一行：`APP_INSTALL name=.. ok=..` / `APP_UNINSTALL name=.. ok=..` /
+  `APP_LIST n=..`。
+- **失败文案**（`M.error_text()` 是唯一映射点，返回值第二个是分类）：
+  `hash check failed`（digest/sums/sha256/unlisted）、`size check failed`（size）、
+  `cancelled` / `cancelled: no source`、`system app locked`、`not installed`、
+  `capability denied: fs.write`、其他 `failed: <原串>`。
+- **卸载保护**：`/system/system` 的包在应用层就拒绝（`system app locked`，桥一次都不调用），
+  即使宿主返回 `system app` 也显示同一行；只有 `/apps/<name>.app` 能被卸载。
+- **没有可装项**时给 ASCII 提示：`no apps to install`（有盘无包）或 `no disk, no apps`
+  （无盘也无包）；`fs.read` 被拒时直接显示 `capability denied: fs.read`。
+- **测试钩子**（真机永不设置）：`_G.PYROET_INSTALLER_TEST` 让入口返回模块本身，
+  `_G.PYROET_APP_NOPAINT` 跳过绘制。
 
 ---
 
@@ -366,6 +420,10 @@ recovery/bootstrap.lua
 -- 安装/卸载/列出用户应用（来源：/disk/apps、内存包表或 opts.dir）
 local inst = dofile("/system/kernel/installer.lua").new({ log = print })
 inst:install("hello"); inst:uninstall("hello"); inst:list()
+
+-- 图形入口：launcher 的列表里选 installer.app（26x20；行前缀 d/i/s 分别表示
+-- 来源盘上的包、已装在 /apps、镜像自带）。它自己不实现安装，只通过宿主桥调用上面的
+-- 安装器；桥的接法与降级见 §5.5。
 ```
 
 注意：OTA 正常更新与救援刷写是**同一信任模型的两条链路**（裸 rednet + SHA-256 + 帧定界，
@@ -388,19 +446,19 @@ inst:install("hello"); inst:uninstall("hello"); inst:list()
 | 更新窗口 | **900,000 B** | `total + BACKUP_CAP ≤ 900,000` = `WINDOW_OK`，超出 exit 1 |
 | 机身配额 | **1,000,000 B** | CC 电脑默认存储配额（含用户数据、日志、已装 app） |
 
-当前实测（v1.0.0 + N1 修正）：
+当前实测（v1.0.0 + N1 修正 + T1 安装器 UI）：
 
 ```
-entries    : 26 (26 files, 0 dirs, 0 missing)
-TOTAL      : 414,566 B   (system 25 文件 413,496 + 根 starter 1,070)
-VERDICT    : SIZE_WARN   (stretch 349,525 < total 414,566 <= upper 629,145)
-MARGIN     : 65,041 bytes over stretch; 214,579 bytes under upper
-WINDOW_OK  : sum=614566 limit=900000
+entries    : 28 (28 files, 0 dirs, 0 missing)
+TOTAL      : 448,380 B   (system 27 文件 447,310 + 根 starter 1,070)
+VERDICT    : SIZE_WARN   (stretch 349,525 < total 448,380 <= upper 629,145)
+MARGIN     : 98,855 bytes over stretch; 180,765 bytes under upper
+WINDOW_OK  : sum=648380 limit=900000
 ```
 
 - **`SIZE_WARN` 不是失败**：超目标线只报差额；硬门禁才是发版阻断线。
-- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`414,566 + 200,000 = 614,566`，
-  距 900,000 还有 285,434 B，距机身 1,000,000 B 还有 385,434 B。
+- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`448,380 + 200,000 = 648,380`，
+  距 900,000 还有 251,620 B，距机身 1,000,000 B 还有 351,620 B。
 - **发布包 ≠ 镜像**：发布 zip 是完整源码集（含 `recovery/` 与两份文档），`install.set` 统计的才是镜像；
   不要拿 zip 体积当门禁，也不要因为包里有 `recovery/` 就以为它在镜像里。
 
@@ -418,7 +476,6 @@ WINDOW_OK  : sum=614566 limit=900000
 | **没有 `/etc/network.conf` 就没有网络** | `net` 服务由启动链默认注册（§3.1），但配置是用户数据：文件不存在就跳过（`STARTUP_NET_SKIP reason=no_config`），不猜默认地址、不写默认配置 |
 | **settings 严格只读** | 只声明 `fs.read`，没有任何写路径；看得到配置，改不了配置 |
 | **无中文** | CJK 字库与三件套全部删除（省 1,440,360 B）；界面与日志纯 ASCII，原版 CC 字体即可显示 |
-| **无 installer UI** | 安装器是模块 API（`inst:install(...)`），没有图形包管理器；安装需要手动执行或等输入服务 |
 | **无进程隔离 / 无法抢占** | app 共享一个 Lua VM；死循环只能重启整机；"杀进程"只是不再调度它的 coroutine |
 | **单文件更新上限 65,536 B** | 任何单文件超过 `F_MAX` 就永远无法通过文件集更新（当前最大 `rpv/node.lua` 60,498 B） |
 
@@ -445,7 +502,7 @@ pwsh -NoProfile -File pyroet-os/tests/run-tests.ps1
 脚本把镜像 stage 到 `pyroet-os/.tests/computer/20`（与真机同布局：`/system` + `/system/system/*.app`），
 headless 启动、读取 `/offline-report.txt` 判分，**PASS 后自动删除 staging**（`-Keep` 保留）。
 
-基线（v1.0.0 + N1 修正）：**OFFLINE_PASS 3379 / FAIL 0 / GROUPS 176**。
+基线（v1.0.0 + N1 修正 + T1 安装器 UI）：**OFFLINE_PASS 3770 / FAIL 0 / GROUPS 186**。
 
 另有 P1 的 rpv 子集冒烟测试（可选）：
 
@@ -484,14 +541,15 @@ python tools/build_release.py --project pyroet-os --out dist/release
 | --- | --- |
 | 发布版本 | 1.0.0（`pyroet-os-v1.0.0.zip`） |
 | `/startup.lua` starter | 1,070 B（`DECISIONS.md` §13.11 的 1,071 B 为旧读数） |
-| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，26,022 B（N1：+5,368 B，net 默认注册） |
+| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，28,367 B（T4：+2,345 B，安装器构造与注入） |
 | bootloader | `M.VERSION = 2.0`，45,623 B |
-| kernel / apps / permissions | 1.0 / 1.0 / 1.0（13,958 / 28,804 / 18,387 B） |
+| kernel / apps / permissions | 1.0 / 1.0 / 1.0（13,958 / 35,140 / 18,387 B） |
 | installer / ota | 1.0 / 2.0（17,295 / 31,877 B；N1：+3,854 / +3,566 B，size 校验） |
 | rpv 子集 | 10 文件 / 131,590 B（9 模块 + loader） |
-| 系统应用 | launcher / settings / net，均 0.1.0 |
+| 系统应用 | launcher / settings / installer / net，均 0.1.0 |
+| `installer.app`（T1/T4） | 0.1.0，34,853 B（main.lua 33,774 + manifest.lua 1,079） |
 | OTA 服务端（`ota/server.lua`） | 1.0，27,927 B（不进镜像） |
-| 镜像 | 26 条 / 414,566 B / `SIZE_WARN` / `WINDOW_OK` |
+| 镜像 | 28 条 / 458,100 B / `SIZE_WARN` / `WINDOW_OK` |
 
 设计口径以 [`DECISIONS.md`](DECISIONS.md)（架构、门禁、发布）与 [`P6-design.md`](P6-design.md)
 （文件集更新、journal、崩溃窗口、bootloader 决策表）为准；本文是面向使用者的入口，

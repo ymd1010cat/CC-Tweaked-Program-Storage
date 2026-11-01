@@ -6,6 +6,8 @@ a thin sequence and pushes every real decision into the modules it loads:
     1. boot.begin()      decide from /system + update journal + /boot.ok
     2. kernel.new()      build the service manager
     3. apps.new()        build the app runtime, scan <apps_root> for *.app
+    3b. installer        build kernel/installer.lua and inject it (T4), so that
+                         api.sys.install / uninstall / list have a target
     4. register          the system services: hello, plus net when
                          /etc/network.conf exists (then opts.services)
     5. start_all()       topological start, failure isolation
@@ -60,7 +62,8 @@ Options accepted by run(opts): fs, root (boot state prefix), boot, kernel, apps,
 boot_path, kernel_path, apps_path, apps_root, system_root, log, now, term,
 frame, loop, reboot, version, services, rpv, rednet, redstone, peripheral, http,
 write_limit, permissions, permissions_path, perms_root, ask, launcher,
-net, net_path, net_config, net_hosts.
+net, net_path, net_config, net_hosts, installer, installer_path, media_root,
+packages, sha.
 
 No non-ASCII bytes in this file.
 ]]
@@ -71,6 +74,7 @@ P.VERSION = "0.2.0"
 P.BOOT_PATH = "/system/boot.lua"
 P.KERNEL_PATH = "/system/kernel/init.lua"
 P.APPS_PATH = "/system/kernel/apps.lua"
+P.INSTALLER_PATH = "/system/kernel/installer.lua"
 P.PERMISSIONS_PATH = "/system/kernel/permissions.lua"
 P.APPS_ROOT = "/apps"
 -- the whole image lives here: /system/{startup,boot}.lua, kernel/, rpv/, net/,
@@ -437,6 +441,54 @@ function P.start_desktop(ctx, o, log)
     return ctx.launcher ~= nil
 end
 
+-- Step 3b (T4): build the one installer object the system surface forwards to.
+-- `api.sys.install / uninstall / list` themselves are the app runtime's own
+-- functions (they have to read the calling record's capabilities), so the host
+-- only supplies the object behind them. Any failure here is a missing feature
+-- and not a boot failure: the runtime then answers `nil, "installer
+-- unavailable"` exactly as it did before the bridge existed.
+function P.build_installer(ctx, o, apps_mod)
+    local log = ctx.log
+    if o.installer == false then
+        log("STARTUP_INSTALLER_UNAVAILABLE")
+        return nil
+    end
+    local source = o.installer
+    if type(source) ~= "table" then
+        local ok, module = pcall(load_module, o.installer_path or P.INSTALLER_PATH)
+        source = (ok and type(module) == "table") and module or nil
+    end
+    if type(source) ~= "table" then
+        log("STARTUP_INSTALLER_UNAVAILABLE")
+        return nil
+    end
+    if type(source.new) ~= "function" then
+        -- an injected instance (tests, or a host with its own installer)
+        log("STARTUP_INSTALLER_READY mode=injected")
+        return source
+    end
+    local system_root = o.system_root
+    if system_root == nil or system_root == false or system_root == "" then
+        system_root = P.SYSTEM_APPS_ROOT
+    end
+    local ok, inst = pcall(source.new, {
+        fs = ctx.fs,
+        log = log,
+        apps = apps_mod,
+        media_root = o.media_root,
+        apps_root = o.apps_root or P.APPS_ROOT,
+        system_root = system_root,
+        packages = o.packages,
+        sha = o.sha,
+    })
+    if not ok or type(inst) ~= "table" then
+        log("STARTUP_INSTALLER_UNAVAILABLE")
+        return nil
+    end
+    log("STARTUP_INSTALLER_READY mode=new apps=" .. short(inst.apps_root, 40))
+    return inst
+end
+
 -- ---------------------------------------------------------------------------
 -- the chain
 -- ---------------------------------------------------------------------------
@@ -534,6 +586,9 @@ function P.run(opts)
     end
 
     local apps_mod = o.apps or load_module(o.apps_path or P.APPS_PATH)
+    -- 3b. the installer object, injected into the runtime so that
+    -- api.sys.install/uninstall/list have something to forward to (T4)
+    ctx.installer = P.build_installer(ctx, o, apps_mod)
     if type(apps_mod) == "table" and type(apps_mod.new) == "function" then
         ctx.rt = apps_mod.new({
             fs = fsx,
@@ -541,6 +596,7 @@ function P.run(opts)
             apps_root = o.apps_root or P.APPS_ROOT,
             max_starts = o.max_starts,
             write_limit = o.write_limit,
+            installer = ctx.installer,
             rpv = o.rpv,
             rednet = o.rednet,
             redstone = o.redstone,
@@ -631,6 +687,7 @@ function P.run(opts)
         kernel = k,
         apps = ctx.rt,
         perms = ctx.perms,
+        installer = ctx.installer,
         launcher = ctx.launcher,
         info = info,
         version = P.VERSION,

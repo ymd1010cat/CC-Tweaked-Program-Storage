@@ -36,11 +36,26 @@ on.
 
 `api.sys` is a separate, host-supplied introspection surface, not a capability:
 the host passes `sys = <table>` or `sys = function(record) -> table|nil` and only
-the apps it returns a table for get anything. The four functions are `status()`
-(kernel status), `apps()` (this runtime's status().apps), `perms(app)` (that
-app's decisions) and `launch(name)` (start another app). Anything not supplied
-answers `nil, "system unavailable: <fn>"` with `APP_SYS_UNAVAILABLE`, so an app
-never gets a nil-index by asking.
+the apps it returns a table for get anything. The four host functions are
+`status()` (kernel status), `apps()` (this runtime's status().apps), `perms(app)`
+(that app's decisions) and `launch(name)` (start another app). Anything not
+supplied answers `nil, "system unavailable: <fn>"` with `APP_SYS_UNAVAILABLE`, so
+an app never gets a nil-index by asking.
+
+`install(name)`, `uninstall(name)` and `list()` are the other half of that
+surface, and this runtime builds them rather than the host, because they are the
+only system calls gated on the calling app's own capabilities: install and
+uninstall need `fs.write`, list needs `fs.read`, and a refusal is the usual
+`nil, "capability denied: <cap>"` plus `APP_CAP_DENIED` -- never a raise. They
+forward to one `kernel/installer.lua` instance, built by startup.lua and passed
+as `opts.installer`; with no instance they answer `nil, "installer unavailable"`
+(the installer app's T1 wording), so a machine without the installer still
+boots. A name is one package name -- letters, digits, '_' and '-', at most
+A.APP_NAME_MAX bytes -- and `uninstall` refuses a package that lives under the
+system root with `nil, "system app"` and `APP_SYS_PROTECT name=...`, because
+image packages move only through an OTA (DECISIONS.md 1.2(c)). Every call logs
+exactly one `APP_INSTALL name=... ok=...` / `APP_UNINSTALL name=... ok=...` /
+`APP_LIST n=...` line.
 
 Quotas, per app, refusing rather than clamping:
 
@@ -217,6 +232,9 @@ function A.new(opts)
     self.index = {}
     self.ticks = 0
     self.perms = nil
+    -- kernel/installer.lua, built once by startup.lua (T4); the system surface
+    -- forwards install/uninstall/list to it, and its absence is a normal answer
+    self.installer = o.installer
     return self
 end
 
@@ -272,7 +290,16 @@ end
 -- system introspection surface (host supplied, capability free)
 -- ---------------------------------------------------------------------------
 
-A.SYS_FUNCTIONS = { "status", "apps", "perms", "launch" }
+A.SYS_FUNCTIONS = { "status", "apps", "perms", "launch", "install", "uninstall", "list" }
+-- the three installer entries above are served by this runtime (see the
+-- installer bridge section); the four before them come from the host table
+A.SYS_INSTALLER = {
+    install = { cap = "fs.write", method = "sys_install" },
+    uninstall = { cap = "fs.write", method = "sys_uninstall" },
+    list = { cap = "fs.read", method = "sys_list" },
+}
+-- same ceiling as kernel/installer.lua's NAME_MAX
+A.APP_NAME_MAX = 40
 
 function A:sys_unavailable(record, name)
     self:log("APP_SYS_UNAVAILABLE app=" .. record.name .. " fn=" .. name)
@@ -301,14 +328,127 @@ function A:sys_api(record)
     local api = {}
     for i = 1, #A.SYS_FUNCTIONS do
         local name = A.SYS_FUNCTIONS[i]
-        local fn = host and host[name]
-        if type(fn) == "function" then
-            api[name] = function(...) return fn(...) end
+        local bridge = A.SYS_INSTALLER[name]
+        if bridge then
+            -- the installer bridge is the runtime's own function: it has to ask
+            -- this record's cap set before anything reaches the installer. It
+            -- also rides on the same entitlement as the rest of api.sys -- a
+            -- package the host gave no system surface is not an installer.
+            local method = bridge.method
+            if host == nil then
+                api[name] = function() return self:sys_unavailable(record, name) end
+            else
+                api[name] = function(...) return self[method](self, record, ...) end
+            end
         else
-            api[name] = function() return self:sys_unavailable(record, name) end
+            local fn = host and host[name]
+            if type(fn) == "function" then
+                api[name] = function(...) return fn(...) end
+            else
+                api[name] = function() return self:sys_unavailable(record, name) end
+            end
         end
     end
     return api
+end
+
+-- ---------------------------------------------------------------------------
+-- the installer bridge: api.sys.install / uninstall / list (T4)
+-- ---------------------------------------------------------------------------
+
+-- What a caller may name: one package name, never a path. The pattern is
+-- deliberately narrower than a manifest name (no '.'), so `..`, `a/b` and every
+-- absolute path are refused before the name is joined onto a root.
+function A.app_name_ok(name)
+    if type(name) ~= "string" or name == "" or #name > A.APP_NAME_MAX then
+        return false
+    end
+    if name:find("/", 1, true) or name:find("\\", 1, true) then return false end
+    if name:find("..", 1, true) then return false end
+    return name:match("^[%w_%-]+$") ~= nil
+end
+
+function A:installer_of()
+    local inst = self.installer
+    if type(inst) ~= "table" then return nil end
+    return inst
+end
+
+-- is `name` an image package? Read from the installer's own system root so the
+-- answer matches the object that would otherwise be asked to delete it.
+function A:app_is_system(name, inst)
+    local fsx = (inst and inst.fs) or self.fs
+    local root = inst and inst.system_root or nil
+    if type(root) ~= "string" or root == "" then root = "/system/system" end
+    if type(fsx) ~= "table" or type(fsx.exists) ~= "function" then return false end
+    local called, exists = pcall(fsx.exists, join(root, name .. ".app"))
+    return called and exists == true
+end
+
+function A:sys_install(record, name)
+    if not record.caps["fs.write"] then return self:denied(record, "fs.write") end
+    local inst = self:installer_of()
+    local label = "APP_INSTALL name=" .. short(name)
+    if not inst or type(inst.install) ~= "function" then
+        self:log(label .. " ok=false")
+        return nil, "installer unavailable"
+    end
+    if not A.app_name_ok(name) then
+        self:log(label .. " ok=false")
+        return nil, "bad name"
+    end
+    local called, ok, info = pcall(inst.install, inst, name)
+    if not called then ok, info = false, tostring(ok) end
+    self:log(label .. " ok=" .. tostring(ok == true))
+    if ok ~= true then return nil, tostring(info) end
+    return true, info
+end
+
+function A:sys_uninstall(record, name)
+    if not record.caps["fs.write"] then return self:denied(record, "fs.write") end
+    local inst = self:installer_of()
+    local label = "APP_UNINSTALL name=" .. short(name)
+    if not inst or type(inst.uninstall) ~= "function" then
+        self:log(label .. " ok=false")
+        return nil, "installer unavailable"
+    end
+    if not A.app_name_ok(name) then
+        self:log(label .. " ok=false")
+        return nil, "bad name"
+    end
+    -- an image package leaves only through an OTA image (DECISIONS.md 1.2(c)),
+    -- and that rule is enforced here too: naming a package that also exists
+    -- under /apps does not turn a system package into a removable one
+    if self:app_is_system(name, inst) then
+        self:log("APP_SYS_PROTECT name=" .. short(name))
+        self:log(label .. " ok=false")
+        return nil, "system app"
+    end
+    local called, ok, info = pcall(inst.uninstall, inst, name)
+    if not called then ok, info = false, tostring(ok) end
+    self:log(label .. " ok=" .. tostring(ok == true))
+    if ok ~= true then return nil, tostring(info) end
+    return true, info
+end
+
+function A:sys_list(record)
+    if not record.caps["fs.read"] then return self:denied(record, "fs.read") end
+    local inst = self:installer_of()
+    if not inst or type(inst.list) ~= "function" then
+        self:log("APP_LIST n=0")
+        return nil, "installer unavailable"
+    end
+    local called, entries = pcall(inst.list, inst)
+    if not called then
+        self:log("APP_LIST n=0")
+        return nil, tostring(entries)
+    end
+    if type(entries) ~= "table" then
+        self:log("APP_LIST n=0")
+        return nil, "list failed"
+    end
+    self:log("APP_LIST n=" .. tostring(#entries))
+    return entries
 end
 
 -- ---------------------------------------------------------------------------

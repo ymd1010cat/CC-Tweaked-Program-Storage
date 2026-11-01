@@ -34,7 +34,9 @@ return function(H)
         local paths = active_paths(text or "")
         local set = {}
         for i = 1, #paths do set[paths[i]] = true end
-        H.eq("install_entries", #paths, 26)
+        -- T1 added the Installer UI as image payload (2 files, DECISIONS.md 17),
+        -- so the exact count moved 26 -> 28; the strictness is unchanged
+        H.eq("install_entries", #paths, 28)
         H.check("has_installer", set["pyroet-os/system/kernel/installer.lua"] == true,
             "installer is not image payload")
         H.check("has_ota", set["pyroet-os/system/kernel/ota.lua"] == true,
@@ -63,7 +65,7 @@ return function(H)
         H.check("no_tests", set["pyroet-os/tests/run.lua"] == nil, "tests are not payload")
         H.check("has_system_net_text", (text or ""):find("pyroet-os/system/system/net.app", 1, true) ~= nil, "install.set does not name system/net.app")
         H.check("no_examples_text", (text or ""):find("pyroet-os/examples/", 1, true) == nil, "install.set still names an examples/ path")
-        H.check("no_duplicates", #paths == 26, "duplicate active entries")
+        H.check("no_duplicates", #paths == 28, "duplicate active entries")
     end
 
     -- ---------------------------------------------------------------------
