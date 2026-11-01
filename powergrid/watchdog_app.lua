@@ -2,10 +2,13 @@
 --
 -- Samples a redstone level, feeds watchdog.lua and, when the state machine
 -- crosses an edge, acts exactly once: the alarm sample drives the alarm relay
--- and switches the power mode to powergrid.watchdog.switch_to (default 2 =
--- backup battery) through power.lua; the recovery sample drives the relay back
--- and - when powergrid.watchdog.restore is true - restores the mode that was
--- active before the alarm.
+-- and switches the power mode to watchdog.switch_to (default 2 = backup
+-- battery) through power.lua; the recovery sample drives the relay back and -
+-- when watchdog.restore is true - restores the mode that was active before the
+-- alarm.
+--
+-- All tunables are read from the controller's ini file through power.lua;
+-- nothing is read from CraftOS' per-computer configuration store.
 --
 -- This is NOT a continuous ATS controller: it only acts on those two
 -- transitions, never re-corrects the mode on every poll (so a manual mode change
@@ -26,7 +29,9 @@
 --   WATCHDOG_ALARM      alarm raised (relay on)
 --   WATCHDOG_CLEAR      level reached high again (relay off)
 --   WATCHDOG_DISABLED   enabled=false, nothing is sampled or driven
---   WATCHDOG_CONFIG_BAD one line per rejected setting (default is used)
+--   WATCHDOG_CONFIG_BAD one line per rejected ini value / ignored line / unknown key
+--   WATCHDOG_CONFIG     parse summary of the ini file (path/format/mode)
+--   WATCHDOG_CONFIG_FAIL the watchdog section could not be read (defaults are used)
 --   WATCHDOG_READ_FAIL  the sensor could not be read (first failure, then 1/60)
 --   WATCHDOG_RELAY_FAIL the alarm side could not be driven
 --   WATCHDOG_SWITCH     the alarm switched the power mode (from=X to=Y ...)
@@ -39,21 +44,7 @@
 
 local M = {}
 
-M.VERSION = "1.0"
-
--- settings keys (CraftOS `set` command, per computer). The controller's own ini
--- file stays the single 0-3 value it always was.
-M.KEYS = {
-    enabled = "powergrid.watchdog.enabled",
-    low = "powergrid.watchdog.low",
-    high = "powergrid.watchdog.high",
-    window = "powergrid.watchdog.window",
-    poll = "powergrid.watchdog.poll",
-    input_side = "powergrid.watchdog.input_side",
-    alarm_side = "powergrid.watchdog.alarm_side",
-    switch_to = "powergrid.watchdog.switch_to",
-    restore = "powergrid.watchdog.restore",
-}
+M.VERSION = "1.1"
 
 local NULL_LOGGER = {}
 function NULL_LOGGER.write() return false end
@@ -123,33 +114,50 @@ local function makeReader(redstone, side)
 end
 M.makeReader = makeReader
 
--- Read the raw option table out of CraftOS settings. Returns raw, usedApi.
-function M.readConfig(settingsApi, keys)
-    local raw = {}
-    local api = settingsApi
-    if api == nil then api = _G.settings end
-    local map = keys or M.KEYS
-    if type(api) ~= "table" or type(api.get) ~= "function" then
-        return raw, false
+-- field -> ini key mapping (owned by power.lua; the conventional prefix is the
+-- fallback when the module is absent or is a test double).
+function M.iniKeys(powerApi)
+    if type(powerApi) == "table" and type(powerApi.WATCHDOG_KEYS) == "table" then
+        return powerApi.WATCHDOG_KEYS
     end
-    for field, key in pairs(map) do
-        local ok, value = pcall(api.get, key)
-        if ok and value ~= nil then raw[field] = value end
+    return {}
+end
+
+local function iniKeyOf(app, field)
+    local key = M.iniKeys(app.power)[field]
+    if type(key) == "string" then return key end
+    return "watchdog." .. tostring(field)
+end
+
+-- Read the watchdog section out of the ini file through power.lua. Returns the
+-- raw field table (strings) plus the parse report; an empty table plus a reason
+-- when the module is absent.
+local function iniConfig(powerApi, powerOpts)
+    if type(powerApi) ~= "table" or type(powerApi.config) ~= "function" then
+        return {}, { ok = false, reason = "no_power_module" }
     end
-    return raw, true
+    local ok, raw, info = pcall(powerApi.config, powerOpts)
+    if not ok then
+        return {}, { ok = false, reason = "config_error" }
+    end
+    if type(raw) ~= "table" then raw = {} end
+    if type(info) ~= "table" then info = {} end
+    info.ok = true
+    return raw, info
 end
 
 -- Build the app. opts:
---   config   raw watchdog options (skips the settings read when given)
---   settings settings API override (default _G.settings)
+--   config   raw watchdog options (skips the ini read when given)
+--   path     ini path override passed to the power module (tests/deploys)
 --   watchdog watchdog module (default require/dofile watchdog.lua)
 --   logger   logger module (default require/dofile logger.lua, else no-op)
 --   redstone redstone API (default _G.redstone)
 --   read     function() -> level[, err] (default: analog input of input_side)
 --   clock    function() -> seconds (default os.clock)
 --   sleep    function(seconds) (default os.sleep)
---   power    power.lua-style module with read()/apply(value); pass false to
---            simulate the module being absent (default require/dofile power.lua)
+--   power    power.lua-style module with config()/read()/apply(value);
+--            pass false to simulate the module being absent
+--            (default require/dofile power.lua)
 function M.new(opts)
     if type(opts) ~= "table" then opts = {} end
 
@@ -166,20 +174,26 @@ function M.new(opts)
         log = resolveModule("logger") or NULL_LOGGER
     end
 
-    local config = opts.config
-    if type(config) ~= "table" then
-        config = M.readConfig(opts.settings)
-    end
-
     local redstone = opts.redstone
     if redstone == nil then redstone = _G.redstone end
 
-    -- power.lua does the actual mode switch/restore. Passing false means "there
-    -- is no power module in this deployment": the monitor still alarms, but a
-    -- switch attempt is logged as WATCHDOG_SWITCH_FAIL instead of crashing.
+    -- power.lua is both the power primitive and the configuration source: the
+    -- watchdog section lives in the ini file. Passing false means "there is no
+    -- power module in this deployment": the monitor still alarms with defaults,
+    -- but a switch attempt is logged as WATCHDOG_SWITCH_FAIL instead of
+    -- crashing.
     local powerApi = opts.power
     if powerApi == nil then powerApi = resolveModule("power") end
     if powerApi == false then powerApi = nil end
+
+    local powerOpts = nil
+    if type(opts.path) == "string" then powerOpts = { path = opts.path } end
+
+    local config = opts.config
+    local configInfo = nil
+    if type(config) ~= "table" then
+        config, configInfo = iniConfig(powerApi, powerOpts)
+    end
 
     local state = wd.new(config)
     local app = {
@@ -188,6 +202,8 @@ function M.new(opts)
         logger = log,
         redstone = redstone,
         power = powerApi,
+        power_opts = powerOpts,
+        ini = configInfo,
         clock = opts.clock or defaultClock,
         sleep = opts.sleep or defaultSleep,
         state = state,
@@ -212,14 +228,46 @@ function M.new(opts)
     return app
 end
 
--- Arm the monitor: log rejected settings, the start line, and put the relay in
--- its safe state. Returns "running" or "disabled".
+-- Arm the monitor: report the ini parse, log every rejected value, the start
+-- line, and put the relay in its safe state. Returns "running" or "disabled".
 function M.start(app)
     local state = app.state
     local problems = state.problems or {}
     for i = 1, #problems do
-        app.logger.warn("WATCHDOG_CONFIG_BAD " .. tostring(problems[i]))
+        local problem = problems[i]
+        app.logger.warn("WATCHDOG_CONFIG_BAD key=" ..
+            iniKeyOf(app, problem.field) ..
+            " value=" .. tostring(problem.raw) ..
+            " fallback=" .. tostring(problem.fallback) ..
+            " reason=" .. tostring(problem.reason))
     end
+
+    local info = app.ini
+    if type(info) == "table" and info.format ~= nil then
+        if info.format ~= nil then
+            app.logger.info("WATCHDOG_CONFIG path=" .. tostring(info.path) ..
+                " format=" .. tostring(info.format) ..
+                " mode=" .. fmt(info.mode))
+        end
+        if info.mode_error ~= nil then
+            app.logger.warn("WATCHDOG_CONFIG_FAIL code=" ..
+                tostring(info.mode_error) .. " fallback=defaults")
+        end
+        local badLines = info.bad_lines or {}
+        for i = 1, #badLines do
+            app.logger.warn("WATCHDOG_CONFIG_BAD line=" .. tostring(badLines[i]) ..
+                " fallback=ignored")
+        end
+        local unknown = info.unknown or {}
+        for i = 1, #unknown do
+            app.logger.warn("WATCHDOG_CONFIG_BAD key=" .. tostring(unknown[i].key) ..
+                " value=" .. tostring(unknown[i].value) .. " fallback=ignored")
+        end
+    elseif type(info) == "table" and info.reason ~= nil then
+        app.logger.warn("WATCHDOG_CONFIG_FAIL reason=" .. tostring(info.reason) ..
+            " fallback=defaults")
+    end
+
     if state.cfg.enabled ~= true then
         app.status = "disabled"
         app.started = true
@@ -265,7 +313,7 @@ local function readMode(app)
     if type(app.power) ~= "table" or type(app.power.read) ~= "function" then
         return nil, "no_power_module"
     end
-    local ok, mode, code = pcall(app.power.read)
+    local ok, mode, code = pcall(app.power.read, app.power_opts)
     if not ok then return nil, "read_error" end
     if type(mode) ~= "number" then
         return nil, tostring(code or "read_fail")
@@ -295,7 +343,7 @@ function M.switchPower(app, reason, level)
         app.logger.info("WATCHDOG_SWITCH to=" .. fmt(target) .. " noop")
         return false
     end
-    local ok, applied, err = pcall(app.power.apply, target)
+    local ok, applied, err = pcall(app.power.apply, target, app.power_opts)
     if not ok or not applied then
         local why = err
         if not ok then why = applied end
@@ -315,7 +363,7 @@ function M.switchPower(app, reason, level)
 end
 
 -- Restore the pre-alarm mode on recovery (once, on the clear sample only).
--- powergrid.watchdog.restore=false keeps the backup mode instead.
+-- watchdog.restore=false keeps the backup mode instead.
 function M.restorePower(app)
     local cfg = app.state.cfg
     if app.switched ~= true or app.switch_from == nil then
@@ -348,7 +396,7 @@ function M.restorePower(app)
         app.logger.info("WATCHDOG_RESTORE to=" .. fmt(target) .. " noop")
         return false
     end
-    local ok, applied, err = pcall(app.power.apply, target)
+    local ok, applied, err = pcall(app.power.apply, target, app.power_opts)
     if not ok or not applied then
         local why = err
         if not ok then why = applied end

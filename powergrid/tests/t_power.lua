@@ -322,3 +322,212 @@ H.contains(startupSrc, "error = configError",
     "the blue screen still receives the archived code")
 H.lacks(startupSrc, "watchdog",
     "the controller still has no watchdog hook of its own")
+
+-- Ini parsing ----------------------------------------------------------------
+
+local function countKeysLua(tbl)
+    local n = 0
+    for _ in pairs(tbl) do n = n + 1 end
+    return n
+end
+
+H.group("power-parse")
+writeText("/tests/parse_legacy.ini", "1\n")
+local parsed = P.parse(readText("/tests/parse_legacy.ini"))
+H.eq(parsed.format, "legacy", "a bare number is the legacy format")
+H.eq(parsed.first_content, "1", "the legacy mode line is kept")
+H.eq(P.read({ path = "/tests/parse_legacy.ini" }), 1, "the legacy mode is read")
+
+writeText("/tests/parse_legacy_comments.ini", "# leading comment\n\n2\n")
+parsed = P.parse(readText("/tests/parse_legacy_comments.ini"))
+H.eq(parsed.format, "legacy", "comments before a bare number stay legacy")
+H.eq(P.read({ path = "/tests/parse_legacy_comments.ini" }), 2,
+    "comments and blank lines before the number are skipped")
+
+writeText("/tests/parse_legacy_multi.ini", "3\nnonsense\n")
+parsed = P.parse(readText("/tests/parse_legacy_multi.ini"))
+H.eq(parsed.format, "legacy", "extra lines keep the legacy format")
+H.eq(P.read({ path = "/tests/parse_legacy_multi.ini" }), 3,
+    "only the first content line is the legacy mode")
+
+local keyvalueText = "# config\n" ..
+    "\n" ..
+    "mode = 1\n" ..
+    "watchdog.low=3\n" ..
+    "watchdog.enabled = false\n" ..
+    "custom.thing=hello=world\n"
+writeText("/tests/parse_kv.ini", keyvalueText)
+parsed = P.parse(keyvalueText)
+H.eq(parsed.format, "keyvalue", "key=value files are detected")
+H.eq(parsed.raw["mode"], "1", "spaces around the key and value are trimmed")
+H.eq(parsed.raw["watchdog.low"], "3", "a plain value is kept")
+H.eq(parsed.raw["watchdog.enabled"], "false", "spaces around the value are trimmed")
+H.eq(parsed.raw["custom.thing"], "hello=world", "values may contain '='")
+H.eq(P.read({ path = "/tests/parse_kv.ini" }), 1, "the mode= key is read")
+
+writeText("/tests/parse_dup.ini", "mode=1\nmode=2\n")
+H.eq(P.read({ path = "/tests/parse_dup.ini" }), 2, "the last duplicate wins")
+
+writeText("/tests/parse_no_mode.ini", "watchdog.low=3\n")
+local noModeValue, noModeCode = P.read({ path = "/tests/parse_no_mode.ini" })
+H.eq(noModeValue, nil, "a key=value file without mode has no value")
+H.eq(noModeCode, "MODE_MISSING", "a key=value file without mode is flagged")
+H.eq(P.describe("MODE_MISSING"), "PowerGrid.ini has no mode= line",
+    "MODE_MISSING has a log line")
+H.eq(select(2, P.describe("MODE_MISSING")), "Missing mode setting.",
+    "MODE_MISSING has a blue-screen text")
+
+writeText("/tests/parse_mode_text.ini", "mode=abc\n")
+H.eq(select(2, P.read({ path = "/tests/parse_mode_text.ini" })),
+    "VALUE_TYPE_NOT_CORRECT", "a text mode keeps the archived type code")
+H.eq(select(3, P.read({ path = "/tests/parse_mode_text.ini" })), "abc",
+    "a text mode reports the raw value")
+writeText("/tests/parse_mode_empty.ini", "mode=\n")
+H.eq(select(2, P.read({ path = "/tests/parse_mode_empty.ini" })),
+    "VALUE_LENGTH_IS_ZERO", "an empty mode keeps the archived empty code")
+writeText("/tests/parse_mode_range.ini", "mode=5\n")
+H.eq(select(1, P.read({ path = "/tests/parse_mode_range.ini" })), 5,
+    "an out of range mode reports its value")
+H.eq(select(2, P.read({ path = "/tests/parse_mode_range.ini" })),
+    "INI_VALUE_OUT_RANGE", "an out of range mode keeps the archived code")
+
+writeText("/tests/parse_bad_line.ini", "mode=1\nstray line\n")
+parsed = P.parse(readText("/tests/parse_bad_line.ini"))
+H.eq(#parsed.bad_lines, 1, "a non key=value line is recorded")
+H.eq(parsed.bad_lines[1], "stray line", "the bad line text is kept")
+H.eq(P.read({ path = "/tests/parse_bad_line.ini" }), 1, "the mode still parses")
+
+writeText("/tests/parse_comments.ini", "# only comments\n\n")
+parsed = P.parse(readText("/tests/parse_comments.ini"))
+H.eq(parsed.format, "comments", "a comment-only file is its own format")
+H.eq(select(2, P.read({ path = "/tests/parse_comments.ini" })),
+    "VALUE_LENGTH_IS_ZERO", "a comment-only file has no mode")
+writeText("/tests/parse_empty.ini", "")
+H.eq(P.parse("").format, "empty", "an empty text is the empty format")
+H.eq(P.parse(nil).format, "missing", "nil text is the missing format")
+
+-- Ini writing ----------------------------------------------------------------
+
+H.group("power-write")
+local fidelityText = "# keep me\n" ..
+    "\n" ..
+    "watchdog.low=3\n" ..
+    "mode=1\n" ..
+    "custom.thing=hello\n" ..
+    "watchdog.restore=false\n"
+writeText("/tests/write_kv.ini", fidelityText)
+H.eq(P.apply(3, { path = "/tests/write_kv.ini", redstone = newRedstone(),
+    peripheral = newPeripheral(false) }), true, "apply succeeds on key=value")
+local expectedFidelity = "# keep me\n" ..
+    "\n" ..
+    "watchdog.low=3\n" ..
+    "mode=3\n" ..
+    "custom.thing=hello\n" ..
+    "watchdog.restore=false\n"
+H.eq(readText("/tests/write_kv.ini"), expectedFidelity,
+    "only the mode line changes, comments/unknown/order kept")
+H.eq(P.read({ path = "/tests/write_kv.ini" }), 3, "the new mode reads back")
+
+writeText("/tests/write_no_mode.ini", "# template\nwatchdog.low=4\n")
+P.apply(2, { path = "/tests/write_no_mode.ini", redstone = newRedstone(),
+    peripheral = newPeripheral(false) })
+H.eq(readText("/tests/write_no_mode.ini"), "# template\nwatchdog.low=4\nmode=2\n",
+    "a missing mode line is appended after the other lines")
+
+writeText("/tests/write_spaces.ini", "  mode = 1  \nwatchdog.low=2\n")
+P.apply(0, { path = "/tests/write_spaces.ini", redstone = newRedstone(),
+    peripheral = newPeripheral(false) })
+H.eq(readText("/tests/write_spaces.ini"), "mode=0\nwatchdog.low=2\n",
+    "a spaced mode line is normalised, other lines untouched")
+
+writeText("/tests/write_comments.ini", "# only comments\n")
+P.apply(2, { path = "/tests/write_comments.ini", redstone = newRedstone(),
+    peripheral = newPeripheral(false) })
+H.eq(readText("/tests/write_comments.ini"), "# only comments\nmode=2\n",
+    "a comment-only file keeps its comments and gains a mode line")
+
+writeText("/tests/write_crlf.ini", "mode=1\r\nwatchdog.low=3\r\n")
+P.apply(2, { path = "/tests/write_crlf.ini", redstone = newRedstone(),
+    peripheral = newPeripheral(false) })
+H.eq(readText("/tests/write_crlf.ini"), "mode=2\r\nwatchdog.low=3\r\n",
+    "CRLF line endings are preserved")
+
+writeText("/tests/write_legacy.ini", "1\n")
+P.apply(2, { path = "/tests/write_legacy.ini", redstone = newRedstone(),
+    peripheral = newPeripheral(false) })
+H.eq(readText("/tests/write_legacy.ini"), "2\n",
+    "a legacy file keeps the bare number format")
+
+writeText("/tests/write_empty.ini", "")
+P.apply(1, { path = "/tests/write_empty.ini", redstone = newRedstone(),
+    peripheral = newPeripheral(false) })
+H.eq(readText("/tests/write_empty.ini"), "1\n", "an empty file gets a bare number")
+
+P.apply(0, { path = "/tests/write_missing.ini", redstone = newRedstone(),
+    peripheral = newPeripheral(false) })
+H.eq(readText("/tests/write_missing.ini"), "0\n", "a missing file gets a bare number")
+
+fs.makeDir("/tests/write_dir")
+H.eq(P.apply(2, { path = "/tests/write_dir", redstone = newRedstone(),
+    peripheral = newPeripheral(false) }), nil, "a directory path cannot be written")
+H.eq(select(2, P.apply(2, { path = "/tests/write_dir", redstone = newRedstone(),
+    peripheral = newPeripheral(false) })), "WRITE_FAILED", "the write failure code")
+
+-- Ini watchdog section -------------------------------------------------------
+
+H.group("power-config")
+local configText = "# monitoring\n" ..
+    "mode=1\n" ..
+    "watchdog.enabled=true\n" ..
+    "watchdog.low=3\n" ..
+    "watchdog.high=12\n" ..
+    "watchdog.window=120\n" ..
+    "watchdog.poll=5\n" ..
+    "watchdog.input_side= top \n" ..
+    "watchdog.alarm_side=right\n" ..
+    "watchdog.switch_to=3\n" ..
+    "watchdog.restore=false\n" ..
+    "custom.thing=hello\n" ..
+    "stray line\n"
+writeText("/tests/config_full.ini", configText)
+local raw, info = P.config({ path = "/tests/config_full.ini" })
+H.eq(raw.enabled, "true", "config reads enabled")
+H.eq(raw.low, "3", "config reads low")
+H.eq(raw.high, "12", "config reads high")
+H.eq(raw.window, "120", "config reads window")
+H.eq(raw.poll, "5", "config reads poll")
+H.eq(raw.input_side, "top", "config trims the input side")
+H.eq(raw.alarm_side, "right", "config reads the alarm side")
+H.eq(raw.switch_to, "3", "config reads switch_to")
+H.eq(raw.restore, "false", "config reads restore")
+H.eq(info.format, "keyvalue", "config reports the format")
+H.num(info.mode, 1, "config reports the mode")
+H.eq(info.mode_error, nil, "a valid config has no mode error")
+H.eq(info.path, "/tests/config_full.ini", "config reports the path")
+H.eq(#info.unknown, 1, "one unknown key is reported")
+H.eq(info.unknown[1].key, "custom.thing", "the unknown key is named")
+H.eq(info.unknown[1].value, "hello", "the unknown value is kept")
+H.eq(#info.bad_lines, 1, "the malformed line is reported")
+
+local rawMissing, infoMissing = P.config({ path = "/tests/config_missing.ini" })
+H.eq(countKeysLua(rawMissing), 0, "a missing ini has no raw options")
+H.eq(infoMissing.format, "missing", "a missing ini is reported as missing")
+H.eq(infoMissing.mode_error, "FILE_NOT_FOUND", "a missing ini keeps the archived code")
+
+local rawLegacy, infoLegacy = P.config({ path = "/tests/parse_legacy.ini" })
+H.eq(countKeysLua(rawLegacy), 0, "a legacy ini has no watchdog options")
+H.eq(infoLegacy.format, "legacy", "a legacy ini is reported as legacy")
+H.num(infoLegacy.mode, 1, "a legacy ini still reports the mode")
+
+local rawBad, infoBad = P.config({ path = "/tests/parse_no_mode.ini" })
+H.eq(rawBad.low, "3", "config returns values even without a mode")
+H.eq(infoBad.mode_error, "MODE_MISSING", "a mode-less key=value file is flagged")
+
+writeText("/tests/config_invalid.ini", "mode=1\nwatchdog.low=abc\n")
+local rawInvalid = select(1, P.config({ path = "/tests/config_invalid.ini" }))
+H.eq(rawInvalid.low, "abc", "config hands raw strings to the validator")
+
+H.eq(countKeysLua(P.WATCHDOG_KEYS), 9, "the driver mapping has nine keys")
+H.eq(P.WATCHDOG_KEYS.low, "watchdog.low", "the low key name")
+H.eq(P.WATCHDOG_KEYS.restore, "watchdog.restore", "the restore key name")
+H.eq(P.MODE_KEY, "mode", "the mode key name")

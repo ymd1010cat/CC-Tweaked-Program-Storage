@@ -115,40 +115,84 @@ end
 
 -- Config loading -------------------------------------------------------------
 
-H.group("app-config")
-local fake = { store = {
-    ["powergrid.watchdog.enabled"] = "true",
-    ["powergrid.watchdog.low"] = "3",
-    ["powergrid.watchdog.high"] = "12",
-    ["powergrid.watchdog.window"] = "120",
-    ["powergrid.watchdog.poll"] = "10",
-    ["powergrid.watchdog.input_side"] = "bottom",
-    ["powergrid.watchdog.alarm_side"] = "right",
-} }
-function fake.get(key) return fake.store[key] end
+local function writeText(path, text)
+    local f = fs.open(path, "w")
+    f.write(text)
+    f.close()
+end
 
-local raw, used = A.readConfig(fake)
-H.eq(used, true, "readConfig reports a usable settings API")
-H.eq(raw.low, "3", "readConfig returns the raw value")
-H.eq(raw.alarm_side, "right", "readConfig reads the alarm side")
-H.eq(raw.enabled, "true", "readConfig reads enabled")
-local emptyRaw, emptyUsed = A.readConfig({})
-H.eq(emptyUsed, false, "an API without get is not used")
-H.eq(countKeys(emptyRaw), 0, "no raw options without an API")
+local function readText(path)
+    local f = fs.open(path, "r")
+    if not f then return nil end
+    local text = f.readAll()
+    f.close()
+    return text
+end
+
+-- power.lua bound to a test ini path, so the app's configuration source is
+-- exercised without ever touching the staged PowerGrid.ini fixture.
+local function powerAt(path, redstone, peripheralApi)
+    return {
+        WATCHDOG_KEYS = H.power.WATCHDOG_KEYS,
+        config = function() return H.power.config({ path = path }) end,
+        read = function() return H.power.read({ path = path }) end,
+        apply = function(value)
+            return H.power.apply(value, {
+                path = path,
+                redstone = redstone,
+                peripheral = peripheralApi,
+            })
+        end,
+    }
+end
+
+H.group("app-config")
+local configPath = "/tests/app_config.ini"
+writeText(configPath, "# app config fixture\n" ..
+    "mode=1\n" ..
+    "watchdog.low=3\n" ..
+    "watchdog.high=12\n" ..
+    "watchdog.window=120\n" ..
+    "watchdog.poll=10\n" ..
+    "watchdog.input_side=bottom\n" ..
+    "watchdog.alarm_side=right\n")
 
 local app = A.new({
-    settings = fake,
+    power = powerAt(configPath, newRedstone(15), newSpeaker()),
     redstone = newRedstone(15),
     logger = newLog(),
     clock = newClock(0).now,
     watchdog = H.watchdog,
 })
-H.num(app.state.cfg.low, 3, "settings feed the state machine")
-H.num(app.state.cfg.high, 12, "settings high applied")
-H.num(app.state.cfg.window, 120, "settings window applied")
-H.eq(app.state.cfg.alarm_side, "right", "settings alarm side applied")
-H.eq(app.state.cfg.enabled, true, "settings enabled applied")
-H.eq(app.state.problem_count, 0, "valid settings have no problems")
+H.num(app.state.cfg.low, 3, "the ini feeds the state machine")
+H.num(app.state.cfg.high, 12, "the ini high is applied")
+H.num(app.state.cfg.window, 120, "the ini window is applied")
+H.eq(app.state.cfg.alarm_side, "right", "the ini alarm side is applied")
+H.eq(app.state.cfg.input_side, "bottom", "the ini input side is applied")
+H.eq(app.state.cfg.enabled, true, "a missing enabled key defaults to true")
+H.eq(app.state.problem_count, 0, "a valid ini has no problems")
+H.isType(app.ini, "table", "the parse report is kept")
+H.eq(app.ini.format, "keyvalue", "the fixture really is key=value")
+H.eq(app.ini.mode, 1, "the report carries the mode")
+H.eq(app.ini.path, configPath, "the report carries the path")
+
+-- A missing ini keeps the monitor on every default, and says so.
+local missingLog = newLog()
+local appMissing = A.new({
+    path = "/tests/no_config_here.ini",
+    power = powerAt("/tests/no_config_here.ini", newRedstone(15), newSpeaker()),
+    redstone = newRedstone(15),
+    logger = missingLog,
+    clock = newClock(0).now,
+    watchdog = H.watchdog,
+})
+H.eq(appMissing.ini.format, "missing", "a missing ini is reported")
+H.eq(appMissing.ini.mode_error, "FILE_NOT_FOUND", "a missing ini keeps the archived code")
+H.num(appMissing.state.cfg.low, 2, "a missing ini uses the defaults")
+H.eq(appMissing.state.cfg.enabled, true, "a missing ini still enables the monitor")
+H.eq(A.start(appMissing), "running", "a missing ini still starts")
+H.eq(count(missingLog, "WATCHDOG_CONFIG_FAIL code=FILE_NOT_FOUND"), 1,
+    "the missing ini is logged")
 
 local appDirect = A.new({
     config = { low = 4, high = 9, window = 30, poll = 5 },
@@ -157,25 +201,42 @@ local appDirect = A.new({
     clock = newClock(0).now,
     watchdog = H.watchdog,
 })
-H.num(appDirect.state.cfg.low, 4, "explicit config overrides settings")
+H.num(appDirect.state.cfg.low, 4, "explicit config overrides the ini")
+H.eq(appDirect.ini, nil, "no parse report for an explicit config")
 H.eq(appDirect.status, "new", "a fresh app is not started")
 
+local badPath = "/tests/app_config_bad.ini"
+writeText(badPath, "mode=1\n" ..
+    "watchdog.low=99\n" ..
+    "watchdog.high=abc\n" ..
+    "watchdog.window=0\n" ..
+    "watchdog.bogus=7\n" ..
+    "stray line\n")
 local badLog = newLog()
 local appBad = A.new({
-    config = { low = 9, high = 5, window = 0, poll = -1 },
+    power = powerAt(badPath, newRedstone(15), newSpeaker()),
     redstone = newRedstone(15),
     logger = badLog,
     clock = newClock(0).now,
     watchdog = H.watchdog,
 })
-H.ok(appBad.state.problem_count >= 3, "invalid config collected", appBad.state.problem_count)
-H.eq(A.start(appBad), "running", "a bad config still starts with defaults")
-H.eq(count(badLog, "WATCHDOG_CONFIG_BAD"), appBad.state.problem_count,
-    "one config line per problem")
+H.ok(appBad.state.problem_count >= 3, "invalid ini values are collected",
+    appBad.state.problem_count)
+H.eq(A.start(appBad), "running", "a bad ini still starts with defaults")
+H.eq(count(badLog, "WATCHDOG_CONFIG_BAD key=watchdog.low value=99 fallback=2"), 1,
+    "the low fallback line is exact")
+H.contains(findLine(badLog, "WATCHDOG_CONFIG_BAD key=watchdog.high"),
+    "fallback=10", "the high fallback line names the default")
+H.eq(count(badLog, "WATCHDOG_CONFIG_BAD key=watchdog.bogus value=7 fallback=ignored"), 1,
+    "unknown keys are reported")
+H.eq(count(badLog, "WATCHDOG_CONFIG_BAD line=stray line fallback=ignored"), 1,
+    "malformed lines are reported")
+H.eq(count(badLog, "WATCHDOG_CONFIG path=" .. badPath ..
+    " format=keyvalue mode=1"), 1, "the parse summary is logged")
 H.num(appBad.state.cfg.low, 2, "invalid low fell back to the default")
 H.num(appBad.state.cfg.high, 10, "invalid high fell back to the default")
 H.num(appBad.state.cfg.window, 300, "invalid window fell back to the default")
-H.num(appBad.state.cfg.poll, 10, "invalid poll fell back to the default")
+H.eq(readText("/PowerGrid.ini"), "1\n", "the staged fixture is still untouched")
 
 -- Alarm relay ----------------------------------------------------------------
 
@@ -372,7 +433,12 @@ H.contains(appSrc, "WATCHDOG_RESTORE_SKIP", "driver has the restore skip keyword
 H.contains(appSrc, "switchPower", "driver exposes switchPower")
 H.contains(appSrc, "restorePower", "driver exposes restorePower")
 H.contains(appSrc, "WATCHDOG_STATUS", "driver has the status keyword")
+H.contains(appSrc, "WATCHDOG_CONFIG", "driver has the config summary keyword")
 H.contains(appSrc, "POWERGRID_WATCHDOG_TEST", "driver has the test guard")
+H.contains(appSrc, "iniConfig", "driver reads its config through power.lua")
+H.lacks(appSrc, "settings", "driver reads no CraftOS settings")
+H.lacks(appSrc, "powergrid.watchdog.", "driver uses the ini key names, not the old ones")
+H.lacks(appSrc, "io.open", "driver never opens a file itself")
 H.lacks(appSrc, "applyPower", "driver never calls applyPower")
 H.lacks(appSrc, "PowerGrid.ini", "driver never opens the controller config")
 H.lacks(appSrc, "setAnalogOutput", "driver never writes an analog power level")
@@ -388,11 +454,15 @@ H.lacks(wdSrc, "print(", "the pure module prints nothing")
 -- Autostart guard ------------------------------------------------------------
 
 H.group("app-autostart-guard")
-H.eq(A.KEYS.low, "powergrid.watchdog.low", "settings key for low")
-H.eq(A.KEYS.alarm_side, "powergrid.watchdog.alarm_side", "settings key for alarm side")
-H.eq(A.KEYS.switch_to, "powergrid.watchdog.switch_to", "settings key for switch_to")
-H.eq(A.KEYS.restore, "powergrid.watchdog.restore", "settings key for restore")
-H.eq(countKeys(A.KEYS), 9, "nine settings keys")
+local iniKeys = H.power.WATCHDOG_KEYS
+H.eq(iniKeys.low, "watchdog.low", "ini key for low")
+H.eq(iniKeys.alarm_side, "watchdog.alarm_side", "ini key for alarm side")
+H.eq(iniKeys.switch_to, "watchdog.switch_to", "ini key for switch_to")
+H.eq(iniKeys.restore, "watchdog.restore", "ini key for restore")
+H.eq(countKeys(iniKeys), 9, "nine ini keys")
+H.eq(A.iniKeys(H.power), iniKeys, "the driver reuses the power.lua mapping")
+H.eq(countKeys(A.iniKeys(nil)), 0, "no mapping without a power module")
+H.eq(A.KEYS, nil, "the old CraftOS settings key table is gone")
 local savedArg = _G.arg
 local savedShell = _G.shell
 local savedFlag = _G.POWERGRID_WATCHDOG_TEST
@@ -458,6 +528,8 @@ end
 -- staged PowerGrid.ini fixture is never touched.
 local function rigPower(redstone, peripheralApi)
     return {
+        WATCHDOG_KEYS = P.WATCHDOG_KEYS,
+        config = function() return P.config({ path = modePath }) end,
         read = function() return P.read({ path = modePath }) end,
         apply = function(value)
             return P.apply(value, {
@@ -668,3 +740,95 @@ H.eq(A.tick(appG, 10), "alarm", "the alarm fires when the write fails")
 H.eq(count(logG, "WATCHDOG_SWITCH_FAIL reason=write_failed code=WRITE_FAILED"), 1,
     "a failed write is logged")
 H.eq(appG.switched, false, "a failed write records no switch")
+
+-- Configuration comes from the ini only --------------------------------------
+
+H.group("app-ini-config")
+local iniPath = "/tests/app_ini_config.ini"
+local iniText = "# monitoring box\n" ..
+    "mode=1\n" ..
+    "watchdog.enabled=true\n" ..
+    "watchdog.low=3\n" ..
+    "watchdog.high=9\n" ..
+    "watchdog.window=20\n" ..
+    "watchdog.poll=5\n" ..
+    "watchdog.input_side=back\n" ..
+    "watchdog.alarm_side=left\n" ..
+    "watchdog.switch_to=3\n" ..
+    "watchdog.restore=false\n"
+writeText(iniPath, iniText)
+
+local iniRelay = newRedstone(1)
+local iniPowerRs = newPowerRedstone()
+local iniLog = newLog()
+local iniLevel = 1
+
+-- The CraftOS settings store deliberately says "disabled"; the monitor must
+-- ignore it completely and follow the ini.
+local savedSettings = _G.settings
+_G.settings = {
+    get = function() return "false" end,
+    set = function() return true end,
+    save = function() return true end,
+}
+local appIni = A.new({
+    power = powerAt(iniPath, iniPowerRs, newSpeaker()),
+    redstone = iniRelay,
+    logger = iniLog,
+    clock = newClock(0).now,
+    read = function() return iniLevel end,
+    watchdog = H.watchdog,
+})
+_G.settings = savedSettings
+
+H.eq(appIni.state.cfg.enabled, true, "the ini wins over a disabled settings store")
+H.num(appIni.state.cfg.low, 3, "ini low is used")
+H.num(appIni.state.cfg.high, 9, "ini high is used")
+H.num(appIni.state.cfg.window, 20, "ini window is used")
+H.num(appIni.state.cfg.poll, 5, "ini poll is used")
+H.num(appIni.state.cfg.switch_to, 3, "ini switch_to is used")
+H.eq(appIni.state.cfg.restore, false, "ini restore is used")
+H.eq(appIni.ini.format, "keyvalue", "the report says key=value")
+
+H.eq(A.start(appIni), "running", "the ini-configured monitor starts")
+H.eq(count(iniLog, "WATCHDOG_CONFIG path=" .. iniPath ..
+    " format=keyvalue mode=1"), 1, "the ini summary is logged")
+H.eq(iniRelay.calls[1].side, "left", "the ini alarm side is used")
+H.eq(A.tick(appIni, 0), "none", "no alarm before the ini window")
+H.eq(A.tick(appIni, 10), "none", "still waiting")
+H.eq(A.tick(appIni, 20), "alarm", "the ini window fires the alarm")
+H.eq(count(iniLog, "WATCHDOG_SWITCH from=1 to=3 reason=low level=1"), 1,
+    "the ini switch target is used")
+local expectedModeLine = "mode=3\n"
+local afterSwitch = readText(iniPath) or ""
+H.eq(afterSwitch, (iniText:gsub("mode=1\n", expectedModeLine, 1)),
+    "the switch rewrote only the mode line")
+H.num(appIni.switches, 1, "one switch from the ini configuration")
+iniLevel = 12
+H.eq(A.tick(appIni, 40), "clear", "recovery still works")
+H.eq(count(iniLog, "WATCHDOG_RESTORE_SKIP reason=restore_disabled"), 1,
+    "ini restore=false keeps the backup")
+H.eq(readText(iniPath), afterSwitch, "restore=false left the mode line alone")
+
+H.group("app-legacy-ini")
+local legacyPath = "/tests/app_legacy.ini"
+writeText(legacyPath, "1\n")
+local legacyLog = newLog()
+local legacyPowerRs = newPowerRedstone()
+local legacyApp = A.new({
+    power = powerAt(legacyPath, legacyPowerRs, newSpeaker()),
+    redstone = newRedstone(1),
+    logger = legacyLog,
+    clock = newClock(0).now,
+    read = function() return 0 end,
+    watchdog = H.watchdog,
+})
+H.eq(legacyApp.ini.format, "legacy", "a bare number is the legacy format")
+H.num(legacyApp.ini.mode, 1, "the legacy mode is parsed")
+H.num(legacyApp.state.cfg.low, 2, "legacy files get the default low")
+H.num(legacyApp.state.cfg.switch_to, 2, "legacy files get the default switch target")
+H.eq(legacyApp.state.problem_count, 0, "legacy files have no problems")
+H.eq(A.start(legacyApp), "running", "the legacy monitor starts")
+H.eq(A.tick(legacyApp, 0), "none", "legacy: no alarm yet")
+H.eq(A.tick(legacyApp, 300), "alarm", "legacy: the default window fires the alarm")
+H.eq(readText(legacyPath), "2\n", "legacy apply keeps the bare number format")

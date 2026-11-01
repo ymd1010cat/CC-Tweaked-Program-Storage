@@ -47,11 +47,11 @@ if type(app) == "table" then
     H.isType(app.tick, "function", "app.tick exported")
     H.isType(app.run, "function", "app.run exported")
     H.isType(app.applyAlarm, "function", "app.applyAlarm exported")
-    H.isType(app.readConfig, "function", "app.readConfig exported")
+    H.isType(app.iniKeys, "function", "app.iniKeys exported")
     H.isType(app.statusLine, "function", "app.statusLine exported")
     H.isType(app.report, "function", "app.report exported")
-    H.isType(app.KEYS, "table", "app.KEYS exported")
-    H.eq(app.VERSION, "1.0", "watchdog_app version")
+    H.eq(app.KEYS, nil, "no CraftOS settings key table on the driver")
+    H.eq(app.VERSION, "1.1", "watchdog_app version")
     H.ne(app.isMainProgram(), true, "no autostart inside the suite")
 end
 
@@ -69,7 +69,11 @@ if type(power) == "table" then
     H.isType(power.read, "function", "power.read exported")
     H.isType(power.validate, "function", "power.validate exported")
     H.isType(power.describe, "function", "power.describe exported")
-    H.eq(power.VERSION, "1.0", "power version")
+    H.isType(power.config, "function", "power.config exported")
+    H.isType(power.parse, "function", "power.parse exported")
+    H.isType(power.setModeInText, "function", "power.setModeInText exported")
+    H.isType(power.WATCHDOG_KEYS, "table", "power.WATCHDOG_KEYS exported")
+    H.eq(power.VERSION, "1.1", "power version")
 end
 H.power = power
 

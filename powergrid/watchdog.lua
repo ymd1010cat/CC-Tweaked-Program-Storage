@@ -94,18 +94,23 @@ local function flag(value)
 end
 M.flag = flag
 
--- Turn a raw option table (settings strings, whatever) into a trustworthy
--- config. Every rejected value is recorded in the second return value as
--- "key=value (reason)" so the driver can log one WATCHDOG_CONFIG_BAD line per
--- problem; the field itself falls back to its default, so a typo can never
--- leave the monitor half-configured.
+-- Turn a raw option table (the ini values as strings, or programmatic numbers)
+-- into a trustworthy config. Every rejected value is recorded as a structured
+-- problem so the driver can log one WATCHDOG_CONFIG_BAD line per problem
+--   { field = "low", raw = "abc", fallback = 2, reason = "expected integer 0-15" }
+-- and the field itself falls back to its default, so a typo can never leave the
+-- monitor half-configured.
 function M.sanitize(opts)
     if type(opts) ~= "table" then opts = {} end
     local cfg = {}
     local problems = {}
     local function bad(key, value, why)
-        problems[#problems + 1] = tostring(key) .. "=" .. tostring(value) ..
-            " (" .. why .. ")"
+        problems[#problems + 1] = {
+            field = key,
+            raw = value,
+            fallback = M.DEFAULTS[key],
+            reason = why,
+        }
     end
 
     if opts.enabled == nil then
@@ -133,8 +138,12 @@ function M.sanitize(opts)
     cfg.low = level("low")
     cfg.high = level("high")
     if cfg.high <= cfg.low then
-        problems[#problems + 1] = "high=" .. tostring(opts.high) ..
-            " (must be above low=" .. tostring(opts.low) .. "; reset both)"
+        problems[#problems + 1] = {
+            field = "high",
+            raw = opts.high,
+            fallback = M.DEFAULTS.high,
+            reason = "must be above low (both reset)",
+        }
         cfg.low = M.DEFAULTS.low
         cfg.high = M.DEFAULTS.high
     end

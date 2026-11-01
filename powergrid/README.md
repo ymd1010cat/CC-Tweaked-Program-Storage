@@ -13,16 +13,77 @@
 | 文件 | 说明 |
 |---|---|
 | `startup.lua` | 主程序。开机读取配置、恢复供电模式、进入命令循环（菜单 1–4 切换、5 打印日志、`version` 显示版本）。电源写入与配置校验都委托给 `power.lua`，输出与错误码保持原样。 |
-| `power.lua` | 电源模式原语（从旧 `startup.lua` 的 `applyPower`/校验逻辑抽出，行为逐字不变）：`M.read()` 读 `PowerGrid.ini` 并校验（返回旧错误码），`M.describe()` 给出旧日志行与蓝屏文案，`M.apply(value)` 写 ini + 驱动 `back` 模拟输出 + 播放 speaker 提示音。启动菜单与 watchdog 共用它。 |
+| `power.lua` | 配置与电源原语：解析/写回 `PowerGrid.ini`（key=value 新格式 + 旧的裸数字格式），`M.read()` 返回模式与旧错误码，`M.describe()` 给出旧日志行与蓝屏文案，`M.config()` 读出 watchdog 段，`M.apply(value)` 改 ini 里 `mode=` 那一行 + 驱动 `back` 模拟输出 + 播放 speaker 提示音。启动菜单与 watchdog 共用它。 |
 | `logger.lua` | 极简日志库：`logger.info/warn/error/debug`，每条按 `[tag] %Y.%m.%d %H:%M message` 追加到 `Main.log`。 |
 | `bsod.lua` | 蓝屏模块：用 `window` API 铺满全屏、居中显示 `:(` / 错误码 / 失败文件，然后把父终端光标移出屏幕并 `error()` 退出。 |
-| `watchdog.lua` | watchdog 的**纯逻辑状态机**（阈值、回差、持续窗口、一次性报警、切换目标/恢复开关）。不读文件、不读时钟、不碰红石，时间与读数全部由调用方注入，所以能离线测。 |
-| `watchdog_app.lua` | watchdog 的**运行驱动**：按 `poll` 秒读一次 `redstone.getAnalogInput`、驱动状态机、写日志；报警那次采样点亮告警继电器并通过 `power.lua` 切到备用，恢复那次采样切回报警前的模式。可当作独立程序运行，也可作为模块被测试注入假的时钟/红石/日志/电源模块。 |
+| `watchdog.lua` | watchdog 的**纯逻辑状态机**（阈值、回差、持续窗口、一次性报警、切换目标/恢复开关）。不读文件、不读时钟、不碰红石，时间、读数与配置全部由调用方注入，所以能离线测。 |
+| `watchdog_app.lua` | watchdog 的**运行驱动**：从 `PowerGrid.ini` 读参数，按 `poll` 秒读一次 `redstone.getAnalogInput`、驱动状态机、写日志；报警那次采样点亮告警继电器并通过 `power.lua` 切到备用，恢复那次采样切回报警前的模式。可当作独立程序运行，也可作为模块被测试注入假的时钟/红石/日志/电源模块。 |
 | `tests/` | 离线测试套件：`run-tests.ps1`（CraftOS-PC headless 驱动）+ `startup.lua`（测试入口）+ `harness.lua`（断言与 `logs/suite.log`）+ `t_watchdog.lua` / `t_watchdog_app.lua` / `t_power.lua`（断言）。 |
-| `PowerGrid.ini` | 配置兼状态文件，只有一行数字 `0`–`3`，每次切换都会重写。**watchdog 的参数不放在这里**（见下）。 |
+| `PowerGrid.ini` | **唯一的配置文件**：逐行 `key=value`（`mode` + `watchdog.*`），也兼容旧的单行裸数字格式；模式切换时会重写 `mode=` 那一行。详见下面「配置文件」一节。 |
 | `.settings` | 该计算机的 CraftOS-PC 设置（目前只关了 `motd.enable`）；仅随归档副本保留，由本目录 `.gitignore` 排除，不入库。 |
 | `Main.log` | 运行日志（部署期间的真实记录，仓库根 `.gitignore` 忽略 `*.log`，故不入库）。 |
 | `.gitignore` | 目录级忽略规则：排除 `/.settings` 这个本机运行时副本，以及测试 staging 目录 `/.tests`。 |
+
+## 配置文件 `PowerGrid.ini`
+
+**所有配置都在 `PowerGrid.ini` 里**（不使用 CraftOS 的 `settings`）。文件是逐行 `key=value`，
+空行与以 `#` 开头的行是注释；重复键以最后一行为准，未知键写回时**原样保留**但运行时不使用。
+
+| 键 | 默认 | 取值 | 说明 |
+|---|---|---|---|
+| `mode` | 必填 | `0`–`3` | 当前供电模式，控制器与 watchdog 都读写这一行 |
+| `watchdog.enabled` | `true` | `true/false/1/0/yes/no/on/off` | 关掉后 watchdog 不采样、不告警、不切电源 |
+| `watchdog.low` | `2` | 整数 0–15 | 低于它算"低" |
+| `watchdog.high` | `10` | 整数 0–15，且必须大于 `low` | 达到它算健康/恢复 |
+| `watchdog.window` | `300` | 秒，`> 0` 且 `<= 604800` | 持续低多久才告警并切备用 |
+| `watchdog.poll` | `10` | 秒，`>= 0.1` 且 `<= 86400` | 采样间隔 |
+| `watchdog.input_side` | `bottom` | `top/bottom/left/right/front/back` | 读 `getAnalogInput` 的面 |
+| `watchdog.alarm_side` | `left` | 同上 | 告警继电器输出面 |
+| `watchdog.switch_to` | `2` | 整数 0–3 | 报警时切到哪个模式（2=备用电池，0=关闭，3=外部电网） |
+| `watchdog.restore` | `true` | `true/false/1/0/yes/no/on/off` | 恢复时是否切回报警前的模式；`false` 则保持 `switch_to` |
+
+示例（watchdog 键全部缺省也可以，缺省即用上表默认值）：
+
+```
+# Power Grid Controller
+mode=1
+
+# watchdog
+watchdog.enabled=true
+watchdog.low=2
+watchdog.high=10
+watchdog.window=300
+watchdog.poll=10
+watchdog.input_side=bottom
+watchdog.alarm_side=left
+watchdog.switch_to=2
+watchdog.restore=true
+```
+
+### 旧格式兼容
+
+老控制器写的文件**只有一行裸数字**（例如 `1`）。这种文件继续可用：读作 `mode=<数字>`、
+watchdog 全用默认值；而且 `power.lua` 对它**仍然只写裸数字**——不会擅自把老文件升级成
+`key=value`。一旦文件里出现任何 `key=value` 行就按新格式处理：`M.apply()` **只改 `mode=` 那一行**，
+其它行（注释、未知键、watchdog 键、空行）与行序全部原样保留；新格式文件里没有 `mode=` 行时，
+在末尾追加一行 `mode=<值>`（只有注释的文件同样保留注释、追加 `mode=`）。
+
+### 校验与诊断
+
+读取并校验时，文件缺失 / 为空 / `mode` 不是数字 / `mode` 超出 `0–3` 分别返回
+`FILE_NOT_FOUND` / `VALUE_LENGTH_IS_ZERO` / `VALUE_TYPE_NOT_CORRECT` / `INI_VALUE_OUT_RANGE`
+（`startup.lua` 原样交给蓝屏，日志文案与之前逐字一致）。新格式文件里完全没有 `mode=` 行时
+返回 `MODE_MISSING`（蓝屏提示 `Missing mode setting.`）。
+
+watchdog 段是"非法值回落默认 + 一条可 grep 的诊断"，不会带着半套配置运行：
+
+| 关键字 | 级别 | 含义 |
+|---|---|---|
+| `WATCHDOG_CONFIG` | info | 启动时的解析摘要：`path=.. format=.. mode=..`（format = `keyvalue` / `legacy` / `comments` / `empty` / `missing`） |
+| `WATCHDOG_CONFIG_BAD` | warn | 非法值：`key=watchdog.low value=abc fallback=2 reason=..` |
+| `WATCHDOG_CONFIG_BAD` | warn | 杂行：`line=<原文> fallback=ignored` |
+| `WATCHDOG_CONFIG_BAD` | warn | 未知键：`key=<键> value=<原文> fallback=ignored`（写回时保留） |
+| `WATCHDOG_CONFIG_FAIL` | warn | 整个 ini 读不到：`code=FILE_NOT_FOUND fallback=defaults` |
 
 ## 供电模式与硬件
 
@@ -35,7 +96,7 @@
 
 启动时（以及每次在菜单里切换时）调用 `power.lua` 的 `M.apply(value)`：
 
-- 以 `tostring(value) .. "\n"` 的形式写回 `PowerGrid.ini`；
+- 写回 `PowerGrid.ini`：新格式文件只改 `mode=` 那一行，旧格式（裸数字）仍写裸数字；
 - `redstone.setOutput("back", true)` 且 `setAnalogOutput("back", value)`（关闭时两者都置 0/false），
   即**红石输出固定在背面**，用模拟信号强度 1–3 区分三条供电路径；
 - 若找到 `speaker` 外设，播放 `create:confirm` 提示音。
@@ -43,22 +104,16 @@
 命令 5 需要 `printer` 外设：先查纸、再查墨，然后读 `Main.log`，按 40 字符宽自动折行、
 每页最多 60 行分页打印（`newPage` / `endPage` + 手动 `setCursorPos` 换行）。
 
-## 配置校验（启动时）
-
-`PowerGrid.ini` 缺失、为空、非数字或超出 `0–3` 范围时，会先写日志再进入蓝屏，错误码分别为
-`FILE_NOT_FOUND` / `VALUE_LENGTH_IS_ZERO` / `VALUE_TYPE_NOT_CORRECT` / `INI_VALUE_OUT_RANGE`
-（`power.lua` 返回码，`startup.lua` 原样传给蓝屏，日志文案与之前逐字一致）。
-
 ## Watchdog（触发切备用、恢复切回；不是持续 ATS）
 
 **它做什么：** 电网读数持续偏低满 `window` 秒 → 点亮告警继电器，并**切到备用电源
-（`powergrid.watchdog.switch_to`，默认 `2` 备用电池）**；读数回到 `high` → 熄灭告警，
-并按 `powergrid.watchdog.restore`（默认 `true`）**切报警前的那个模式**。
+（`watchdog.switch_to`，默认 `2` 备用电池）**；读数回到 `high` → 熄灭告警，
+并按 `watchdog.restore`（默认 `true`）**切报警前的那个模式**。
 
 **它不做什么：** 不是持续 ATS 控制器——只在**报警/恢复这两个状态迁移点各动作一次**，
 不会每轮轮询去校正模式。所以报警期间你手动按 1/3 改模式，它不会跟你抢着改回去；
 但恢复那一刻默认仍会切回"报警前的模式"（这是 `restore=true` 的定义），
-不想要这个行为就 `set powergrid.watchdog.restore false`，恢复时保持备用。
+不想要这个行为就在 ini 里写 `watchdog.restore=false`，恢复时保持备用。
 
 ### 状态机
 
@@ -92,26 +147,11 @@
 读不到当前模式 → `reason=read_fail code=<错误码>`；写盘失败 → `reason=write_failed code=WRITE_FAILED`
 （此时不会记"已切换"，恢复时也就不会乱切）。
 
-### 参数（CraftOS `settings`，每台电脑单独保存）
+### 参数
 
-`PowerGrid.ini` 的语义保持"单值 0–3"不变，所以 watchdog 的参数放到 CraftOS 的 `settings`，
-用 shell 的 `set` 命令改（`set` 程序会调用 `settings.save()`，所以重启后仍然有效；
-如果自己写 `settings.set`，要记得再 `settings.save()`）；非法值一律回落到默认值并写一条
-`WATCHDOG_CONFIG_BAD`（不会带着半套配置运行）。
-
-| settings 键 | 默认 | 合法值 | 说明 |
-|---|---|---|---|
-| `powergrid.watchdog.enabled` | `true` | `true/false/1/0/yes/no/on/off` | 关闭后完全不采样、不告警、不切换，只写一条 `WATCHDOG_DISABLED` |
-| `powergrid.watchdog.low` | `2` | 整数 0–15 | 低于它算"低" |
-| `powergrid.watchdog.high` | `10` | 整数 0–15，且必须大于 `low` | 达到它算健康/恢复 |
-| `powergrid.watchdog.window` | `300` | 秒，`> 0` 且 `<= 604800` | 持续低多久才告警并切备用 |
-| `powergrid.watchdog.poll` | `10` | 秒，`>= 0.1` 且 `<= 86400` | 采样间隔 |
-| `powergrid.watchdog.input_side` | `bottom` | `top/bottom/left/right/front/back` | 读 `getAnalogInput` 的面 |
-| `powergrid.watchdog.alarm_side` | `left` | 同上 | 告警继电器输出面 |
-| `powergrid.watchdog.switch_to` | `2` | 整数 0–3 | 报警时切到哪个模式（2=备用电池；0=关闭；3=外部电网） |
-| `powergrid.watchdog.restore` | `true` | `true/false/1/0/yes/no/on/off` | 恢复时是否切回报警前的模式；`false` 则保持 `switch_to` |
-
-`low >= high` 属于非法组合：两个值都会回落到默认（2/10），并记一条 `WATCHDOG_CONFIG_BAD`。
+watchdog 的全部参数都在 `PowerGrid.ini` 的 `watchdog.*` 键里（键表与默认值见上面「配置文件」一节）。
+watchdog 只在启动时读一次 ini，改完要重启 `watchdog_app` 才生效。`low >= high` 属于非法组合：
+两个值都会回落到默认（2/10），并各记一条 `WATCHDOG_CONFIG_BAD`。
 
 ### 日志关键字
 
@@ -128,7 +168,9 @@
 | `WATCHDOG_RESTORE_SKIP` | info | 不切回：`reason=restore_disabled` / `reason=no_switch` |
 | `WATCHDOG_RESTORE_FAIL` | warn | 恢复时读/写失败（保留记录，可在下一轮再试） |
 | `WATCHDOG_DISABLED` | warn | `enabled=false`，不采样不驱动不动电源 |
-| `WATCHDOG_CONFIG_BAD` | warn | 一条非法的 settings 值（该值回落默认） |
+| `WATCHDOG_CONFIG_BAD` | warn | 一条非法的 ini 值 / 杂行 / 未知键（见上面「配置文件」一节） |
+| `WATCHDOG_CONFIG` | info | 启动时的 ini 解析摘要（path/format/mode） |
+| `WATCHDOG_CONFIG_FAIL` | warn | 整个 ini 读不到，加载默认值 |
 | `WATCHDOG_READ_FAIL` | warn | 读不到传感器（第一次，之后每 60 次一条） |
 | `WATCHDOG_RELAY_FAIL` | warn | 告警面写不出去（无 redstone API 等） |
 | `WATCHDOG_STATUS` | info | 按需输出的单行状态（`M.report`） |
@@ -153,7 +195,7 @@
 ### 运行、部署与真机自测
 
 监看电脑根目录放 `power.lua`、`watchdog.lua`、`watchdog_app.lua`、`logger.lua`
-与内容为 `1`（或当前模式）的 `PowerGrid.ini`，然后：
+与 `PowerGrid.ini`（`mode=` 加上需要的 `watchdog.*` 键；只写一行裸数字也行，watchdog 全用默认值），然后：
 
 ```
 watchdog_app
@@ -163,19 +205,20 @@ watchdog_app
 （注意那时这台电脑就没有控制器菜单了）。`watchdog_app.lua` 只有在"它自己就是正在运行的程序"
 时才自动进入循环，被别的程序 `dofile`/`require` 时只返回模块表。
 
-真机自测顺序（把节奏调快）：
+真机自测顺序（把节奏调快，改 ini 后重启 `watchdog_app`）：
 
-1. `set powergrid.watchdog.window 10`，`set powergrid.watchdog.poll 1`；
-2. `watchdog_app`，确认日志出现 `WATCHDOG_START ... switch_to=2 restore=1`；
+1. ini 里设 `watchdog.window=10`、`watchdog.poll=1`；
+2. `watchdog_app`，确认日志出现 `WATCHDOG_CONFIG path=PowerGrid.ini format=keyvalue mode=1`
+   与 `WATCHDOG_START ... switch_to=2 restore=1`；
 3. 把输入面的模拟信号**拉到 0**（断开比较器输入），约 10 秒后应看到
    `WATCHDOG_ALARM ...` + `WATCHDOG_SWITCH from=1 to=2 reason=low level=0`，
-   `PowerGrid.ini` 变成 `2`、背面模拟输出变 2、告警面亮；
+   ini 里 `mode=` 变成 `2`、背面模拟输出变 2、告警面亮；
 4. 把输入**拉回 10 以上**，应看到 `WATCHDOG_CLEAR ...` + `WATCHDOG_RESTORE to=1`，
-   ini 回到 `1`、背面输出 1、告警灭；
-5. `set powergrid.watchdog.restore false` 再跑 3/4：切到 2 后恢复时保持 2
+   `mode=` 回到 `1`、背面输出 1、告警灭；
+5. 把 `watchdog.restore=true` 改成 `false` 再跑 3/4：切到 2 后恢复时保持 2
    （日志 `WATCHDOG_RESTORE_SKIP reason=restore_disabled`）；
-6. 想把"备用"改成别的目标就 `set powergrid.watchdog.switch_to 3`；
-   `set powergrid.watchdog.enabled false` 则完全不告警、不动电源。
+6. 想把"备用"改成别的目标就设 `watchdog.switch_to=3`；
+   `watchdog.enabled=false` 则完全不告警、不动电源。
 
 ### 测试
 
@@ -186,24 +229,28 @@ pwsh -NoProfile -File powergrid/tests/run-tests.ps1
 - staging 目录 `powergrid/.tests`，PASS 后自动删除；`-KeepStaging` 保留（可读 `logs/suite.log`），
   `-DataDir` 可换位置，`-TimeoutSec` 可调超时。
 - `t_watchdog.lua`：纯状态机（注入虚拟时钟）——窗口、回差、一次性报警、恢复条件、配置校验、
-  `status()` 文本、`switch_to`/`restore` 参数。
+  `status()` 文本、`switch_to`/`restore` 参数（非法值以结构化问题记录回落默认）。
 - `t_watchdog_app.lua`：用假红石/假 logger/假时钟 + **真实的 `power.lua`**（写测试专用 ini）断言：
-  报警那次只切一次（ini 变 `2\n`、`back` 得到 `setOutput(true)`+`setAnalogOutput(2)`、speaker 响一声）、
-  恢复切回 `1\n`、`restore=false` 保持 2、已在目标模式 noop、手动改模式不被每轮校正、
-  `enabled=false` 全程不动电源/继电器、缺模块/读失败/写失败的日志与"不记已切换"。
-- `t_power.lua`：`power.lua` 与旧 `startup.lua` 内联实现的**逐项等价回归**——同一组输入比较
-  ini 字节、红石调用序列、speaker 调用序列；错误码/日志文案按旧字符串钉住；并断言
-  `startup.lua` 已改为委托 `power.lua`（5 处 `power_api.apply(power)`）、printer/版本/菜单文本未变。
+  参数全部来自 ini（并注入一个"会说 enabled=false"的 settings 假实现，证明运行时完全忽略它）、
+  非法值/杂行/未知键的 `WATCHDOG_CONFIG_BAD` 行、报警那次只切一次（ini 变 `2\n`、`back` 得到
+  `setOutput(true)`+`setAnalogOutput(2)`、speaker 响一声）、恢复切回 `1\n`、`restore=false` 保持 2、
+  已在目标模式 noop、手动改模式不被每轮校正、`enabled=false` 全程不动电源/继电器、
+  缺模块/读失败/写失败的日志与"不记已切换"。
+- `t_power.lua`：ini 解析矩阵（裸数字旧格式、key=value、注释/空行、未知键、缺 `mode`、非法值、
+  越界码）、写回保真（只改 `mode=` 行、旧格式仍写裸数字、注释/未知键/行序/CRLF 不丢）、
+  `M.config()` 的 watchdog 段与 `M.WATCHDOG_KEYS` 映射，外加与旧 `startup.lua` 内联实现的
+  **逐项等价回归**（同一组输入比较 ini 字节、红石调用序列、speaker 调用序列；错误码/日志文案钉死）。
 - 跑完还检查 staged 的 `PowerGrid.ini` 字节不变、没有生成 `.settings`。
-- 当前基线：`OFFLINE_PASS 584` / `OFFLINE_FAIL 0` / `OFFLINE_GROUPS 27`。
+- 当前基线：`OFFLINE_PASS 713` / `OFFLINE_FAIL 0` / `OFFLINE_GROUPS 32`。
 
 ## 部署
 
-**控制器**：把 `startup.lua`、`power.lua`、`logger.lua`、`bsod.lua` 与 `PowerGrid.ini`（内容为 `0`–`3`）
-放到计算机根目录，重启即自动运行。`Main.log` 会在首次运行后自动生成，无需预置。
+**控制器**：把 `startup.lua`、`power.lua`、`logger.lua`、`bsod.lua` 与 `PowerGrid.ini`
+（`mode=<0–3>`，可以带 `watchdog.*` 键；也可以仍是旧的裸数字单行）放到计算机根目录，
+重启即自动运行。`Main.log` 会在首次运行后自动生成，无需预置。
 
 **监看电脑**（可选）：放 `power.lua`、`watchdog.lua`、`watchdog_app.lua`、`logger.lua`
-与 `PowerGrid.ini`，按上面「Watchdog」一节运行。
+与 `PowerGrid.ini`（`mode=` + 需要的 `watchdog.*`），按上面「Watchdog」一节运行。
 
 ## 归档说明
 
