@@ -1,10 +1,93 @@
 --startup.lua
 shell.run("clear")
 
--- Load required modules
-local bsod = require("bsod")
-local logger = require("logger")
-local power_api = require("power")
+-- Load the project libraries through a diagnostic loader: a missing file must
+-- end in a readable blue screen (or, when bsod itself is missing, in a readable
+-- terminal error) that names every missing library, never in a bare
+-- "module 'x' not found" from require.
+local function loadLibrary(name)
+    if type(require) ~= "function" then
+        return nil, "require() is unavailable"
+    end
+    local ok, mod = pcall(require, name)
+    if ok and type(mod) == "table" then return mod end
+    return nil, tostring(mod)
+end
+
+local bsod = loadLibrary("bsod")
+local logger = loadLibrary("logger")
+local power_api = loadLibrary("power")
+
+local missingLibraries = {}
+if bsod == nil then missingLibraries[#missingLibraries + 1] = "bsod" end
+if logger == nil then missingLibraries[#missingLibraries + 1] = "logger" end
+if power_api == nil then missingLibraries[#missingLibraries + 1] = "power" end
+
+local function missingLines()
+    local lines = {}
+    for i = 1, #missingLibraries do
+        local name = missingLibraries[i]
+        local note = name .. ".lua is not in /"
+        if name == "power" then
+            note = "power.lua is not in /; the power mode cannot be read or written"
+        elseif name == "logger" then
+            note = "logger.lua is not in /; log lines are skipped"
+        elseif name == "bsod" then
+            note = "bsod.lua is not in /; the blue screen is unavailable"
+        end
+        lines[#lines + 1] = "MISSING_LIBRARY name=" .. name .. " file=" ..
+            name .. ".lua: " .. note
+    end
+    return lines
+end
+
+if #missingLibraries > 0 then
+    local names = table.concat(missingLibraries, ", ")
+    local lines = missingLines()
+    -- Log when a logger is available; it may be the library that is missing.
+    if logger ~= nil then
+        for i = 1, #missingLibraries do
+            logger.error("MISSING_LIBRARY name=" .. missingLibraries[i] ..
+                " file=" .. missingLibraries[i] .. ".lua")
+        end
+    end
+    if bsod ~= nil then
+        local extra = table.concat(lines, "\n")
+        if #missingLibraries == 1 then
+            extra = extra .. "\n\nPut " .. missingLibraries[1] ..
+                ".lua back in / and restart."
+        else
+            extra = extra .. "\n\nPut these files back in / and restart."
+        end
+        bsod.show({
+            error = "MISSING_LIBRARY",
+            file = names,
+            title = "Missing library",
+            extra = extra
+        })
+        -- In the real bsod.show this line is unreachable (it raises by design);
+        -- it keeps the failure greppable if a custom bsod ever returns.
+        error("MISSING_LIBRARY " .. names, 0)
+    else
+        -- bsod itself is missing: print a readable error on the terminal and
+        -- stop. The message always carries MISSING_LIBRARY for grep.
+        local screen = term
+        pcall(function()
+            screen.setBackgroundColor(colors.blue)
+            screen.setTextColor(colors.white)
+            screen.clear()
+            screen.setCursorPos(1, 1)
+        end)
+        pcall(screen.write, "Missing library\n")
+        pcall(screen.write, "----------------\n")
+        for i = 1, #lines do
+            pcall(screen.write, lines[i] .. "\n")
+        end
+        pcall(screen.write, "\nThe Power Grid Controller cannot start.\n")
+        pcall(screen.write, "Put the missing file(s) back in / and restart.\n")
+        error("MISSING_LIBRARY " .. names, 0)
+    end
+end
 
 -- Operation feedback display delay (seconds)
 local FEEDBACK_DELAY = 1

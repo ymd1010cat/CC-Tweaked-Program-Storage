@@ -12,13 +12,13 @@
 
 | 文件 | 说明 |
 |---|---|
-| `startup.lua` | 主程序。开机读取配置、恢复供电模式、进入命令循环（菜单 1–4 切换、5 打印日志、`version` 显示版本）。电源写入与配置读取都委托给 `power.lua`；配置坏了只记 `CONFIG_ERROR` 并按 `mode=1` 继续跑，蓝屏只留给写盘失败。 |
+| `startup.lua` | 主程序。开机读取配置、恢复供电模式、进入命令循环（菜单 1–4 切换、5 打印日志、`version` 显示版本）。电源写入与配置读取都委托给 `power.lua`；配置坏了只记 `CONFIG_ERROR` 并按 `mode=1` 继续跑；库文件缺失走可读蓝屏（`MISSING_LIBRARY`），蓝屏只用于库缺失与写盘失败。 |
 | `power.lua` | 配置与电源原语：解析/写回 `PowerGrid.ini`（key=value 新格式 + 旧的裸数字格式），`M.read()` 返回模式与错误码，`M.boot()` 坏配置时回落默认模式 `mode=1`，`M.errorLine()` 产出 `CONFIG_ERROR ...` 诊断行，`M.describe()` 给出人类可读说明与"用了什么默认值"，`M.config()` 读出 watchdog 段，`M.apply(value)` 改 ini 里 `mode=` 那一行 + 驱动 `back` 模拟输出 + 播放 speaker 提示音。启动菜单与 watchdog 共用它。 |
 | `logger.lua` | 极简日志库：`logger.info/warn/error/debug`，每条按 `[tag] %Y.%m.%d %H:%M message` 追加到 `Main.log`。 |
 | `bsod.lua` | 蓝屏模块：用 `window` API 铺满全屏、居中显示 `:(` / 错误码 / 失败文件，然后把父终端光标移出屏幕并 `error()` 退出。 |
 | `watchdog.lua` | watchdog 的**纯逻辑状态机**（阈值、回差、持续窗口、一次性报警、切换目标/恢复开关）。不读文件、不读时钟、不碰红石，时间、读数与配置全部由调用方注入，所以能离线测。 |
-| `watchdog_app.lua` | watchdog 的**运行驱动**：从 `PowerGrid.ini` 读参数，按 `poll` 秒读一次 `redstone.getAnalogInput`、驱动状态机、写日志；报警那次采样点亮告警继电器并通过 `power.lua` 切到备用，恢复那次采样切回报警前的模式。可当作独立程序运行，也可作为模块被测试注入假的时钟/红石/日志/电源模块。 |
-| `tests/` | 离线测试套件：`run-tests.ps1`（CraftOS-PC headless 驱动）+ `startup.lua`（测试入口）+ `harness.lua`（断言与 `logs/suite.log`）+ `t_watchdog.lua` / `t_watchdog_app.lua` / `t_power.lua`（断言）。 |
+| `watchdog_app.lua` | watchdog 的**运行驱动**：从 `PowerGrid.ini` 读参数，按 `poll` 秒读一次 `redstone.getAnalogInput`、驱动状态机、写日志；报警那次采样点亮告警继电器并通过 `power.lua` 切到备用，恢复那次采样切回报警前的模式。缺 `logger.lua` 退回内置终端打印、缺 `power.lua` 只告警不切换（不退出）。可当作独立程序运行，也可作为模块被测试注入假的时钟/红石/日志/电源模块。 |
+| `tests/` | 离线测试套件：`run-tests.ps1`（CraftOS-PC headless 驱动）+ `startup.lua`（测试入口）+ `harness.lua`（断言与 `logs/suite.log`）+ `t_watchdog.lua` / `t_watchdog_app.lua` / `t_power.lua` / `t_libraries.lua`（断言）。 |
 | `PowerGrid.ini` | **唯一的配置文件**：逐行 `key=value`（`mode` + `watchdog.*`），也兼容旧的单行裸数字格式；模式切换时会重写 `mode=` 那一行。详见下面「配置文件」一节。 |
 | `.settings` | 该计算机的 CraftOS-PC 设置（目前只关了 `motd.enable`）；仅随归档副本保留，由本目录 `.gitignore` 排除，不入库。 |
 | `Main.log` | 运行日志（部署期间的真实记录，仓库根 `.gitignore` 忽略 `*.log`，故不入库）。 |
@@ -86,14 +86,42 @@ CONFIG_ERROR code=CONFIG_FILE_MISSING file=PowerGrid.ini fallback=mode=1 detail=
 | `MODE_NOT_A_NUMBER` | `mode` 不是数字 | `VALUE_TYPE_NOT_CORRECT` |
 | `MODE_OUT_OF_RANGE` | `mode` 不在 `0–3` | `INI_VALUE_OUT_RANGE` |
 | `MODE_KEY_MISSING` | key=value 文件里没有 `mode=` 行 | `MODE_MISSING` |
-| `CONFIG_WRITE_FAILED` | 写不回 `PowerGrid.ini`（**唯一会蓝屏的情况**） | `WRITE_FAILED` |
+| `CONFIG_WRITE_FAILED` | 写不回 `PowerGrid.ini` | `WRITE_FAILED` |
 
 每个码都有一句人类可读说明（`M.DESCRIPTIONS`）和一句"用了什么默认值"（`M.describe` 的第二返回值），
 蓝屏文案就是后者：例如 `Power Value is empty. Using mode=1 (Main Grid).`。
 旧码仍可传给 `M.describe`/`M.errorLine`（内部用 `M.normalizeCode` 规范化），`M.legacyOf(新码)` 能取回旧名。
 
-**蓝屏只保留给 `CONFIG_WRITE_FAILED`**：真的写不进 ini（磁盘满/只读）时，红石输出仍已按新模式驱动，
-但控制器再也记不住状态，于是蓝屏显示"发生了什么 + 用了什么默认值"，其余情况一律"日志 + 继续跑"。
+**哪些是蓝屏、哪些是容错继续跑：**
+
+| 情形 | 行为 |
+|---|---|
+| 配置缺失/空/`mode` 非法/缺 `mode=` 行 | **容错**：一行 `CONFIG_ERROR`，按 `mode=1` 继续，下次 `apply` 重建 ini |
+| `logger.lua` 缺失 | **蓝屏**（标题 `Missing library`，缺多个时一次列全） |
+| `power.lua` 缺失 | **蓝屏**，说明"电源模式无法读取/写入，请放回 power.lua 后重启" |
+| `bsod.lua` 缺失 | **无法蓝屏**，改用终端可读错误 + `error()`（文案含 `MISSING_LIBRARY bsod`） |
+| 写不回 `PowerGrid.ini`（磁盘满/只读） | **蓝屏** `CONFIG_WRITE_FAILED`，说明红石已按新模式驱动、修盘后重启 |
+
+### 库丢失（蓝屏）
+
+`startup.lua` 的 `require` 全部走可诊断加载（`loadLibrary`）：缺库时不会只抛 `module 'x' not found`，
+而是统一用 `MISSING_LIBRARY name=<模块> file=<文件>.lua` 标识、写清缺哪个、怎么办：
+
+| 缺失的库 | 行为 | 可见信息 |
+|---|---|---|
+| `bsod.lua` | 无法用蓝屏自己 → 终端铺蓝底、打印可读错误后 `error()` | 屏幕首行 `Missing library`，逐行 `MISSING_LIBRARY name=bsod file=bsod.lua`；抛出的错误文本也含 `MISSING_LIBRARY bsod` |
+| `logger.lua` | 仍走蓝屏（不会因为要写日志再崩一次） | 蓝屏 `file=logger`，extra 说明 `logger.lua is not in /; log lines are skipped` |
+| `power.lua` | 蓝屏 | 蓝屏 `file=power`，extra 说明 `power.lua is not in /; the power mode cannot be read or written`，并在末行要求放回后重启 |
+| 多个同时缺 | 一次列全 | 例如 `file=logger, power`，extra 每个一行 `MISSING_LIBRARY name=...`；可用 logger 时也逐条写日志 |
+
+watchdog（`watchdog_app.lua`）**不因此退出**，按可用能力降级并各记一行：
+
+| 缺失 | 降级 | 日志 |
+|---|---|---|
+| `logger.lua` | 退回内置终端打印（同样 `[tag] date time message` 形状） | `MISSING_LIBRARY name=logger fallback=print` |
+| `power.lua` | 只告警、不切电源（切换尝试记 `WATCHDOG_SWITCH_FAIL reason=no_power_module`） | `MISSING_LIBRARY name=power fallback=alarm_only` |
+| `bsod.lua` | 用不到（watchdog 从不蓝屏） | 无 |
+
 
 watchdog 段是"非法值回落默认 + 一条可 grep 的诊断"，不会带着半套配置运行：
 
@@ -266,8 +294,12 @@ pwsh -NoProfile -File powergrid/tests/run-tests.ps1
   映射 + `describe` 文案）、**防故障矩阵**（缺失/空/非数字/越界/缺 `mode=` 行 → `M.boot()` 回落
   `mode=1` + 对应新码，之后 `M.apply` 能重建 ini）、以及 `CONFIG_ERROR` 行格式，外加与旧
   `startup.lua` 内联实现的**逐项等价回归**（同一组输入比较 ini 字节、红石调用序列、speaker 调用序列）。
+- `t_libraries.lua`：用注入的 `require`/`shell`/`term` 真正执行 `startup.lua`（在缺库守卫处停下，不会进菜单循环），
+  覆盖缺 `power`（蓝屏点名 + 说明读写不了）、缺 `logger`（仍蓝屏且不二次崩）、缺 `bsod`（终端回退 +
+  错误文本含 `MISSING_LIBRARY bsod`，不是裸 `module 'bsod' not found`）、多个同时缺（一次列全）、
+  三个全缺；以及 watchdog 缺 `logger`/`power` 的降级行（`MISSING_LIBRARY name=.. fallback=..`）与内置打印回退。
 - 跑完还检查 staged 的 `PowerGrid.ini` 字节不变、没有生成 `.settings`。
-- 当前基线：`OFFLINE_PASS 802` / `OFFLINE_FAIL 0` / `OFFLINE_GROUPS 34`。
+- 当前基线：`OFFLINE_PASS 864` / `OFFLINE_FAIL 0` / `OFFLINE_GROUPS 41`。
 
 ## 部署
 

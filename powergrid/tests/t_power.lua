@@ -334,8 +334,14 @@ H.contains(src, 'M.SIDE = "back"', "the redstone side is kept")
 H.contains(src, 'M.SOUND = "create:confirm"', "the speaker sound is kept")
 
 local startupSrc = H.readAll("/tests/startup_source.lua") or ""
-H.contains(startupSrc, 'local power_api = require("power")',
-    "startup.lua uses power.lua")
+H.contains(startupSrc, 'loadLibrary("power")',
+    "startup.lua loads power.lua through the diagnostic loader")
+H.contains(startupSrc, 'loadLibrary("logger")',
+    "startup.lua loads logger.lua through the diagnostic loader")
+H.contains(startupSrc, 'loadLibrary("bsod")',
+    "startup.lua loads bsod.lua through the diagnostic loader")
+H.contains(startupSrc, "MISSING_LIBRARY",
+    "startup.lua reports missing libraries with one token")
 H.contains(startupSrc, "power_api.boot()", "startup boots through power.lua")
 H.contains(startupSrc, "CONFIG_ERROR", "startup logs CONFIG_ERROR lines")
 H.contains(startupSrc, "power_api.errorLine(boot.code",
@@ -350,8 +356,10 @@ H.eq(countIn(startupSrc, "applyPower(power)"), 5,
     "startup applies power from five places (boot + four menu entries)")
 H.contains(startupSrc, "CONFIG_WRITE_FAILED",
     "only a write failure reaches the blue screen")
-H.eq(countIn(startupSrc, "bsod.show"), 1,
-    "there is exactly one blue-screen path left")
+H.eq(countIn(startupSrc, "bsod.show({"), 2,
+    "two blue-screen paths (missing library, write failure)")
+H.contains(startupSrc, "MISSING_LIBRARY",
+    "missing libraries get their own blue-screen token")
 H.lacks(startupSrc, "configError", "no config error path hands over to the blue screen")
 H.contains(startupSrc, 'shell.run("clear")', "the screen clear is kept")
 H.contains(startupSrc, "local function wrapText", "printer wrapping is kept")

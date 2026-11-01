@@ -50,6 +50,7 @@ if type(app) == "table" then
     H.isType(app.iniKeys, "function", "app.iniKeys exported")
     H.isType(app.statusLine, "function", "app.statusLine exported")
     H.isType(app.report, "function", "app.report exported")
+    H.isType(app.PRINT_LOGGER, "table", "app.PRINT_LOGGER exported")
     H.eq(app.KEYS, nil, "no CraftOS settings key table on the driver")
     H.eq(app.VERSION, "1.1", "watchdog_app version")
     H.ne(app.isMainProgram(), true, "no autostart inside the suite")

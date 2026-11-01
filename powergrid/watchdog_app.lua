@@ -41,6 +41,7 @@
 --   WATCHDOG_RESTORE_FAIL the restore read/write failed
 --   WATCHDOG_STATUS     status snapshot on demand
 --   WATCHDOG_CRASH      the main loop died
+--   MISSING_LIBRARY     a library is absent; the monitor degrades instead of exiting
 
 local M = {}
 
@@ -53,6 +54,35 @@ function NULL_LOGGER.warn() return false end
 function NULL_LOGGER.error() return false end
 function NULL_LOGGER.debug() return false end
 M.NULL_LOGGER = NULL_LOGGER
+
+-- Minimal terminal logger used when logger.lua is missing: the monitor keeps
+-- running and still prints every line (same "[tag] date time message" shape)
+-- instead of crashing on a nil logger.
+local function printLine(level, message, ...)
+    local args = { ... }
+    local text = tostring(message or "")
+    for i = 1, #args do text = text .. tostring(args[i]) end
+    local stamp = "?"
+    if type(os) == "table" and type(os.date) == "function" then
+        local ok, value = pcall(os.date, "%Y.%m.%d %H:%M")
+        if ok and type(value) == "string" then stamp = value end
+    end
+    local line = "[" .. tostring(level) .. "] " .. stamp .. " " .. text
+    if type(term) == "table" and type(term.write) == "function" then
+        pcall(term.write, line .. "\n")
+    elseif type(print) == "function" then
+        pcall(print, line)
+    end
+    return false
+end
+
+local PRINT_LOGGER = {}
+function PRINT_LOGGER.write(tag, message, ...) return printLine(tag, message, ...) end
+function PRINT_LOGGER.info(message, ...) return printLine("info", message, ...) end
+function PRINT_LOGGER.warn(message, ...) return printLine("warn", message, ...) end
+function PRINT_LOGGER.error(message, ...) return printLine("error", message, ...) end
+function PRINT_LOGGER.debug(message, ...) return printLine("debug", message, ...) end
+M.PRINT_LOGGER = PRINT_LOGGER
 
 local function flag(value)
     if value == true then return "1" end
@@ -169,9 +199,21 @@ function M.new(opts)
         error("watchdog_app: watchdog.lua was not found", 0)
     end
 
+    -- logger.lua: when it is missing (or explicitly disabled with false) fall
+    -- back to the built-in terminal printer so monitoring never stops.
     local log = opts.logger
-    if type(log) ~= "table" or type(log.info) ~= "function" then
-        log = resolveModule("logger") or NULL_LOGGER
+    local loggerFallback = false
+    if log == false then
+        log = nil
+        loggerFallback = true
+    elseif type(log) ~= "table" or type(log.info) ~= "function" then
+        log = resolveModule("logger")
+        if log == nil then
+            loggerFallback = true
+        end
+    end
+    if log == nil then
+        log = PRINT_LOGGER
     end
 
     local redstone = opts.redstone
@@ -203,6 +245,8 @@ function M.new(opts)
         redstone = redstone,
         power = powerApi,
         power_opts = powerOpts,
+        power_fallback = (powerApi == nil),
+        logger_fallback = loggerFallback,
         ini = configInfo,
         clock = opts.clock or defaultClock,
         sleep = opts.sleep or defaultSleep,
@@ -232,6 +276,13 @@ end
 -- line, and put the relay in its safe state. Returns "running" or "disabled".
 function M.start(app)
     local state = app.state
+    -- Degraded dependencies are reported once, without stopping the monitor.
+    if app.logger_fallback then
+        app.logger.info("MISSING_LIBRARY name=logger fallback=print")
+    end
+    if app.power_fallback then
+        app.logger.warn("MISSING_LIBRARY name=power fallback=alarm_only")
+    end
     local problems = state.problems or {}
     for i = 1, #problems do
         local problem = problems[i]
