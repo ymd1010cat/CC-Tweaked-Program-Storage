@@ -13,10 +13,20 @@ A download goes to /pkgs/<name>.app/ (files land as .part and are renamed when
 complete; a failure removes everything downloaded so far), then the kernel
 bridge (api.sys.install) puts it into /apps when it is available.
 
+A pocket computer has no drive, so it only ever writes its own /pkgs. A block
+computer with the handheld in a disk drive does have /disk, so the start-up
+probe (fs.exists + fs.isDir) makes the target selectable: `t` switches between
+self (/pkgs) and disk (/disk/pkgs). The status row always shows the choice as
+`target self` or `target disk`. A disk download is writing only -- there is no
+api.sys.install call, because the block computer cannot install onto the
+handheld -- and it ends with `written to disk`; take the handheld out and let
+its own installer install the package. Without /disk the target stays self and
+`t` only says `no disk drive`.
+
 Keys (Esc is never used): up/down move, enter open/edit, r reload the index,
-a edit the server, q quit. In the editor: printable chars append, backspace
-deletes, enter accepts, c cancels (q is a letter there). `l` arms the receiver
-described below.
+a edit the server, t switch target, q quit. In the editor: printable chars
+append, backspace deletes, enter accepts, c cancels (q is a letter there).
+`l` arms the receiver described below.
 
 Receiver mode (the other computer runs tools/pushpkg.lua): press `l` to listen
 on rednet channel 4101 under protocol PYROET-PKG/1; /etc/pkg.recv may override
@@ -45,13 +55,15 @@ M.MIN_ROWS = 8
 M.CONF = "/etc/pkg.servers"
 M.PLACEHOLDER = "http://example.invalid/"
 M.PKGS = "/pkgs"
+M.DISK = "/disk"
+M.DISK_PKGS = "/disk/pkgs"
 M.INDEX = "index.txt"
 M.FILES = "files.txt"
 M.SHA = "SHA256.txt"
 M.MAX_URL = 160
 M.MAX_FILES = 256
 M.MAX_BODY = 262144
-M.HINT = "up/dn enter r reload a server q quit l receive"
+M.HINT = "up/dn enter r reload a url q quit l recv t target"
 M.RECV_PROTOCOL = "PYROET-PKG/1"
 M.RECV_CHANNEL = 4101
 M.RECV_CONF = "/etc/pkg.recv"
@@ -120,6 +132,35 @@ function M.servers(api)
     return out
 end
 
+-- a block computer with the handheld in a drive has /disk; a pocket computer has
+-- no drive, so there is nothing to select and the target stays self
+function M.probe_disk(api)
+    local fsx = type(api) == "table" and api.fs or nil
+    if type(fsx) ~= "table" or type(fsx.exists) ~= "function"
+        or type(fsx.isDir) ~= "function" then
+        return false
+    end
+    local called, has = pcall(fsx.exists, M.DISK)
+    if not called or has ~= true then return false end
+    local dcalled, is_dir = pcall(fsx.isDir, M.DISK)
+    return dcalled and is_dir == true
+end
+
+function M.target_of(state)
+    if type(state) == "table" and state.target == "disk" then return "disk" end
+    return "self"
+end
+
+-- "" for this machine's own /pkgs, "/disk" for the drive in the block computer
+function M.target_root(state)
+    if M.target_of(state) == "disk" then return M.DISK end
+    return ""
+end
+
+function M.pkgs_root(state)
+    return M.target_root(state) .. M.PKGS
+end
+
 function M.new_state(api)
     local state = {
         servers = M.servers(api),
@@ -129,6 +170,8 @@ function M.new_state(api)
         status = "",
         message = "",
         progress = nil,
+        target = "self",
+        disk = M.probe_disk(api),
         cols = M.VIEW.cols,
         rows = M.VIEW.rows,
     }
@@ -270,7 +313,7 @@ function M.render(state, cols, rows)
     end
     local status = state.status ~= "" and state.status or state.message
     if state.progress ~= nil then status = state.progress end
-    add(status ~= "" and status or "ready")
+    add("target " .. M.target_of(state) .. "  " .. (status ~= "" and status or "ready"))
     if state.editing then
         add("enter accept c cancel bs del")
     elseif type(state.recv) == "table" then
@@ -330,6 +373,24 @@ function M.cycle_server(state)
     state.server_index = (state.server_index or 1) + 1
     if state.server_index > #list then state.server_index = 1 end
     state.server = M.server_of(state)
+    return "repaint"
+end
+
+-- `t`: self <-> disk. The drive can appear or go away between presses, so this
+-- re-probes; a machine without the drive only says so and keeps writing /pkgs.
+function M.cycle_target(state, api)
+    if M.probe_disk(api) ~= true then
+        state.disk = false
+        state.target = "self"
+        state.status = "no disk drive"
+        M.note(api, "PKGGET_TARGET ok=false err=no_disk")
+        return "repaint"
+    end
+    state.disk = true
+    state.target = (M.target_of(state) == "disk") and "self" or "disk"
+    state.status = ""
+    M.note(api, "PKGGET_TARGET ok=true target=" .. state.target
+        .. " root=" .. M.pkgs_root(state))
     return "repaint"
 end
 
@@ -507,12 +568,13 @@ function M.download(state, api, entry)
     local sha_body = M.get(api, M.join(base, M.SHA))
     local sha = type(sha_body) == "string" and M.parse_sha(sha_body) or nil
     local verified = sha ~= nil and next(sha) ~= nil
-    local root = M.PKGS .. "/" .. entry.name .. ".app"
+    local pkgs = M.pkgs_root(state)
+    local root = pkgs .. "/" .. entry.name .. ".app"
     local partial = root .. ".part"
     M.rm_tree(fsx, partial)
     if type(fsx.makeDir) == "function" then
         pcall(fsx.makeDir, partial)
-        pcall(fsx.makeDir, M.PKGS)
+        pcall(fsx.makeDir, pkgs)
     end
     local bytes = 0
     for i = 1, #files do
@@ -575,28 +637,38 @@ function M.download(state, api, entry)
     end
     state.progress = nil
     local vtext = verified and ", verified" or ", unverified"
-    state.status = "staged " .. root .. " (" .. tostring(bytes) .. " B" .. vtext .. ")"
+    local target = M.target_of(state)
     local install_ok = nil
-    local sysax = type(api) == "table" and api.sys or nil
-    if type(sysax) == "table" and type(sysax.install) == "function" then
-        local called, ok2, detail = pcall(sysax.install, entry.name)
-        install_ok = called and ok2 == true
-        M.note(api, "PKGGET_INSTALL name=" .. entry.name .. " ok="
-            .. tostring(install_ok) .. (install_ok and "" or (" err="
-                .. M.plain(detail, 40))))
-        if install_ok then
-            state.status = "installed " .. entry.name .. vtext
-        else
-            state.status = "staged in /pkgs (" .. M.plain(detail, 32) .. ")"
-        end
+    if target == "disk" then
+        -- write only: the block computer cannot install onto the handheld
+        state.status = "written to disk " .. root .. " (" .. tostring(bytes)
+            .. " B" .. vtext .. ")"
+        M.note(api, "PKGGET_WRITE ok=true target=disk name=" .. entry.name
+            .. " files=" .. tostring(#files) .. " bytes=" .. tostring(bytes))
     else
-        state.status = "staged in /pkgs" .. vtext
-        M.note(api, "PKGGET_INSTALL name=" .. entry.name .. " ok=false err=no_bridge")
+        state.status = "staged " .. root .. " (" .. tostring(bytes) .. " B" .. vtext .. ")"
+        local sysax = type(api) == "table" and api.sys or nil
+        if type(sysax) == "table" and type(sysax.install) == "function" then
+            local called, ok2, detail = pcall(sysax.install, entry.name)
+            install_ok = called and ok2 == true
+            M.note(api, "PKGGET_INSTALL name=" .. entry.name .. " ok="
+                .. tostring(install_ok) .. (install_ok and "" or (" err="
+                    .. M.plain(detail, 40))))
+            if install_ok then
+                state.status = "installed " .. entry.name .. vtext
+            else
+                state.status = "staged in /pkgs (" .. M.plain(detail, 32) .. ")"
+            end
+        else
+            state.status = "staged in /pkgs" .. vtext
+            M.note(api, "PKGGET_INSTALL name=" .. entry.name
+                .. " ok=false err=no_bridge")
+        end
     end
     M.note(api, "PKGGET_FETCH name=" .. entry.name .. " files=" .. tostring(#files)
         .. " bytes=" .. tostring(bytes) .. " ok=true")
     return true, { files = #files, bytes = bytes, verified = verified,
-        install = install_ok, root = root }
+        install = install_ok, target = target, root = root }
 end
 
 -- ---------------------------------------------------------------------------
@@ -1094,6 +1166,7 @@ function M.dispatch_event(state, event, p1, api)
         if key == "r" then return M.load_index(state, api) end
         if key == "a" then return M.edit_begin(state, api) end
         if key == "s" then return M.cycle_server(state) end
+        if key == "t" then return M.cycle_target(state, api) end
         return "none"
     end
     if event == "char" then
@@ -1103,6 +1176,7 @@ function M.dispatch_event(state, event, p1, api)
         if ch == "a" then return M.edit_begin(state, api) end
         if ch == "l" then return M.recv_arm(state, api) end
         if ch == "s" then return M.cycle_server(state) end
+        if ch == "t" then return M.cycle_target(state, api) end
         return "none"
     end
     if event == "desk_focus" or event == "term_resize" then return "repaint" end

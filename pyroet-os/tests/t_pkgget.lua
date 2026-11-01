@@ -136,7 +136,7 @@ return function(H)
         H.contains("index_row1", frame[1] or "", "pkgget 0.1.0")
         H.contains("index_server_row", frame[2] or "", "server: " .. BASE)
         H.contains("index_app_row", table.concat(frame, "\n"), "demo 1.0.0")
-        H.contains("index_hint", frame[19] or "", "up/dn enter r reload a server q quit")
+        H.contains("index_hint", frame[19] or "", "up/dn enter r reload a url q quit")
 
         -- no http at all
         local state3 = P.new_state(api_with(nil)[1])
@@ -686,6 +686,98 @@ return function(H)
         state.index = 5
         H.eq("keys_empty_enter", P.dispatch_event(state, "key", "enter", api), "none")
         H.eq("pkgget_hint", P.HINT,
-            "up/dn enter r reload a server q quit l receive")
+            "up/dn enter r reload a url q quit l recv t target")
+    end
+
+    -- -----------------------------------------------------------------
+    -- disk target: the handheld sits in a drive of a block computer. A pocket
+    -- computer has no /disk, so only the drive case can be selected; the file
+    -- system is real, so a disk write is inspected on /disk/pkgs.
+    -- -----------------------------------------------------------------
+    H.group("pkgget.target")
+    do
+        -- no drive: `t` only says so and the target stays self
+        H.rmrf("/pkgs")
+        H.rmrf("/disk")
+        local installed = {}
+        local api, lines = api_with(http_from(server()), { install = function(name)
+            installed[#installed + 1] = name
+            return true, { version = "1.0.0" }
+        end })
+        local state = P.new_state(api)
+        H.eq("target_probe_none", state.disk, false)
+        H.eq("target_default", P.target_of(state), "self")
+        H.eq("target_self_root", P.target_root(state), "")
+        H.eq("target_self_pkgs", P.pkgs_root(state), "/pkgs")
+        H.eq("target_none_key", P.dispatch_event(state, "key", "t", api), "repaint")
+        H.eq("target_none_still_self", P.target_of(state), "self")
+        H.eq("target_none_status", state.status, "no disk drive")
+        local frame = P.render(state, 51, 19)
+        H.contains("target_none_row", frame[18] or "", "target self  no disk drive")
+        H.has(lines, "PKGGET_TARGET ok=false err=no_disk")
+        H.lacks("target_none_no_write", lines, "PKGGET_WRITE")
+        -- a self download still goes through the bridge
+        state.servers = { BASE }
+        state.server_index = 1
+        P.load_index(state, api)
+        state.index = 2
+        H.eq("target_self_action", P.enter(state, api), "install")
+        H.eq("target_self_installed", installed[1], "demo")
+        H.check("target_self_file", F.exists("/pkgs/demo.app/main.lua"), "not staged")
+        H.has(lines, "PKGGET_INSTALL name=demo ok=true")
+
+        -- a drive: `t` selects disk, the package is written and never installed
+        H.rmrf("/pkgs")
+        H.mkdirp("/disk")
+        H.check("target_disk_created", F.isDir("/disk"), "/disk is not a directory")
+        local installed2 = {}
+        local api2, lines2 = api_with(http_from(server()), { install = function(name)
+            installed2[#installed2 + 1] = name
+            return true, { version = "2.0.0" }
+        end })
+        local state2 = P.new_state(api2)
+        H.eq("target_probe_disk", state2.disk, true)
+        H.eq("target_disk_default", P.target_of(state2), "self")
+        H.eq("target_disk_key", P.dispatch_event(state2, "key", "t", api2), "repaint")
+        H.eq("target_disk_on", P.target_of(state2), "disk")
+        H.eq("target_disk_root", P.target_root(state2), "/disk")
+        H.eq("target_disk_pkgs", P.pkgs_root(state2), "/disk/pkgs")
+        local frame2 = P.render(state2, 51, 19)
+        H.contains("target_disk_row", frame2[18] or "", "target disk")
+        H.has(lines2, "PKGGET_TARGET ok=true target=disk root=/disk/pkgs")
+        state2.servers = { BASE }
+        state2.server_index = 1
+        P.load_index(state2, api2)
+        state2.index = 2
+        H.eq("target_disk_action", P.enter(state2, api2), "install")
+        H.eq("target_disk_no_bridge", #installed2, 0)
+        H.lacks("target_disk_no_install_log", lines2, "PKGGET_INSTALL")
+        H.has(lines2, "PKGGET_WRITE ok=true target=disk name=demo files=2 bytes=")
+        H.has(lines2, "PKGGET_FETCH name=demo files=2")
+        H.contains("target_disk_status", state2.status, "written to disk")
+        local map = server()
+        H.eq("target_disk_manifest", H.read("/disk/pkgs/demo.app/manifest.lua"),
+            map[BASE .. "demo/manifest.lua"])
+        H.eq("target_disk_main", H.read("/disk/pkgs/demo.app/main.lua"),
+            map[BASE .. "demo/main.lua"])
+        H.eq("target_disk_no_part", F.exists("/disk/pkgs/demo.app.part"), false)
+        H.eq("target_disk_internal_clean", F.exists("/pkgs/demo.app"), false)
+        H.contains("target_disk_row_after", (P.render(state2, 51, 19))[18] or "",
+            "written to disk")
+        -- the `t` char event goes back to self and the bridge works again
+        H.eq("target_back_char", P.dispatch_event(state2, "char", "t", api2), "repaint")
+        H.eq("target_back_self", P.target_of(state2), "self")
+        H.contains("target_back_row", (P.render(state2, 51, 19))[18] or "", "target self")
+        state2.index = 3 -- row 3 is "other"
+        H.eq("target_back_action", P.enter(state2, api2), "install")
+        H.eq("target_back_installed", installed2[1], "other")
+        H.check("target_back_file", F.exists("/pkgs/other.app/manifest.lua"), "not staged")
+        H.eq("target_back_disk_clean", F.exists("/disk/pkgs/other.app"), false)
+        -- the drive goes away again: `t` reports it and falls back to self
+        H.rmrf("/disk")
+        H.eq("target_gone_key", P.dispatch_event(state2, "key", "t", api2), "repaint")
+        H.eq("target_gone_self", P.target_of(state2), "self")
+        H.eq("target_gone_status", state2.status, "no disk drive")
+        H.rmrf("/pkgs")
     end
 end

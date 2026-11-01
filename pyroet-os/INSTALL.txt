@@ -102,6 +102,16 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 /etc/pkg.recv may override channel= / protocol=. Another
                 computer runs tools/pushpkg.lua (below) to stream a package
                 into /pkgs; a failed transfer leaves no .part tree behind.
+                t switches the target when /disk exists (a handheld sitting in
+                a disk drive of a block computer): the status row reads
+                "target self" (/pkgs) or "target disk" (/disk/pkgs). Run pkgget
+                on the block computer, press t to pick disk and download: the
+                package is written to /disk/pkgs/<name>.app and api.sys.install
+                is NOT called (a block computer cannot install onto the
+                handheld), and the status row ends with "written to disk".
+                Take the handheld out and install it there with its installer.
+                Without a drive t only says "no disk drive" and the target
+                stays self.
       pushpkg    (a copy on the OTHER computer; not part of the image)
                 pushpkg <target-id|broadcast> [name] reads index.txt and the
                 package files over http, then streams them to the handheld

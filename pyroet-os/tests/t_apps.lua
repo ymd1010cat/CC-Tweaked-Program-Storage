@@ -574,6 +574,7 @@ end
 return function(manifest, api)
     api.log("fsread=" .. type(api.fs.read))
     api.log("fsdelete=" .. type(api.fs.delete))
+    api.log("fsisdir=" .. type(api.fs.isDir))
     api.log("peripheral=" .. type(api.peripheral))
     api.yield()
 end
@@ -583,7 +584,23 @@ end
         rt:start("surface")
         rt:tick()
         H.has(lines, "APP_LOG app=surface msg=fsread=function")
+        H.has(lines, "APP_LOG app=surface msg=fsisdir=function")
         H.has(lines, "APP_LOG app=surface msg=peripheral=table")
+
+        -- fs.isDir answers for a granted app: true for a directory, false for a
+        -- path that is not one (pkgget's disk probe rides on this, T22)
+        local dirprobe = H.app_package(dir .. "/apps/dirprobe.app", {
+            manifest = 'return { name = "dirprobe", capabilities = { "fs.read" } }',
+            main = "return function(manifest, api)\n"
+                .. '    api.log("isdir=" .. tostring(api.fs.isDir("' .. dir .. '")))\n'
+                .. '    api.log("isdir_no=" .. tostring(api.fs.isDir("' .. dir .. '/nope")))\n'
+                .. "    api.yield()\nend\n",
+        })
+        rt:load(dirprobe)
+        rt:start("dirprobe")
+        rt:tick()
+        H.has(lines, "APP_LOG app=dirprobe msg=isdir=true")
+        H.has(lines, "APP_LOG app=dirprobe msg=isdir_no=false")
     end
 
     -- -----------------------------------------------------------------

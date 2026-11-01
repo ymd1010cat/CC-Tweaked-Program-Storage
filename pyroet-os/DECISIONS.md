@@ -1245,7 +1245,7 @@ APP_LOG app=installer msg=key=enter action=install index=1 detail=files
 
 37. pkgget：用户自选服务器的软件包下载（T16）
 
-37.1 **包**：`system/system/pkgget.app/`（manifest 0.1.0 + main.lua，进镜像）。caps = `http`、`fs.read`、`fs.write`、`input`、`terminal`。事件驱动；键位统一 `up/down` 移动、`enter` 进入/下载、`r` 重拉 index、`a` 编辑服务器、`q` 退出、`s` 在 `/etc/pkg.servers` 多行间切换（**不用 Esc**）。
+37.1 **包**：`system/system/pkgget.app/`（manifest 0.1.0 + main.lua，进镜像）。caps = `http`、`fs.read`、`fs.write`、`input`、`terminal`。事件驱动；键位统一 `up/down` 移动、`enter` 进入/下载、`r` 重拉 index、`a` 编辑服务器、`q` 退出、`s` 在 `/etc/pkg.servers` 多行间切换（**不用 Esc**）；T22 起另有 `t` 切换 self/disk 目标（§42）。
 
 37.2 **服务器协议（纯文本、静态文件服务器即可，无 zip/JSON）**：
 ```
@@ -1320,6 +1320,24 @@ GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校�
 
 41.5 **结果**：`install.set` 仍 29 条，TOTAL 599,043 B（距硬门禁 629,145 余 30,102；pkgget main.lua 27,348→46,109，含接收状态机与校验，超过“≤8 KB 增量”的期望值）；离线 **5,332 pass / 0 fail / 274 groups**（+308 断言 / +17 组）。尚未真机复核。
 
+42. pkgget 磁盘目标：方块电脑 + 手持机入驱动器（T22）
+
+42.1 **动机**：用户玩法是把手持机插进方块电脑的驱动器，在方块电脑上跑 `pkgget` 从远程服务器拉包，直接写进 `/disk`（＝手持机的盘），取出后手持机用 installer 装。此前 pkgget 只会写本机 `/pkgs` 并调 `api.sys.install`，而方块电脑装不到手持机上，所以写盘会白费。
+
+42.2 **探测与键**：`M.probe_disk(api)` 用 `fs.exists("/disk")` + `fs.isDir("/disk")` 判定（两个 API 缺失或抛错都算无盘，不报错），结果进 `state.disk`；`state.target` 只取 `"self"`/`"disk"`，默认 self。`t`（`key` 与 `char` 两条路径都接）调 `M.cycle_target`：无盘 → 状态行只设 `no disk drive`、日志 `PKGGET_TARGET ok=false err=no_disk`，目标保持 self；有盘 → self↔disk 互切、清空状态行、日志 `PKGGET_TARGET ok=true target=.. root=..`。每次按 `t` 都重新探测（驱动器可能中途插入/拔出），拔出后按 `t` 回落到 self。
+
+42.3 **路径**：`M.target_root(state)` = `""`（self）或 `/disk`（disk），`M.pkgs_root(state)` = root..`/pkgs`；`M.download` 用它对出 `local pkgs = M.pkgs_root(state)`、`root = pkgs .. "/" .. name .. ".app"`、`partial = root .. ".part"`，其余 `.part` 写入 → 逐文件回读校验 → 改名发布 → 失败清 `.part` 的流程与内部目标逐字一致（发布后仍记 `PKGGET_FETCH ok=true`）。
+
+42.4 **不装到方块电脑**：disk 目标发布成功后**不调用 `api.sys.install`**，状态行 `written to disk <root> (N B, verified|unverified)`、日志 `PKGGET_WRITE ok=true target=disk name=.. files=.. bytes=..`；self 目标仍走原 install 路径（`PKGGET_INSTALL`、`installed <name>`、无桥 `staged in /pkgs`）逐字未变。接收模式（`l` / pushpkg）仍写 `/pkgs`，不参与目标切换。kernel/installer 一行未改（installer 仍只扫 `/pkgs`，§40），磁盘目标只存在于 pkgget 自己的写盘路径；不引入“侧面/机型”判断，探测完全基于 fs。
+
+42.4a **内核补 `api.fs.isDir`**：运行时原本只给 `read/list/exists/size/write/append/delete/makeDir`，`isDir` 不存在时探测会永远判“无盘”，真机上目标就永远切不到 disk。所以 `kernel/apps.lua` 的 `api.fs` 增 `isDir`（cap `fs.read`，与 `exists` 同级；宿主没有该调用 → `capability unavailable: fs.read`），同时 `t_apps` 的 surface 探测应用多断言一条 `fsisdir=function`（被拒时形状不变），新增 `dirprobe` 应用在授权下断言目录 `true`、非目录 `false`。
+
+42.5 **状态行与提示**：渲染时状态行固定前缀 `target self` / `target disk`，再接 status/message/progress（全空则 `ready`）；键位提示改为 `up/dn enter r reload a url q quit l recv t target`（51 列内）。
+
+42.6 **测试**：`tests/t_pkgget.lua` 新增 `pkgget.target` 组（+44 断言 / +1 组）：无 `/disk` 时 `t` 只提示、目标仍 self、`PKGGET_TARGET ok=false err=no_disk`、普通下载仍 install；用真实 fs `H.mkdirp("/disk")` 造出驱动器后 `t` 切到 disk，下载逐文件写到 `/disk/pkgs/demo.app/`（内容逐字比对）、`.part` 不残留、`/pkgs` 不被写、recording bridge 零调用、状态行含 `written to disk`、日志 `PKGGET_WRITE ... target=disk`；再按 `t`（char 路径）回 self 后下载走 install 并把包写进 `/pkgs`；删掉 `/disk` 再按 `t` 回落到 self。`t_apps` 另加 3 条 `api.fs.isDir` 接线断言。
+
+42.7 **数字**：`install.set` 仍 29 条；pkgget `main.lua` 46,109 → 49,250 B（+3,141），`kernel/apps.lua` +333 B，TOTAL **595,827 → 599,301 B / SIZE_WARN / 距硬门禁 629,145 余 29,844**；离线 **5,322 pass / 0 fail / 274 groups → 5,369 / 0 / 275**（+47 断言）。改动 lua 纯 ASCII、LF。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1365,3 +1383,4 @@ GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校�
 - 2026-11-01: **只面向手持电脑，收敛方块电脑兼容**（口径见 §39）。`net/service.lua` 不再读 `iface_side`（出现时记 `NET_CONFIG_IGNORED`），modem 一律自动发现；`settings.app` 的 `iface` 行只剩 `auto`；`kernel/installer.lua` 删 `I.DISK`/磁盘查找只留 `/pkgs`，`kernel/apps.lua` 的 OTA 删 `/disk` 来源与 `internal+disk` 摘要。README/DECISIONS 写明"只手面向手持电脑，不支持方块电脑"。离线 **5,024 pass / 0 fail / 257 groups**。未 commit。
 - 2026-11-01: **T19 收尾：installer.app 删 `/disk` 探测（§40）**。`system/system/installer.app/main.lua` 只探测 `/pkgs`：删 `M.MEDIUM`/`M.DISK`、disk source、tag `d`、`internal+disk` 摘要、`/disk` 提示与 selftest fixture；`disk_ok`/`disk_count` 改为 `source_ok`/`internal_count`，计数行用 `p`。测试 fixture 先迁到 `/pkgs`（t_installer_app 全部、t_installer_bridge 的 test_device/ui 组）再删代码，两步各自全绿；断言强度不变（scan 的 fs.list 计数 4/16→3/12 是少一次 `/disk` 探测）。体积 581,362→580,019 B（-1,343）；离线 5,024/0/257 不变。
 - 2026-11-01: **T20 远程推包：pushpkg + pkgget 接收模式（§41）**。`system/system/pkgget.app/main.lua` 增接收模式（`l` arm / `q` 停，`/etc/pkg.recv` 覆盖 channel/protocol，`PYROET-PKG/1` 频道 4101，begin/file/end/abort + ack，.part → 回读校验 → 改名发布 → `api.sys.install`，失败/超时清 `.part`，日志 `PKGGET_RECV*`）；manifest 增 `net.rednet`；`startup.lua` 把 ROM rednet 表交给运行时（`opts.rednet` 仍可覆盖）。新增 `tools/pushpkg.lua`（不进镜像/install.set：pushpkg <id|broadcast> [name]、/etc/pushpkg.conf、app+lua 两种包、lua 自动包装、≤8 KiB 分块、ack 重试 2 次、整包 sha256、PUSHPKG_* 日志）。新增 t_pkgget 接收组（+143 断言/+7 组）与 t_pushpkg（+165 断言/+11 组，含 sha256 已知向量）；离线 5,332/0/274；total 599,043 B（余 30,102）。
+- 2026-11-01: **pkgget 磁盘目标：方块电脑 + 手持机入驱动器（§42，T22）**。`system/system/pkgget.app/main.lua` 启动探测 `/disk`（`fs.exists` + `fs.isDir`），有盘时 `t` 在 `target self`（`/pkgs`）与 `target disk`（`/disk/pkgs`）间切换、状态行固定显示目标；disk 目标发布成功**不调 `api.sys.install`**（方块电脑装不到手持机），状态行 `written to disk`、日志 `PKGGET_WRITE ok=true target=disk name=.. files=.. bytes=..`；self 目标原 install 路径逐字未变，无盘按 `t` 只提示 `no disk drive`。运行时 `api.fs` 补 `isDir`（cap `fs.read`，`kernel/apps.lua`；否则真机上探测永远判无盘）。键位提示改为 `up/dn enter r reload a url q quit l recv t target`；README §5.7 / INSTALL pkgget 段 / 本文档 §42 写明"手持机塞入驱动器 → 方块电脑跑 pkgget → `t` 选 disk → 写 `/disk/pkgs` → 取出后用 installer 装"。`t_pkgget` 增 `pkgget.target` 组（44 断言，真实 fs 造/删 `/disk`，recording bridge 断言零调用），`t_apps` 加 3 条 `api.fs.isDir` 接线断言；pkgget main.lua 46,109→49,250 B、kernel/apps.lua +333 B，total 595,827→599,301 B（余 29,844）；离线 **5,369 pass / 0 fail / 275 groups**。未 commit。
