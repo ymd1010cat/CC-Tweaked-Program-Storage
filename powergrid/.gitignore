@@ -1,2 +1,5 @@
 # 这台电脑的运行时文件：随归档保留在工作区，但不入库（仓库只提交程序本体）
 /.settings
+
+# 离线测试的 staging 目录（tests/run-tests.ps1 默认写这里；PASS 后会自动删除）
+/.tests
