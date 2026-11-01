@@ -19,3 +19,9 @@ psk.txt
 /psh-cjk-font.zip
 # 会话交接文档（HANDOFF-YYYYMMDD.md，属会话产物，不入库）
 /HANDOFF-*.md
+
+# offline test staging dirs (auto-deleted on PASS, kept on FAIL; never commit them)
+itn-pass/.offline/
+pyroet-os/.tests/
+pylib/.tests/
+rpv1/craftos-offline/
