@@ -715,6 +715,72 @@ MARGIN 108,575**、`WINDOW_OK sum=658,100`（+9,720 B = `kernel/apps.lua` 28,804
 `.tmp-box` 不残留；UI 侧再用 `api.sys` 当桥按回车，装/卸都成功，缺 `fs.write` 时显示
 `capability denied: fs.write` 且不落盘。
 
+## 18. PC 侧画面测试（M2）
+
+18.1 **为什么需要**：CraftOS-PC 2.8.3 **没有 `term.getLine`**（实测），画到屏幕上的格子读不回来，
+而 M2 之前所有启动链套件都传 `frame = function() return true end` 桩——它们只能证明"首帧被调用过"，
+不能证明首帧画了什么。M2 加一层屏幕缓冲：把 `term` 换成可读的字符网格，让**生产代码**往上画，
+断言读格子。
+
+18.2 **harness 的做法（`tests/screen.lua`）**：`S.buffer(w, h)` 返回一个终端样子的表，实现启动链
+用到的 term 子集（`write` / `blit` / `clear` / `clearLine` / `scroll` / `setCursorPos` /
+`getCursorPos` / `getSize` / `set{Text,Background}Color(Colour)` / `get{Text,Background}Color(Colour)` /
+`setCursorBlink` / `isColor`），另加断言读面（`char` / `fg` / `bg` / `row` / `trim` / `text` /
+`find` / `find_row` / `snapshot` / `call_index` / `count_calls` / `wrote_before`）；`S.install(buf)` /
+`S.with_term(buf, fn)` 把 `_G.term` 换成缓冲并保证还原（测试失败时也还原，否则 runner 自己的
+`OFFLINE_*` 标记会写进缓冲）。**下面五条是实测出来的，不是照论文写的**——错一条，缓冲就会
+和错误的启动画面一致：
+
+- ROM 的 `print`/`write` 在**调用时**查 `term` 全局，所以只换表就够（实测：两次 `print` 两次
+  `term.write`）；
+- `print` 自己按 `getSize()` 切行并**显式** `setCursorPos`，所以缓冲的 `write` 必须**不折行、不夹光标**
+  （实测 51 列屏写 60 字符后光标在 (61, 1)，只有屏内格子变）——若 `write` 自己折行，一条长日志会被
+  画三遍；
+- `clear()` **不移动光标**（实测 (1,19) → (1,19)）——首帧写完三行后自己 `setCursorPos` 就是为此；
+- `blit()` **会推进光标**（实测 (1,1) + "abc" → (4,1)），颜色走 `0..f` 十六进制字母 → CraftOS 位掩码；
+- `scroll(n)` 把行上移、用当前背景色清空底部、光标不动。`print` 在最后一行写完的顺序是
+  `write` → `setCursorPos(1, h)` → `scroll(1)`，所以最后那次换行会把刚写的行顶上一行、底行留空
+  （实测 19 行屏打 20 行后的状态）。
+
+18.3 **断言了哪几屏（`tests/t_bios_screen.lua`，6 组 141 断言）**：
+
+- `bios.frame`：真实启动链（真 `/system/boot.lua` + `/system/kernel/init.lua`，sandbox root + 真
+  `PYROET-BOOT-OK-2` marker）的 **normal 首帧**。快照取在 `frame` **返回的那一瞬间**，因为链随后还会
+  继续打日志把它盖掉。断言 51x19 上：第 1 行 `Pyroet OS 0.2.0`、第 2 行 `kernel ok`、第 3 行
+  `normal journal none`、第 4–19 行**全空**、光标 (20,3)、`clear` 恰好 1 次、该帧自身 0 次 scroll；
+  接着断言**调用顺序**（banner 的 `write` 在 `clear` 之后）与**帧前的屏**（是 boot 日志：有
+  `STARTUP_PLAN action=normal journal=none tries=0`、没有 banner）；最后断言帧之后的日志落点：
+  第 3 行第 20 列起 `STARTUP_UI_READY`、第 4 行 `STARTUP_PERMS_TABLE apps=0 loaded=0 pending=0 bad=0`、
+  第 5 行 `STARTUP_LAUNCHER_MISSING name=launcher`、其后 `BOOT_COMMIT` / `STARTUP_COMMITTED`。
+- `bios.frame.trial`：同一帧的**试启动**分支，第 3 行 `trial journal applied`，且全屏找不到
+  `normal journal none`——两种分支靠格子区分，不靠日志。
+- `bios.no_system`：root 下**没有 `/system`** → bootloader fatal、首帧不跑、屏幕保留 5 行日志，逐行断言
+  `BOOT_NO_SYSTEM path=/t/ns/system why=missing` / `BOOT_FATAL reason=no_system` /
+  `BOOT_ACTION action=fatal` / `STARTUP_PLAN action=fatal journal=none tries=0` /
+  `STARTUP_FATAL reason=no_system`；第 6 行起空白、全屏**没有** `Pyroet OS `、`clear` 0 次。
+- `bios.starter`：根 starter 的失败文案（`say()` 前缀 `Pyroet OS: `）：
+  `Pyroet OS: cannot load /system/startup.lua` / `Pyroet OS: disk fault` /
+  `Pyroet OS: shell only. Run recovery/flash.lua to` + `reflash /system.`
+  （真实 `print` 在该空格处折行，故两条行断言 + 一条"两行拼回原句"的不变式）；`loadfile` 抛错与
+  `startup failed` 两条同法断言（折行位置随消息长度变，用空白归一化后的整屏匹配）；**成功路径一帧都不画**
+  （`write == 0`）。
+- `bios.frame.small`：10x4 屏上首帧按"`write` 不折行"截断（`Pyroet OS ` / `normal jou`），把 18.2 的
+  这条限制钉住，防止后来把折行塞进 `write` 悄悄改掉首帧。
+- `bios.screen`：harness 自检——18.2 的每条实测行为各一条断言（光标越界、clip 计数、颜色、blit 推进、
+  clear 不动光标、scroll、真 `print` 的折行与滚动、快照与调用记录）。
+
+18.4 **限制（写死，别指望它做更多）**：缓冲只实现启动链用到的 term 子集，**缺的方法会直接 Lua 报错**
+（不静默 nil，否则一个漏掉的 API 会表现为"画了个空白屏却通过"）；不做 monitor / window / 16 色以外的
+颜色映射；**没有 `term.getLine`**（真机也没有）；`write` 不折行是模拟真机而非缺陷，要断言整句话时用
+空白归一化（`flat`）；首帧之后的日志会覆盖第 3 行第 20 列起，所以"首帧"只认 `frame` 返回瞬间的快照，
+"最终屏"只认第 1/2 行与位置无关的 `find_row`。
+
+18.5 **测试口径（M2 实测）**：新增 `tests/screen.lua`（12,809 B）与 `tests/t_bios_screen.lua`
+（25,283 B），两者非 ASCII 计数 0；`tests/run.lua` 的 FILES 追加 `t_bios_screen`（`run-tests.ps1` 本就把
+`tests/*.lua` 整体 stage，**未改**）。离线 **4,138 pass / 0 fail / 201 groups**（T4 基线 3,997/195，
+**+141 断言 / +6 组**）。`tests/` 不进 `install.set`，`sizecheck.py` 不变：仍 **28 条**、TOTAL
+**458,100 B / SIZE_WARN / MARGIN 108,575**、`WINDOW_OK sum=658,100`。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -733,3 +799,4 @@ MARGIN 108,575**、`WINDOW_OK sum=658,100`（+9,720 B = `kernel/apps.lua` 28,804
 - 2026-11-01: **N1 关掉两条「已知限制」——`size` 运行时校验 + `net` 默认注册**（口径见 §16）。`kernel/ota.lua`（+3,566 B）：下载/`.part`/`move` 后三处比字节数，`.part` 不符在"没有文件落地"时 `boot.cleanup()` 后 `OTA_REJECT stage=verify reason=size file=.. got=.. want=..`（可 `retry()`），已有落地则 `OTA_FAIL stage=verify` + 回滚；`move` 进 `/system/` 后再量一次（`OTA_FAIL stage=install`）防截断。`kernel/installer.lua`（+3,854 B）：`SHA256SUMS` 第三列（两种列序）逐文件比对 + manifest `size` 整包总量（`manifest.lua` 不计，原始表从 `manifest.raw` 读），不符 `INSTALL_SIZE_BAD ...` + `INSTALL_FAIL ... err=size ...`、不落盘；两处缺省即跳过（向后兼容）。`ota/server.lua`（不进镜像）：构建（`getSize` vs 实际字节）/装载/应答前三点 fail-closed，`OTA_SERVER_BAD_FILE path=.. reason=size got=.. want=..`（装载拒绝理由由 `size_mismatch` 统一为 `size`）。`startup.lua`（+5,368 B）：仅当 `/etc/network.conf` 存在时注册 `net`（`P.register_net`），否则 `STARTUP_NET_SKIP reason=no_config`；`P.report_net` 在 `start_all()` 后记 `STARTUP_NET_READY` / `STARTUP_NET_DEGRADED`，模块缺失/`spec()` 抛错/注册被拒/启动失败全部只 degraded、不 reboot；`opts.services` 里的同名 `net` 优先于默认注册；顺序仍是权限表 → 注册 → 首帧 → launcher → commit。测试：新增 8 组 121 断言，离线 **3,379 pass / 0 fail / 176 groups**（O2 3,258/168）；TOTAL **414,566 B / SIZE_WARN / MARGIN 65,041**、`WINDOW_OK sum=614,566`；门禁与 `install.set` 未动；改动 lua 非 ASCII 计数 0。
 - 2026-11-01: **T1 图形安装器 `installer.app`**（口径见 §17）。新增 `system/system/installer.app/`（`manifest.lua` 1,079 + `main.lua` 32,735 = **33,814 B**，纯 ASCII，26x20）：扫 `/disk/apps`（无驱动器即 `no disk`）+ `/apps` + `/system/system`，行前缀 `d`/`i`/`s`，回车装/卸/拒，结果与失败文案上屏（`installed <name> <ver>`、`hash check failed`、`size check failed`、`cancelled`、`system app locked`、`installer unavailable`），`layout_selftest()` 与桌面/设置同一套规则；安装器对象只经**宿主桥**取得（`opts.installer` → `api.sys.install`/`api.sys.uninstall` → `api.installer`，平函数 `install(name) -> true, info | nil, err`），源码不含任何内核路径字面量。`install.set` 26 → **28 条**、TOTAL **448,380 B / SIZE_WARN / MARGIN 98,855**、`WINDOW_OK sum=648,380`。新增 `tests/t_installer_app.lua`（10 组 **391** 断言），`tests/run.lua` 的 FILES 追加；`tests/run-tests.ps1` 把 app stage 到 `/tests/installer.app` 并列入 `$required`（理由见 §17.8）；离线 **3,770 pass / 0 fail / 186 groups**（N1 3,379/176）。`tests/t_budget.lua` 的 `install_entries` 26 → 28 随清单同步（强度不变）。README 删掉「无 installer UI」这条限制、新增 §5.5 用法，§2.1/§5.4/§6.3/§7/§9.1/§10 的数字同步。**未接内核桥**：`api.sys` 仍只有四个函数，真机上 UI 显示 `installer unavailable`（§17.2 末尾）。
 - 2026-11-01: **T4 把 `installer.app` 真正接通**（口径见 §17.2/§17.9）。`kernel/apps.lua`：`A.SYS_FUNCTIONS` 增 `install`/`uninstall`/`list`（+6,336 B），后三个由运行时自己实现并按调用方 record 授权——`install`/`uninstall` 需 `fs.write`、`list` 需 `fs.read`，未授权 `nil, "capability denied: <cap>"` + `APP_CAP_DENIED`；包名白名单 `[%w_%-]+`/≤40 B（`..`、路径分隔、绝对路径、空、非字符串 → `nil, "bad name"`）；`uninstall` 对 `<system_root>/<name>.app` 一律 `nil, "system app"` + `APP_SYS_PROTECT name=..` 且不调安装器；无实例时 `nil, "installer unavailable"`（T1 文案）；日志 `APP_INSTALL name=.. ok=..` / `APP_UNINSTALL name=.. ok=..` / `APP_LIST n=..`。`system/startup.lua`：新增第 3b 步 `P.build_installer`（+2,345 B），构造 `/system/kernel/installer.lua` 实例并以 `apps.new({ installer = inst })` 注入，失败只记 `STARTUP_INSTALLER_UNAVAILABLE`、不阻塞启动。`installer.app`（+1,039 B）：`M.bridge` 的检测改为"桥对象是否存在"（`M.BRIDGE_FUNCTIONS = install/uninstall/list`），`installer unavailable` 只由桥完全缺失触发。新增 `tests/t_installer_bridge.lua`（9 组 227 断言，含真实安装器 + 真实 fs 的端到端与 UI 回车链路），离线 **3,997 pass / 0 fail / 195 groups**（T1 3,770/186）；`install.set` 仍 28 条、TOTAL **458,100 B / SIZE_WARN / MARGIN 108,575**、`WINDOW_OK sum=658,100`（+9,720 B）；改动 lua 非 ASCII 计数 0。
+- 2026-11-01: **M2 补上 PC 侧画面测试**（口径见 §18）。`CraftOS-PC 2.8.3` 没有 `term.getLine`，此前所有启动链套件都用 `frame` 桩，只证明首帧被调用、不证明画了什么。新增 `tests/screen.lua`：屏幕缓冲 harness，实现启动链用到的 term 子集、以 `_G.term` 替换让 ROM 的 `print`/`write` 落进缓冲（`S.install` / `S.with_term` 保证还原），语义按实测写死（`write` 不折行不夹光标、`clear` 不动光标、`blit` 推进光标、`scroll` 上移并清底、`print` 在底部 `write → setCursorPos(1,h) → scroll(1)`）。新增 `tests/t_bios_screen.lua`（6 组 **141** 断言）：normal 首帧（在 `frame` 返回瞬间快照：`Pyroet OS 0.2.0` / `kernel ok` / `normal journal none`，第 4–19 行空、光标 (20,3)、1 次 clear、帧前那屏是 boot 日志且无 banner、帧后日志从第 3 行第 20 列续写）、trial 首帧（`trial journal applied`，全屏无 `normal journal none`）、无 `/system` 的 fatal 屏（5 行 `BOOT_NO_SYSTEM`/`BOOT_FATAL`/`BOOT_ACTION`/`STARTUP_PLAN`/`STARTUP_FATAL`，无 banner）、根 starter 的三行失败文案（`Pyroet OS: cannot load /system/startup.lua`、`Pyroet OS: disk fault`、提示折成两行）、10x4 小屏截断、harness 自检。`tests/run.lua` 的 FILES 追加 `t_bios_screen`（`run-tests.ps1` 已按 `tests/*.lua` 整体 stage，**未改**）。离线 **4,138 pass / 0 fail / 201 groups**（T4 基线 3,997/195，**+141 断言 / +6 组**）；`install.set` 与 `sizecheck` 未动（28 条 / 458,100 B / MARGIN 108,575 / `WINDOW_OK sum=658,100`）；新增文件非 ASCII 计数 0。

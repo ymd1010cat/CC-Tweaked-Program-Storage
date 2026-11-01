@@ -502,7 +502,10 @@ pwsh -NoProfile -File pyroet-os/tests/run-tests.ps1
 脚本把镜像 stage 到 `pyroet-os/.tests/computer/20`（与真机同布局：`/system` + `/system/system/*.app`），
 headless 启动、读取 `/offline-report.txt` 判分，**PASS 后自动删除 staging**（`-Keep` 保留）。
 
-基线（v1.0.0 + N1 修正 + T1 安装器 UI）：**OFFLINE_PASS 3770 / FAIL 0 / GROUPS 186**。
+基线（v1.0.0 + N1 修正 + T1 安装器 UI + T4 + M2 画面测试）：**OFFLINE_PASS 4138 / FAIL 0 / GROUPS 201**。
+M2 之后新增的是 PC 侧渲染测试：`tests/screen.lua`（屏幕缓冲 harness，替换 `_G.term`）与
+`tests/t_bios_screen.lua`（首帧 / 试启动帧 / 无 `/system` 的 fatal 屏 / 根 starter 失败文案 / 10x4 小屏），
+细节见 `DECISIONS.md` §18。
 
 另有 P1 的 rpv 子集冒烟测试（可选）：
 

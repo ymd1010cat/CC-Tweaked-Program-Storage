@@ -261,6 +261,7 @@ fatal 只有三类：`no_system`（1）、`rollback_fail`（9/14）、写盘失�
 6. **§8 的体积影响估算**：估算 `+13,600 B`、TOTAL ≈356,975；实测 P6-2 后 TOTAL **392,500 B**，P6-3 后 **401,640 B / SIZE_WARN**、`WINDOW_OK sum=601,640`（`install.set` 26 条，含 1,071 B 的根 starter）。门禁本身在 G1 已放宽为三层（硬门禁 629,145 / 目标线 349,525 / 更新窗口 900,000），见 `DECISIONS.md` §8.4。
 7. **§9.5 断言数**：估算 +700；实际 P6-2 达成 2,651 pass / 149 groups，P6-3 再 +229 断言 / +9 组到 **2,880 pass / 0 fail / 158 groups**（新增 `tests/t_layout.lua`，三个 recovery 套件按文件集模型重写）。
 8. **§10 第 2 条（是否保留槽指针兼容）在 UI 侧也关闭了（G2，2026-10-29）**：`launcher.app` 与 `settings.app` 里"先读槽指针、再读按槽 `boot.ok`/`.image`、都没有就显示 `slot ?`"的历史兜底已整段删除，两者只读全局 `/boot.ok` 的 `version` 与 `manifest_sha` 前 8 位（`manifest_sha=none` 时只显示版本）；`DECISIONS.md` §10.5/§10.6/§13.9 已按同一口径同步。
+9. **§9 测试计划的一处缺口已补（M2，2026-11-01）**：§9 只覆盖 bootloader/OTA 的行为，**没有任何一条断言启动画面本身**——套件都传 `frame = function() return true end` 桩，`CraftOS-PC 2.8.3` 又没有 `term.getLine`，画上去的格子读不回来。现补 `tests/screen.lua`（字符格缓冲 harness，替换 `_G.term` 后 ROM 的 `print` 直接落进缓冲，语义按实测写死）+ `tests/t_bios_screen.lua`（6 组 141 断言：normal/trial 首帧的逐行逐列文案、无 `/system` 的 fatal 屏、根 starter 的三行失败文案、小屏截断、harness 自检）。口径与限制见 `DECISIONS.md` §18；`tests/` 不进镜像，门禁与 `install.set` 不受影响。
 
 ## 12. §10 未决问题的结论（回写，2026-11-01；上面 §10 原样保留）
 

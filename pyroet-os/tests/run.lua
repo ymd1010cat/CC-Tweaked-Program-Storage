@@ -39,7 +39,7 @@ local FILES = { "t_boot", "t_kernel", "t_apps", "t_startup",
     "t_permissions", "t_launcher", "t_settings", "t_desktop",
     "t_installer", "t_installer_app", "t_installer_bridge", "t_ota", "t_ota_server",
     "t_recovery_proto", "t_recovery_flash", "t_recovery_bootstrap",
-    "t_layout", "t_budget" }
+    "t_layout", "t_budget", "t_bios_screen" }
 
 for i = 1, #FILES do
     local name = FILES[i]
