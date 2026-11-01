@@ -6,7 +6,7 @@
 ## 内容
 
     pkg/                        按会话最终文件树还原的包内容
-        pylib/pythonlib.lua     解释器本体（Lua 手写，3798 行，130760 -> 136733 字节，见 MANIFEST.md 的 post-export fix）
+        pylib/pythonlib.lua     解释器本体（Lua 手写，4021 行，130760 -> 144913 字节，见 MANIFEST.md 的 post-export fix）
         pylib/*.py              解释器 import 的 Python 模块（15 个，未改动）
         pyrepl.lua              REPL 前端（会话里写好但尚未集成进 psh）
         py.lua                  被 pythonlib.lua 取代的早期解释器（仅留档）
@@ -15,9 +15,10 @@
         run-tests.ps1           入口：staging -> CraftOS-PC headless -> PASS/FAIL
         startup.lua, run.lua    引导与驱动（自动发现 t_*.lua）
         harness.lua             断言/日志工具（每行同时写 logs/suite.log）
-        t_core.lua              核心语言特性（算术/字符串/容器/控制流/函数/类/异常/print/None）
+        t_core.lua              核心语言特性（算术/字符串/容器/控制流/函数/类/异常/异常类/print/None）
         t_slices.lua            切片下标（含"不支持必须报错"的 4 条）
-        t_modules.lua           15 个 .py 的 import 覆盖（ok/parse_error/runtime_error）
+        t_modules.lua           15 个 .py 的 import 覆盖（ok/parse_error/runtime_error）+ 三个旧失败模块的功能验证
+        t_os_path.lua           内置 os.path 与 dotted import（os-path:*）
         t_legacy.lua            pkg/py.lua（旧版）的状态
         t_perf.lua              性能实测 + 将来优化必须保持的语义网
         COVERAGE.md             覆盖表（逐模块状态 + 语法点现状 + 已知缺口）
@@ -46,16 +47,21 @@
 `/logs/suite.log`（CraftOS 对重定向 stdout 做块缓冲，只看 stdout 会误判）。
 PASS 自动删 staging；失败保留；`-KeepStaging` 成功后也保留。
 
-当前基线：**PYLIB_PASS 188 / PYLIB_FAIL 0 / PYLIB_GROUPS 27**（实测整跑约 2 秒，含 CraftOS 启动）。
+当前基线：**PYLIB_PASS 247 / PYLIB_FAIL 0 / PYLIB_GROUPS 34**（实测整跑约 2 秒，含 CraftOS 启动）。
 
 ## 已验证
 
 - 本轮环境限制：本机没有 `lua`/`lua5.1`/`lua54`/`luajit` 可执行文件，所以"在
   lua51/52/53/54/luajit21 下都能编译"这条**无法在本轮复验**（那是导出时的会话记录）；
   本轮的实际验证环境是 CraftOS-PC 的 Lua 5.2，套件在它上面完整跑通。
-- 15 个 `.py` 都能被子集解析器解析（0 个 `parse_error`）。其中 **12 个能 import 并执行
-  模块体**，3 个落在 `runtime_error`（argparse、copy：内置异常不能作基类；pathlib：
-  缺 `os.path`）。逐条原因见 `tests/COVERAGE.md` §1。
+- 15 个 `.py` 都能被子集解析器解析（0 个 `parse_error`），并且**全部能 import 并执行
+  模块体**（15 ok / 0 runtime_error）。上一轮卡住的三个模块本轮补齐：argparse、copy 的
+  `class X(Exception)`，pathlib 的 `import os.path`。逐条原因见 `tests/COVERAGE.md` §1。
+- 异常类模型：`class MyError(Exception): pass` 可用作基类，`raise MyError("x")` 抛出的
+  仍是原来的 `{__pyexception, type, value}` 表，`except MyError` / `except Exception`
+  （父类捕获子类）/ 裸 `except` / `except ... as e` / `isinstance(e, X)` / `raise MyError`
+  （类本身）都可用；`str(e)`/`repr(e)` 文案与上一轮完全一致（`ValueError: boom`）。
+  `os.path` 是新增的内置模块，最小面上只有 join/basename/dirname/splitext/exists/isfile/isdir。
 - 解释器核心语言特性在 CraftOS 里实测可用：算术与 print、字符串/列表/字典/元组、
   推导式、闭包与 `nonlocal`/`global`、默认参数、类与 `__init__`、继承、
   `try/except/finally`、`while`/`if`/`for`/`break`/`continue`、f-string。
@@ -66,16 +72,21 @@ PASS 自动删 staging；失败保留；`-KeepStaging` 成功后也保留。
 
 ## 已知限制（交付时请留意）
 
-- **`class X(Exception)` 不支持**：内置异常名是构造函数而不是类，报
-  `base class not found or not a class: Exception`（argparse.py:80、copy.py:38）。
-  修它要同时改内置异常的数据模型、`raise`、`except` 三处语义，超出"低风险缺口"范围，
-  本轮只把它写成断言并记录根因（`DECISIONS.md` §3.1）。
-- **`pathlib.py` 无法 import**：`import os.path` 找不到模块；内置模块表只有
-  `math/random/time/os`（`DECISIONS.md` §3.2）。
+- **异常子类的自定义 `__init__` 不执行**：`class E(Exception): pass` 是推荐写法；
+  如果写了 `def __init__(self, code, msg)`，`E(1, "x")` 只把第一个参数当作异常值
+  （`str(e)` 里显示的就是它）。异常值也不支持属性访问（`e.value`/`e.args` 报
+  `object has no attribute`），要拿类型和消息用 `str(e)`。见 `tests/COVERAGE.md` §2。
+- **`os.path` 只有最小面**：join/basename/dirname/splitext/exists/isfile/isdir 七个函数，
+  没有 abspath/normpath/isdir 之外的判定、没有 sep/altsep；这是 pylib 的 `.py` 真正用到的
+  全部（`pathlib.py`）。CraftOS 路径固定 `/` 分隔，所以不做 Windows 语义。
 - **切片赋值不支持**（`l[0:1] = [...]` 抛 `TypeError: slice assignment is not supported`）；
   **dict 切片不支持**（`TypeError: object is not sliceable`）；对带 `__getitem__` 的实例
   也不传 `slice` 对象（子集没有 `slice` 类型）。
 - **`None` 落在 `*args` 里会被丢掉**：保留洞会让 Lua 的 `#` 未定义，连 `len()`/下标都不可用。
+- **字典的值不能是 `None`**：`{"a": None}` / `d["a"] = None` 会让键消失（Lua 表存不了 nil），
+  所以 `argparse.parse_args` 只有 `action="store_true"` 这类分支能跑，`type=int` 或省略
+  `action` 的 spec 会在 `spec["action"]` 处报 `KeyError: action`。这是字典限制，与异常类 /
+  `os.path` 的补齐无关（两者都已完成）。
 - **`type(x)` 返回类名字符串**（`"int"`、`"tuple"`），不是类对象；`l[99] = x` 不检查范围。
   都列在 `tests/COVERAGE.md` §2。
 - **性能槽位化未做（押后）**，附实测依据：宿主 VM 上字符串键哈希访问并不比数组槽慢

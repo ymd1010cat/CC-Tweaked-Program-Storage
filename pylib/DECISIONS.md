@@ -12,8 +12,8 @@
 | `print(None)` 打印空行 | **已修** | `print(f())`（f 无返回值）会静默丢一个参数 |
 | 调用参数里的 `None` 被丢弃 | **已修** | `f(1, None, 3)` 会把 3 当成第二个参数 |
 | 负下标 `l[-1]` | **已修** | 与切片不一致（切片已归一化负界），改 3 处、可完整验证 |
-| `class X(Exception)` | **未修** | 要改内置异常的数据模型 + `raise`/`except` 三处语义，超出"低风险缺口"范围 |
-| `pathlib.py` 的 `os.path` | **未修** | 缺模块，不是语法缺口；补 `os.path` 等于新增内置模块语义 |
+| `class X(Exception)` | **已实现**（本轮） | 内置异常改成类表 + `raise`/`except`/`isinstance` 走基类链，复用原有 `makeException` 表示（§3.1） |
+| `pathlib.py` 的 `os.path` | **已实现**（本轮） | 新增内置 `os.path` 最小面 7 个函数 + dotted import 按 Python 绑定（§3.2） |
 | 性能槽位化 | **押后** | 实测宿主 VM 上哈希访问不比数组槽快，收益上限约 1–3%（见 §4），重写面却覆盖全部名字解析路径 |
 
 ## 1. 切片下标（已实现）
@@ -86,25 +86,83 @@ COVERAGE.md §2。**行为变化**：位置参数里的 None 现在按 Python �
 **行为变化**：`l[-1]` 从抛错变成返回最后一个元素；越界赋值仍不检查范围（沿用原语义，
 记录在 COVERAGE.md）。
 
-## 3. 未修的两个缺口（保持 fail-loud）
+## 3. 上一轮的两个缺口（本轮已实现）
 
-### 3.1 `class X(Exception)` → `base class not found or not a class: Exception`
+上一轮这两条被列为"未修、保持 fail-loud"；本轮按用户拍板补齐，全部落成断言，
+只改 `pythonlib.lua`，`pkg/pylib/*.py` 零改动。
 
-内置异常名在 `getBuiltins()` 里是构造**函数**（`function(m) return makeException("Exception", m) end`），
-而 `execClass` 要求基类 `__pytype == "class"`。`except` 的匹配又完全是**字符串比较**
-（`handler.excType == tryException.type`），`raise` 只认 `__pyexception` 表。
-所以要让 `class X(Exception)` 真正可用，需要同时改三处：把内置异常改成可调用的类表、
-让 `raise <实例>` 转成 `makeException(类名, …)`、让 `except` 认识继承链。这是新增语义
-（不是修缺口），一旦半做就会出现"能 import 但 raise 出来的是 RuntimeError"的更坏状态，
-因此本次只把它写成断言（`core:exception-subclass-gap`）并在覆盖表里标明根因。
+### 3.1 异常类模型：`class X(Exception)`（已实现）
 
-受影响：`argparse.py:80`、`copy.py:38`（两个模块的其余部分都正常）。
+**原缺口**：内置异常名在 `getBuiltins()` 里是构造**函数**
+（`function(m) return makeException("Exception", m) end`），而 `execClass` 要求基类
+`__pytype == "class"`，所以 `class ArgumentError(Exception)` 直接报
+`base class not found or not a class: Exception`（argparse.py:80、copy.py:38）。
 
-### 3.2 `pathlib.py` 的 `import os.path`
+**做法（复用原有异常表示，不另建一套）**：
 
-`importModule` 的内置表只有 `math/random/time/os`，且只按全名精确匹配（`os.path`
-不是 `os` 的属性回退），`/pylib/os/path.py` 也不在导出里。补它等于新增内置模块语义，
-留待需要时明确决定（补 `__init__.py` 或给 `importModule` 加"父模块属性回退"）。
+1. `makeException(excType, value, cls)` 多一个可选的 `cls`；抛出值仍是
+   `{__pyexception=true, type=<类名字符串>, value=..., cls=...}`，`isException()`/
+   `excStr()` 的判定与文案一字未改（`raise`/`except`/`as`/`assert` 的既有 5 条断言原样通过）。
+2. 新增 `excClass(name)`：按需创建/复用内置异常类表（`__pytype="class"`、
+   `__pyexcclass=true`），基类链写在 `bases` 里：BaseException ← Exception ←
+   ValueError/TypeError/RuntimeError/ZeroDivisionError/IndexError/KeyError/NameError/
+   ImportError/AssertionError/StopIteration/AttributeError/IOError，
+   另有 NotImplementedError ← RuntimeError。这些表是**进程级共享单例**，
+   所以"模块里定义的异常类在本体里 catch"身份一致（解释器本来就共享内置表）。
+   `getBuiltins()` 里原来的 14 个构造闭包换成这 14 个类表。
+3. `execClass`：任一基类是异常类时，新类也标 `__pyexcclass`，于是
+   `class MyError(Exception): pass` 的调用走异常构造，不建实例。
+4. `evalCall`：异常类被调用 → `makeException(类名, 第一个参数, 该类)`。
+   自定义 `__init__` 不执行（写进 COVERAGE 的已知限制），`pass` 体子类不受影响。
+5. `execTry`：`except` 的名字先在本作用域 `lookup`，命中异常类就按 `isSubclass` 沿基类链
+   匹配——`except Exception` 接住所有子类、`except BaseException` 接住全部、兄弟类不误接；
+   名字解析不到类时保留原来的字符串比较规则（含 `Exception`/`BaseException` 特例），
+   行为向后兼容。
+6. `raise`：`raise X`（类本身而不是实例）也合法，抛无消息实例；
+   `isinstance(e, X)` 走同一条链（异常值不是 instance，所以在 `isinstance` 开头单独分支）。
+
+**行为变化**：`class X(Exception)` 从报错变成可用；`print(ValueError)` 从 `<function>`
+变成 `<class 'ValueError'>`（更接近 Python）。**不变**：`ValueError("boom")`、
+`str(e)`/`repr(e)`、`except ValueError`、`assert`、`1/0` 的文案与语义
+（`core:exception-class-values` 5 条专门钉死文案）。
+
+**验证**：`core:exception-classes` 11 条（子类捕获/父类捕获/捕获顺序/裸 except/
+`as` 绑定/`raise X`）、`core:exception-isinstance` 4 条、`core:exception-class-values`
+5 条；argparse、copy 的 `modules:functional` 行为断言（`ArgumentError`/`error` 都是
+`Exception` 子类）。
+
+### 3.2 内置 `os.path`（已实现）
+
+**原缺口**：`importModule` 的内置表只有 `math/random/time/os`，`pathlib.py:3` 的
+`import os.path as _osp` 报 `ImportError: No module named 'os.path'`。
+
+**做法（最小面，不写假的完整实现）**：
+
+1. 内置模块表新增 `["os.path"]`，只实现 pylib 真正用到的 7 个函数：
+   `join` / `basename` / `dirname` / `splitext` / `exists` / `isfile` / `isdir`。
+   前四个按 CPython 的 "/" 规则（join 里绝对路径覆盖已累积的前缀、basename 去尾斜杠、
+   dirname 到根、splitext 只切 basename 且前导点不算扩展名、尾点保留在 root 里）；
+   后三个直接查 CraftOS 的 `fs`。`splitext` 返回 **2 元组表**而不是两个 Lua 返回值：
+   多返回值一旦出现在表达式里就被截断，而 pathlib.py 正是写 `splitext(...)[1]`。
+2. `os` 模块的 scope 增加 `path = OS_PATH_MODULE`（同一个表），所以 `import os` 之后
+   `os.path.join()` 也能用，与 Python 一致。
+3. `Import` 的 dotted 名字绑定改成 Python 语义：裸 `import os.path` 只绑定顶层包 `os`，
+   并把子模块挂成它的属性。（之前把 `os` 直接绑成子模块，`os.path.join` 反而失败。）
+   带 `as` 的别名分支不变，`from os.path import x` 仍走 `FromImport`。
+4. 没有补 `os.makedirs/mkdir/remove/rmdir/rename`（pathlib 的写方法会调用）：
+   那属于 `os` 而不是 `os.path`，也不是本轮缺口；`pathlib` 的只读方法
+   （join/name/stem/suffix/parent/with_suffix/exists/is_file/is_dir）已全部可跑。
+
+**验证**：`os-path:join` 7 条、`os-path:basename-dirname` 7 条、`os-path:splitext` 4 条、
+`os-path:filesystem` 5 条（真查 `/pylib/pathlib.py`）、`os-path:imports` 5 条
+（别名/from-import/`import os` 的 `os.path`/裸 `import os.path`），共 28 条；
+另有 pathlib 的 8 条行为断言。
+
+**遗留（本轮不修，已记录）**：`argparse.parse_args` 只有 `action="store_true"` 分支能跑；
+`type=int` 或省略 `action` 的 spec 会在 `spec["action"]` 处报 `KeyError: action`，
+根因是解释器字典存不了 `None`（`{"action": None}` 的键直接消失），属字典限制，
+与异常类/`os.path` 无关。修它要动字典存储（加 None 哨兵或旁路表），影响面远大于本轮缺口，
+且不属于"异常类 + os.path"的验收范围，因此只记录在 `tests/COVERAGE.md` §2 与 README。
 
 ## 4. 性能槽位化：押后（有实测依据）
 
@@ -157,9 +215,12 @@ while+s+i 那一轮每迭代约 10 次名字读写，2450ns 里宿主原语只�
   `manifest` 的哈希与导出时一致（未被改动）。
 - `MANIFEST.md` 追加"post-export fixes"小节记录新字节数/行数/原因；导出段的历史数字
   保持原样（那是还原记录，且比磁盘实测少 1 字节，属导出脚本口径差，不追改）。
+- 本轮（异常类 + `os.path`）后 `pythonlib.lua` 为 144913 字节 / 4021 行，`SHA256SUMS`
+  里的哈希再算一次（`343c78bd4c50378e0afdeb29ce3585898b33b5e94e1f549ed39c999a0a2b330b`）；
+  其余 15 个 `.py`、`py.lua`、`pyrepl.lua`、`manifest` 未改动，哈希不变。
 
 ## 6. 复现
 
-    pwsh -NoProfile -File pylib\tests\run-tests.ps1            # PYLIB_PASS 188 / FAIL 0
+    pwsh -NoProfile -File pylib\tests\run-tests.ps1            # PYLIB_PASS 247 / FAIL 0 / GROUPS 34
     pwsh -NoProfile -File pylib\tests\run-tests.ps1 -KeepStaging
     Get-Content pylib\.tests\computer\20\logs\suite.log        # GROUP / NOTE PERF / MODULE 全量

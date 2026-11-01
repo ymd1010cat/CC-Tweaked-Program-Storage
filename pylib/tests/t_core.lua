@@ -125,10 +125,62 @@ H.expectError('assert False', "AssertionError", "assert False")
 H.expect('try:\n    x = 1 / 0\nexcept ZeroDivisionError as e:\n' ..
     '    print("zde")', "zde", "except ... as name")
 
--- Documented gap, asserted on purpose: the subset's builtin exception names are
--- constructor functions, not classes, so subclassing one fails. COVERAGE.md
--- lists this under "known gaps"; flipping this assertion is the acceptance
--- criterion for fixing it.
-H.group("core:exception-subclass-gap")
-H.expectError('class MyError(Exception):\n    pass', "base class not found",
-    "class MyError(Exception) is rejected (known gap)")
+-- Exception classes: builtin exception names are class tables, so they can be
+-- used as a base class. What `raise` throws is still the same
+-- {__pyexception, type, value} table, so str(e)/repr(e) text is unchanged.
+H.group("core:exception-classes")
+H.expect('class MyError(Exception):\n    pass\ntry:\n' ..
+    '    raise MyError("boom")\nexcept MyError:\n    print("caught")',
+    "caught", "class MyError(Exception) can be caught by its own name")
+H.expectError('class MyError(Exception):\n    pass\nraise MyError("boom")',
+    "MyError: boom", "raising a subclass keeps the class name and message")
+H.expect('class MyError(Exception):\n    pass\ntry:\n' ..
+    '    raise MyError("boom")\nexcept Exception:\n    print("parent")',
+    "parent", "except Exception catches a subclass")
+H.expect('class A(Exception):\n    pass\nclass B(A):\n    pass\ntry:\n' ..
+    '    raise B("x")\nexcept A:\n    print("A")\nexcept Exception:\n' ..
+    '    print("E")', "A", "the first matching base in the chain wins")
+H.expect('class MyError(Exception):\n    pass\ntry:\n' ..
+    '    raise MyError("x")\nexcept ValueError:\n    print("wrong")\n' ..
+    'except MyError:\n    print("right")', "right",
+    "an unrelated exception class does not catch")
+H.expect('class Plain:\n    pass\ntry:\n    raise ValueError("x")\n' ..
+    'except Plain:\n    print("wrong")\nexcept Exception:\n    print("ok")',
+    "ok", "a non-exception class in except never matches")
+H.expect('try:\n    raise KeyError("k")\nexcept BaseException:\n' ..
+    '    print("base")', "base", "except BaseException catches everything")
+H.expect('try:\n    raise BaseException("b")\nexcept Exception:\n' ..
+    '    print("no")\nexcept BaseException:\n    print("base")', "base",
+    "except Exception does not catch BaseException itself")
+H.expect('class MyError(Exception):\n    pass\ntry:\n' ..
+    '    raise MyError("x")\nexcept:\n    print("bare")', "bare",
+    "a bare except still catches an exception class")
+H.expect('try:\n    raise ValueError("v")\nexcept ValueError as e:\n' ..
+    '    print(e)', "ValueError: v",
+    "except ... as name binds the value unchanged")
+H.expectError('class MyError(Exception):\n    pass\nraise MyError', "MyError",
+    "raising the class itself raises an instance without a message")
+
+H.group("core:exception-class-values")
+-- str()/repr() text must stay exactly what it was before exception classes.
+H.expect('print(ValueError("boom"))', "ValueError: boom",
+    "str() of an exception value")
+H.expect('print(str(ValueError()))', "ValueError",
+    "str() of an exception without a message")
+H.expect('print(repr(ValueError("x")))', "ValueError: x",
+    "repr() of an exception value")
+H.expect('print(Exception("plain"))', "Exception: plain",
+    "the base Exception behaves the same way")
+H.expect('print(ValueError)', "<class 'ValueError'>",
+    "an exception name is a class object")
+
+H.group("core:exception-isinstance")
+H.expect('print(isinstance(ValueError("x"), ValueError))', "True",
+    "isinstance sees its own exception class")
+H.expect('print(isinstance(ValueError("x"), TypeError))', "False",
+    "isinstance is false for a sibling class")
+H.expect('class MyError(Exception):\n    pass\n' ..
+    'print(isinstance(MyError("x"), Exception))', "True",
+    "isinstance walks the exception base chain")
+H.expect('print(isinstance(ValueError("x"), int))', "False",
+    "an exception value is not an instance of an unrelated class")

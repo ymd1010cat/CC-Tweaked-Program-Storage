@@ -15,18 +15,18 @@
 local H = ...
 
 local EXPECTED = {
-    argparse = "runtime_error",   -- class ArgumentError(Exception): no class bases
+    argparse = "ok",              -- class ArgumentError(Exception) now works
     cc = "ok",                    -- needs the lua()/lua_call() builtins
     cc_utf8 = "ok",
     collections = "ok",
-    copy = "runtime_error",       -- class Error(Exception): no class bases
+    copy = "ok",                  -- class Error(Exception) now works
     dataclasses = "ok",
     datetime = "ok",
     enum = "ok",
     functools = "ok",
     itertools = "ok",
     json = "ok",
-    pathlib = "runtime_error",    -- import os.path: not in the builtin set
+    pathlib = "ok",               -- import os.path: builtin module now exists
     string = "ok",
     sys = "ok",
     typing = "ok",
@@ -132,3 +132,33 @@ H.expect('import math\nprint(math.floor(2.9))', "2", "builtin math module")
 H.expect('import json\ncode = json.dumps({"a": 1})\n' ..
     'print(json.loads(code)["a"])', "1", "json round trip")
 H.expectError('import nosuchmod', "No module named", "unknown module import")
+
+-- The three modules that used to stop at import time are exercised for real
+-- below: import success alone would not prove the exception-class model or the
+-- os.path surface actually work.
+H.expect('import argparse\np = argparse.ArgumentParser(description="demo")\n' ..
+    'p.add_argument("--count", help="how many")\nprint(p.format_help())',
+    "demo\n  --count  how many", "argparse: parser + add_argument + help")
+H.expect('import argparse\nprint(isinstance(argparse.ArgumentError("x"), ' ..
+    'Exception))', "True", "argparse: ArgumentError is an Exception subclass")
+H.expect('import argparse\np = argparse.ArgumentParser()\n' ..
+    'p.add_argument("--verbose", action="store_true")\n' ..
+    'ns = p.parse_args(["--verbose"])\nprint(ns.verbose)', "True",
+    "argparse: parse_args with action=store_true populates the namespace")
+H.expect('import copy\nl = [1, 2]\nm = copy.copy(l)\nm.append(3)\n' ..
+    'print(l)\nprint(m)', "[1, 2]\n[1, 2, 3]", "copy: shallow copy is a new list")
+H.expect('import copy\nd = {"a": [1]}\ne = copy.deepcopy(d)\n' ..
+    'e["a"].append(2)\nprint(d["a"])\nprint(e["a"])', "[1]\n[1, 2]",
+    "copy: deepcopy copies nested lists")
+H.expect('import copy\nprint(isinstance(copy.error("x"), Exception))',
+    "True", "copy: error alias is an Exception subclass")
+H.expect('import pathlib\np = pathlib.PurePath("/a/b/c.txt")\n' ..
+    'print(p.name)\nprint(p.stem)\nprint(p.suffix)\nprint(p.parent)',
+    "c.txt\nc\n.txt\n/a/b", "pathlib: properties via os.path")
+H.expect('import pathlib\nprint(pathlib.PurePath("/a", "b.py"))',
+    "/a/b.py", "pathlib: multi-part join via _osp.join(*list)")
+H.expect('import pathlib\n' ..
+    'print(pathlib.Path("/pylib/pathlib.py").exists())\n' ..
+    'print(pathlib.Path("/pylib/pathlib.py").is_file())\n' ..
+    'print(pathlib.Path("/nope-xyz").exists())', "True\nTrue\nFalse",
+    "pathlib: Path queries the real filesystem")

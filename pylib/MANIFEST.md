@@ -33,9 +33,10 @@ Not imported by the interpreter, left out: gen_rsa.py, geometry.py
 
 `pylib/pythonlib.lua` was modified after the export, so the byte/line numbers in
 the "interpreter" section above are the historical extraction record. Measured
-now: 136733 bytes, 3798 lines (was 130760 / 3647). Everything else is untouched -
-the 15 `pylib/*.py`, `pyrepl.lua` and `manifest` hash to the same SHA256 as at
-export time.
+now (after the exception-class and os.path round): 144913 bytes, 4021 lines
+(was 130760 / 3647; the previous round left it at 136733 / 3798). Everything
+else is untouched - the 15 `pylib/*.py`, `py.lua`, `pyrepl.lua` and `manifest`
+hash to the same SHA256 as at export time.
 
 Reasons (full write-up in DECISIONS.md):
 
@@ -57,6 +58,20 @@ Reasons (full write-up in DECISIONS.md):
    A `None` inside `*args` is still dropped (documented in tests/COVERAGE.md).
 5. negative subscripts (`l[-1]`) raised IndexError while slices already accepted
    negative bounds; both now normalise through `pyIndexPos`.
+6. exception classes - the builtin exception names were constructor *functions*,
+   so `class ArgumentError(Exception)` failed in `execClass` with "base class
+   not found or not a class: Exception" and argparse.py / copy.py could not be
+   imported. They are now real class tables (`excClass`, shared singletons with
+   a BaseException/Exception base chain), `raise`/`except`/`isinstance` walk that
+   chain, and `makeException(type, value, cls)` keeps the thrown value exactly
+   the same table as before, so `str(e)`/`repr(e)` text did not change. Also
+   makes `raise SomeErrorClass` (the class, not an instance) legal.
+7. builtin `os.path` - `import os.path as _osp` (pathlib.py:3) raised
+   `ImportError: No module named 'os.path'`. Minimal module added with the seven
+   functions pylib calls (join/basename/dirname/splitext/exists/isfile/isdir,
+   CPython "/" rules; splitext returns a 2-tuple because pathlib indexes `[1]`).
+   `os` now exposes it as `os.path`, and a plain `import os.path` binds the top
+   package like Python instead of binding the submodule to the name `os`.
 
 `SHA256SUMS` was regenerated (new `pythonlib.lua` hash) and its stale
 `legacy-py.lua` row was renamed to `py.lua`: the file was never renamed on disk,

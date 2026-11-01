@@ -171,6 +171,97 @@ local py = {}
 local MODULE_CACHE = {}
 local PYLIB_PATH = "/pylib"
 
+-- ---------- os.path ----------
+-- Minimal surface: exactly what pylib/*.py calls (pathlib.py uses
+-- join/basename/dirname/splitext/exists/isfile/isdir). CraftOS paths are
+-- always "/"-separated, so there is no sep/altsep, no Windows drive handling
+-- and no normcase/abspath. The rules below match CPython for the "/" case.
+local function pathBase(p)
+    p = tostring(p)
+    local trimmed = p:gsub("/+$", "")
+    if trimmed == "" then return "" end
+    return trimmed:match("([^/]*)$")
+end
+
+local function pathDir(p)
+    p = tostring(p)
+    local trimmed = p:gsub("/+$", "")
+    if trimmed == "" then
+        if p:sub(1, 1) == "/" then return "/" end
+        return ""
+    end
+    local cut = trimmed:match("^.*()/")
+    if not cut then return "" end
+    if cut == 1 then return "/" end
+    return trimmed:sub(1, cut - 1)
+end
+
+-- join(): an absolute later part replaces the accumulated prefix (CPython).
+local function pathJoin(...)
+    local count = select("#", ...)
+    local out = ""
+    for i = 1, count do
+        local piece = tostring((select(i, ...)))
+        if piece:sub(1, 1) == "/" then
+            out = piece
+        elseif out == "" then
+            out = piece
+        elseif out:sub(-1) == "/" then
+            out = out .. piece
+        else
+            out = out .. "/" .. piece
+        end
+    end
+    return out
+end
+
+-- splitext(): only the basename is split, a leading dot does not start an
+-- extension, and a trailing dot is part of the root ("a." -> ("a.", "")).
+-- Returns a 2-tuple table (not two Lua values): a multi-value return would be
+-- truncated as soon as the call sits inside an expression, e.g.
+-- `splitext(p)[1]`, which is exactly how pathlib.py uses it.
+local function pathSplitExt(p)
+    p = tostring(p)
+    local base = p:match("([^/]*)$") or p
+    local dot = nil
+    for i = #base, 2, -1 do
+        if base:sub(i, i) == "." then dot = i; break end
+    end
+    local tuple = {__pytype = "tuple"}
+    if not dot or dot == #base then
+        tuple[1] = p
+        tuple[2] = ""
+        return tuple
+    end
+    tuple[1] = p:sub(1, #p - (#base - dot + 1))
+    tuple[2] = base:sub(dot)
+    return tuple
+end
+
+local function pathExists(p)
+    return fs.exists(tostring(p)) == true
+end
+
+local function pathIsDir(p)
+    p = tostring(p)
+    return fs.exists(p) == true and fs.isDir(p) == true
+end
+
+local function pathIsFile(p)
+    p = tostring(p)
+    return fs.exists(p) == true and fs.isDir(p) ~= true
+end
+
+local OS_PATH_MODULE = {__pytype="module", __name="os.path", __scope={
+    basename = pathBase,
+    dirname = pathDir,
+    join = pathJoin,
+    splitext = pathSplitExt,
+    exists = pathExists,
+    isfile = pathIsFile,
+    isdir = pathIsDir,
+}}
+
 local BUILTIN_MODULES = nil
 local function getBuiltinModules()
     if BUILTIN_MODULES then return BUILTIN_MODULES end
@@ -196,7 +287,11 @@ local function getBuiltinModules()
         ["os"] = {__pytype="module", __name="os", __scope={
             getcwd=function() return "/" end,
             listdir=function(p) return fs.list(p or "/") end,
+            -- same object as the "os.path" module: `import os` followed by
+            -- `os.path.join(...)` behaves like Python instead of failing.
+            path=OS_PATH_MODULE,
         }},
+        ["os.path"] = OS_PATH_MODULE,
     }
     return BUILTIN_MODULES
 end
@@ -205,8 +300,13 @@ end
 -- 2. EXCEPTION HELPERS
 -- ============================================================
 
-local function makeException(excType, value)
-    return {__pyexception = true, type = excType, value = value}
+-- `cls` is the exception class the value was raised from (nil for the values
+-- built by the interpreter itself, e.g. IndexError). It is only used to walk
+-- the inheritance chain in except/isinstance; the thrown value is still the
+-- same {__pyexception, type, value} table as before, so isException()/excStr()
+-- and every existing except clause see exactly what they used to.
+local function makeException(excType, value, cls)
+    return {__pyexception = true, type = excType, value = value, cls = cls}
 end
 local function isException(x)
     return type(x) == "table" and x.__pyexception == true
@@ -1592,6 +1692,69 @@ local function isSubclass(cls, base)
     return false
 end
 
+-- ---------- exception classes ----------
+-- Builtin exception names are class tables, so `class MyError(Exception):
+-- pass` works, `except Exception` catches subclasses and isinstance() sees the
+-- hierarchy. `raise` keeps throwing the same {__pyexception, ...} table: the
+-- class only adds the inheritance link, and `type` stays the class-name
+-- string, so str(e)/repr(e) text is unchanged.
+--
+-- The tables are created once per name and shared by every interpreter (the
+-- builtin module/name tables already are), which is what makes isSubclass
+-- identity work across module interpreters.
+local EXC_CLASSES = {}
+local EXC_PARENTS = {
+    ["BaseException"] = false,
+    ["Exception"] = "BaseException",
+    ["ValueError"] = "Exception",
+    ["TypeError"] = "Exception",
+    ["RuntimeError"] = "Exception",
+    ["NotImplementedError"] = "RuntimeError",
+    ["ZeroDivisionError"] = "Exception",
+    ["IndexError"] = "Exception",
+    ["KeyError"] = "Exception",
+    ["NameError"] = "Exception",
+    ["ImportError"] = "Exception",
+    ["AssertionError"] = "Exception",
+    ["StopIteration"] = "Exception",
+    ["AttributeError"] = "Exception",
+    ["IOError"] = "Exception",
+}
+
+local function excClass(name)
+    local cls = EXC_CLASSES[name]
+    if cls then return cls end
+    cls = {
+        __pytype = "class", name = name, bases = {},
+        methods = {}, attrs = {}, __pyexcclass = true,
+    }
+    EXC_CLASSES[name] = cls
+    local parent = EXC_PARENTS[name]
+    if parent == nil and name ~= "BaseException" then
+        -- internal type that is not in the table above (IOError and friends):
+        -- keep it under Exception, matching the pre-class `except Exception`
+        -- rule that caught every type except BaseException itself.
+        parent = "Exception"
+    end
+    if parent then
+        cls.bases[1] = excClass(parent)
+    end
+    return cls
+end
+
+local function isExceptionClass(x)
+    return type(x) == "table" and x.__pyexcclass == true
+end
+
+local function exceptionClassOf(e)
+    if e.cls ~= nil then return e.cls end
+    return excClass(e.type)
+end
+
+local function exceptionIsInstanceOf(e, cls)
+    return isSubclass(exceptionClassOf(e), cls)
+end
+
 local function pyRepr(v)
     if v == nil then return "None" end
     if v == true then return "True" end
@@ -1885,6 +2048,14 @@ function Interpreter:getBuiltins()
             return type(x)
         end,
         ["isinstance"] = function(obj, cls)
+            if isException(obj) then
+                -- raised values are exception tables, not instances; the
+                -- answer comes from the exception class chain.
+                if isExceptionClass(cls) then
+                    return exceptionIsInstanceOf(obj, cls)
+                end
+                return false
+            end
             if type(obj)~="table" or obj.__pytype~="instance" then
                 if cls and cls.__pytype == "class" then
                     if cls.name == "int" and type(obj)=="number"
@@ -2082,20 +2253,24 @@ function Interpreter:getBuiltins()
                       methods={}, attrs={}},
         ["dict"]   = {__pytype="class", name="dict", bases={},
                       methods={}, attrs={}},
-        ["Exception"]        = function(m) return makeException("Exception", m) end,
-        ["BaseException"]    = function(m) return makeException("BaseException", m) end,
-        ["ValueError"]       = function(m) return makeException("ValueError", m) end,
-        ["TypeError"]        = function(m) return makeException("TypeError", m) end,
-        ["RuntimeError"]     = function(m) return makeException("RuntimeError", m) end,
-        ["ZeroDivisionError"] = function(m) return makeException("ZeroDivisionError", m) end,
-        ["IndexError"]       = function(m) return makeException("IndexError", m) end,
-        ["KeyError"]         = function(m) return makeException("KeyError", m) end,
-        ["NameError"]        = function(m) return makeException("NameError", m) end,
-        ["ImportError"]      = function(m) return makeException("ImportError", m) end,
-        ["AssertionError"]   = function(m) return makeException("AssertionError", m) end,
-        ["StopIteration"]    = function(m) return makeException("StopIteration", m) end,
-        ["AttributeError"]   = function(m) return makeException("AttributeError", m) end,
-        ["NotImplementedError"] = function(m) return makeException("NotImplementedError", m) end,
+        -- Exception names are class tables (see excClass): usable as a base
+        -- class, callable as a constructor, comparable through except and
+        -- isinstance. `raise ValueError("boom")` still throws
+        -- makeException("ValueError", "boom", <class>).
+        ["Exception"]        = excClass("Exception"),
+        ["BaseException"]    = excClass("BaseException"),
+        ["ValueError"]       = excClass("ValueError"),
+        ["TypeError"]        = excClass("TypeError"),
+        ["RuntimeError"]     = excClass("RuntimeError"),
+        ["ZeroDivisionError"] = excClass("ZeroDivisionError"),
+        ["IndexError"]       = excClass("IndexError"),
+        ["KeyError"]         = excClass("KeyError"),
+        ["NameError"]        = excClass("NameError"),
+        ["ImportError"]      = excClass("ImportError"),
+        ["AssertionError"]   = excClass("AssertionError"),
+        ["StopIteration"]    = excClass("StopIteration"),
+        ["AttributeError"]   = excClass("AttributeError"),
+        ["NotImplementedError"] = excClass("NotImplementedError"),
     }
 end
 
@@ -2694,6 +2869,13 @@ function Interpreter:evalCall(node)
         self:error("object is not callable")
     end
     if type(func) == "table" and func.__pytype == "class" then
+        if func.__pyexcclass then
+            -- Exception class (builtin or `class MyError(Exception)`): calling
+            -- it builds the same exception table raise/except already use.
+            -- A custom __init__ is not run; the first argument becomes the
+            -- value shown by str(e)/repr(e).
+            return makeException(func.name, args[1], func)
+        end
         if func.name == "int" then
             return math.floor(tonumber(args[1]) or 0)
         end
@@ -3435,11 +3617,29 @@ function Interpreter:execStmt(node)
     elseif t=="Import" then
         for _, mod in ipairs(node.modules) do
             local modTable = self:importModule(mod.name)
-            local bindName = mod.alias or mod.name:match("^([^.]+)")
             if mod.alias then
                 self:assign(mod.alias, modTable)
             else
-                self:assign(bindName, modTable)
+                -- Python binds only the top package for `import a.b` and puts
+                -- the submodule on it as an attribute. Without the attribute
+                -- link `import os.path` would bind `os` to the os.path module
+                -- and `os.path.join()` would fail.
+                local root, rest = mod.name:match("^([^.]+)%.(.+)$")
+                if not root then
+                    self:assign(mod.name, modTable)
+                else
+                    local rootTable = self:importModule(root)
+                    local parent, acc = rootTable, root
+                    for part in rest:gmatch("[^%.]+") do
+                        acc = acc .. "." .. part
+                        local child = self:importModule(acc)
+                        if parent.__scope then
+                            parent.__scope[part] = child
+                        end
+                        parent = child
+                    end
+                    self:assign(root, rootTable)
+                end
             end
         end
     elseif t=="FromImport" then
@@ -3472,6 +3672,11 @@ function Interpreter:execStmt(node)
         end
         local exc = self:eval(node.exc)
         if isException(exc) then error(exc, 0) end
+        if isExceptionClass(exc) then
+            -- `raise ValueError` (the class, not an instance) is legal Python
+            -- and raises a ValueError without a message.
+            error(makeException(exc.name, nil, exc), 0)
+        end
         error(makeException("RuntimeError", pyStr(exc)), 0)
     elseif t=="Try" then
         return self:execTry(node)
@@ -3544,9 +3749,16 @@ function Interpreter:execClass(node)
         end
         table.insert(bases, b)
     end
+    -- A class deriving from an exception class is itself an exception class:
+    -- calling it builds an exception value and except/isinstance walk the same
+    -- base chain. This is what makes `class MyError(Exception): pass` work.
+    local isExc = false
+    for _, b in ipairs(bases) do
+        if b.__pyexcclass == true then isExc = true end
+    end
     local classTable = {
         __pytype = "class", name = node.name, bases = bases,
-        methods = {}, attrs = {}
+        methods = {}, attrs = {}, __pyexcclass = isExc or nil
     }
     for _, stmt in ipairs(node.body) do
         if stmt.type == "Def" then
@@ -3595,13 +3807,24 @@ function Interpreter:execTry(node)
     if tryException then
         for _, handler in ipairs(node.handlers) do
             local shouldCatch = false
-            if not handler.excType then shouldCatch = true
-            elseif handler.excType == tryException.type then
+            if not handler.excType then
                 shouldCatch = true
-            elseif handler.excType == "Exception" then
-                shouldCatch = (tryException.type ~= "BaseException")
-            elseif handler.excType == "BaseException" then
-                shouldCatch = true
+            else
+                -- The handler name is resolved in the current scope. A class
+                -- (builtin exception or user subclass) matches the whole
+                -- inheritance chain, so `except Exception` catches every
+                -- subclass and `except MyError` catches only that branch.
+                local handlerClass = self:lookup(handler.excType)
+                if isExceptionClass(handlerClass) then
+                    shouldCatch = exceptionIsInstanceOf(tryException,
+                        handlerClass)
+                elseif handler.excType == tryException.type then
+                    shouldCatch = true
+                elseif handler.excType == "Exception" then
+                    shouldCatch = (tryException.type ~= "BaseException")
+                elseif handler.excType == "BaseException" then
+                    shouldCatch = true
+                end
             end
             if shouldCatch then
                 if handler.name then
