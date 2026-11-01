@@ -169,6 +169,7 @@ function D.new(opts)
     self.loan_events = o.loan_events
     if self.loan_seconds == nil then self.loan_seconds = D.LOAN_SECONDS end
     self.start_timer = o.startTimer
+    self.ready_paint = o.ready_paint
     self.clock = o.clock
     self.loan_abort_events = o.loan_abort_events
     self.loan_abort_seconds = o.loan_abort_seconds
@@ -653,6 +654,15 @@ function D:run()
     end
     self:log("DESKTOP_ENTRY app=" .. short(self.name, 24)
         .. " keys=" .. tostring(count(self.key_names)))
+    -- Draw the desktop before the first pull (D1-fix round 7). The frame the boot
+    -- chain drew at step 7b is behind the commit lines it printed afterwards, so
+    -- without this the machine looks dead until the first key. One focus event +
+    -- one scheduler step, no extra pull.
+    if self.ready_paint ~= false then
+        self:deliver("desk_focus", "")
+        self:tick()
+        self:log("DESKTOP_READY app=" .. short(self.foreground, 24))
+    end
     while not self.exited do
         if self.max_events and self.pulled >= self.max_events then
             self.reason = "limit"

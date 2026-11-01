@@ -57,8 +57,10 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
      normal journal none
 2. The desktop then takes the screen: a launcher with the version line, the net
    line, the app list and "<n> apps sel 1/<n>" at the bottom. It stays there and
-   the keyboard works: up/down move, a digit selects, enter starts the selected
-   app. "q"/"Q"/Esc on the desktop do NOT leave the system: the hint row says
+   the desktop is complete before you touch anything: the app list, the marker
+   and the hint row are already on screen at boot (and again right after an app
+   exits or a screen loan ends) -- no key press is needed to "wake" it. Then the
+   keyboard works: up/down move, a digit selects, enter starts the selected app. "q"/"Q"/Esc on the desktop do NOT leave the system: the hint row says
    "Ctrl+T leaves Pyroet OS" and the list stays. Ctrl+T (the ROM terminate
    event) is the only way out to the CraftOS shell; inside an app Ctrl+T leaves
    that app first (back to the desktop) and only then, on the desktop, the

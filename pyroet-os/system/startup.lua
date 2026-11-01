@@ -927,6 +927,11 @@ function P.run(opts)
         if o.log == nil then
             desk_log = P.quiet_log(fsx, o.log_path)
             desk_log("STARTUP_DESKTOP_QUIET path=" .. short(o.log_path or P.LOG_PATH, 40))
+            -- the app runtime logs through its own sink: point it at the same
+            -- file-only logger, or every APP_LOG line prints on the desktop
+            if ctx.rt and type(ctx.rt.set_log) == "function" then
+                pcall(ctx.rt.set_log, ctx.rt, desk_log)
+            end
         end
         local okr, dmod, dwhy = pcall(P.start_desktop_loop, ctx, o, desk_log)
         if not okr then

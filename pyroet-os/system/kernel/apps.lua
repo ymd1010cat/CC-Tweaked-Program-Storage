@@ -278,6 +278,17 @@ end
 -- permissions (first start asks kernel/permissions.lua; see the header)
 -- ---------------------------------------------------------------------------
 
+-- Re-point the runtime's log sink. The desktop phase installs a file-only
+-- logger here (`startup.P.quiet_log`): an APP_LOG line printed to the console
+-- lands on the desktop frame, which is why the frame used to look "not ready".
+function A:set_log(fn)
+    if fn ~= nil and type(fn) ~= "function" then
+        return nil, "log sink must be a function"
+    end
+    self.sink = fn
+    return true
+end
+
 function A:set_permissions(perms)
     if perms ~= nil and type(perms) ~= "table" then
         return nil, "permissions must be a table"

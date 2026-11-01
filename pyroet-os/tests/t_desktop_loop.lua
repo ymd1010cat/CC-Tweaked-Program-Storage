@@ -154,7 +154,7 @@ return function(H)
         rt.add("launcher", { "input" })
         local pull, pull_stats = scripted({ { "key", 10 }, { "key", 11 } })
         local log, lines = H.logger()
-        local d = DESKTOP.new({
+        local d = DESKTOP.new({ ready_paint = false,
             rt = rt, input = host, pullEvent = pull, keys = KEYS,
             name = "launcher", log = log, max_events = 2,
         })
@@ -181,7 +181,7 @@ return function(H)
         local rt2 = fake_runtime(host2)
         rt2.add("launcher", { "input" })
         local log2, lines2 = H.logger()
-        local d2 = DESKTOP.new({
+        local d2 = DESKTOP.new({ ready_paint = false,
             rt = rt2, input = host2, keys = KEYS, name = "launcher", log = log2,
             pullEvent = scripted({ { "key", 10 }, { "terminate" } }),
         })
@@ -196,7 +196,7 @@ return function(H)
         local host9 = new_host()
         local rt9 = fake_runtime(host9)
         rt9.add("launcher", { "input" })
-        local d9 = DESKTOP.new({
+        local d9 = DESKTOP.new({ ready_paint = false,
             rt = rt9, input = host9, keys = KEYS, name = "launcher",
             pullEvent = scripted({ { "key", DESKTOP.ESCAPE_CODE } }), max_events = 1,
         })
@@ -209,7 +209,7 @@ return function(H)
         local rt3 = fake_runtime(host3)
         rt3.add("launcher", { "input" })
         local log3, lines3 = H.logger()
-        local d3 = DESKTOP.new({
+        local d3 = DESKTOP.new({ ready_paint = false,
             rt = rt3, input = host3, keys = KEYS, name = "launcher", log = log3,
             pullEvent = scripted({ { "key", 11 }, { "key", 11 } }),
         })
@@ -227,7 +227,7 @@ return function(H)
         local rt4 = fake_runtime(host4)
         rt4.add("launcher", { "input" })
         local log4, lines4 = H.logger()
-        local d4 = DESKTOP.new({
+        local d4 = DESKTOP.new({ ready_paint = false,
             rt = rt4, input = host4, keys = KEYS, name = "launcher", log = log4,
             pullEvent = scripted({ { "key", 11 } }),
         })
@@ -243,7 +243,7 @@ return function(H)
         local rt5 = fake_runtime(host5)
         rt5.add("launcher", { "input" })
         local log5, lines5 = H.logger()
-        local d5 = DESKTOP.new({
+        local d5 = DESKTOP.new({ ready_paint = false,
             rt = rt5, input = host5, keys = KEYS, name = "launcher", log = log5,
             pullEvent = scripted({ { "key", 10 }, { "key", 10 } }),
             max_events = 2,
@@ -262,17 +262,17 @@ return function(H)
 
         -- nothing to drive it: skip, never crash, and never pull
         local silent, silent_stats = scripted({ { "key", 10 } })
-        local d6 = DESKTOP.new({ rt = fake_runtime(new_host()), input = new_host(),
+        local d6 = DESKTOP.new({ ready_paint = false, rt = fake_runtime(new_host()), input = new_host(),
             name = "launcher" })
         H.eq("no_pull_reason", d6:run(), "no_pull_source")
         H.eq("no_pull_pulled", d6.pulled, 0)
         local log7, lines7 = H.logger()
-        local d7 = DESKTOP.new({ rt = fake_runtime(nil), pullEvent = silent,
+        local d7 = DESKTOP.new({ ready_paint = false, rt = fake_runtime(nil), pullEvent = silent,
             name = "launcher", log = log7 })
         H.eq("no_queue_reason", d7:run(), "no_input_queue")
         H.has(lines7, "DESKTOP_SKIP reason=no_input_queue")
         local log8, lines8 = H.logger()
-        local d8 = DESKTOP.new({ input = new_host(), pullEvent = silent,
+        local d8 = DESKTOP.new({ ready_paint = false, input = new_host(), pullEvent = silent,
             name = "launcher", log = log8 })
         H.eq("no_runtime_reason", d8:run(), "no_runtime")
         H.has(lines8, "DESKTOP_SKIP reason=no_runtime")
@@ -848,6 +848,126 @@ end
     end
 
     -- -----------------------------------------------------------------
+    H.group("desktop_loop.ready")
+    -- Round 7: entering the desktop must be READY, not "ready after a key". The
+    -- chain paints the launcher at step 7b, but the commit lines printed after it
+    -- land on that frame; the desktop now paints the foreground once, after the
+    -- quiet logger is installed and before the first blocking pull.
+    do
+        local function painter(name, text)
+            return {
+                manifest = 'return { name = "' .. name .. '", version = "0.1.0",'
+                    .. ' capabilities = { "fs.read" } }',
+                main = string.format([[
+return function(manifest, api)
+    local t = rawget(_G, "term")
+    for y = 1, 19 do
+        t.setCursorPos(1, y)
+        t.write(%q .. " " .. tostring(y) .. string.rep(" ", 40))
+    end
+    while true do api.yield() end
+end
+]], text),
+            }
+        end
+
+        local function boot_with(events, apps_root)
+            H.rmrf("/etc/perms")
+            local dir = H.case_dir("loop", "ready")
+            bootable(dir)
+            local host = new_host()
+            host.keys = KEYS
+            local log, lines = H.logger()
+            local buf = S.buffer(51, 19)
+            local frames, pulls = {}, 0
+            local function snap()
+                local out = {}
+                for y = 1, 19 do out[y] = buf.row(y) end
+                return out
+            end
+            local pull = function()
+                frames[pulls + 1] = snap()
+                pulls = pulls + 1
+                local event = events[pulls]
+                if event == nil then return "terminate" end
+                return event[1], event[2]
+            end
+            local result = nil
+            local saved = rawget(_G, "PYROET_APP_NOPAINT")
+            rawset(_G, "PYROET_APP_NOPAINT", nil)
+            local okrun, why = pcall(function()
+                local okw, value = S.with_term(buf, function()
+                    return startup.run({
+                        fs = F,
+                        root = dir,
+                        log = log,
+                        apps_root = apps_root or (dir .. "/apps"),
+                        input = host,
+                        pull_event = pull,
+                        terminal = buf,
+                        start_timer = function() return 7 end,
+                        reboot = function() error("rebooted unexpectedly") end,
+                        frame = function() return true end,
+                    })
+                end)
+                result = value
+                return okw
+            end)
+            rawset(_G, "PYROET_APP_NOPAINT", saved)
+            return { run = result, lines = lines, frames = frames,
+                pulls = pulls, ok = okrun and why == true }
+        end
+
+        -- 1) ZERO keys: the frame captured before the very first pull is already
+        --    the full desktop (list, marker, hint row, status row)
+        local first = boot_with({ { "terminate" } })
+        H.check("ready_run_ok", first.ok, tostring(first.run))
+        H.has(first.lines, "DESKTOP_READY app=launcher")
+        H.eq("ready_pulls", first.pulls, 1)
+        local f = first.frames[1]
+        H.table("ready_frame", f)
+        H.contains("ready_title", (f or {})[1] or "", "ver ")
+        H.eq("ready_sel_row", ((f or {})[3] or ""):sub(1, 10), "> launcher")
+        H.eq("ready_hint_row", ((f or {})[18] or ""):sub(1, 15), "up/dn enter run")
+        H.contains("ready_status", (f or {})[19] or "", "apps sel 1/")
+        H.absent("ready_no_boot_log", table.concat(f or {}, "\n"), "STARTUP_COMMITTED")
+        H.ascii_check("ready_ascii", H.joined(first.lines))
+
+        -- 2) back from an app: escape quits net, and the frame captured at the
+        --    NEXT pull is already the launcher again (no key in between)
+        local back = boot_with({
+            { "key", 11 },   -- down -> net
+            { "key", 14 },   -- enter -> net takes the console
+            { "key", 15 },   -- escape -> net quits
+            { "terminate" },
+        })
+        H.check("back_run_ok", back.ok, tostring(back.run))
+        H.eq("back_pulls", back.pulls, 4)
+        local returned = back.frames[4]
+        local rtext = table.concat(returned or {}, "\n")
+        H.contains("back_list", rtext, "apps sel")
+        H.eq("back_hint", ((returned or {})[18] or ""):sub(1, 13), "back from net")
+        H.contains("back_marker", rtext, "> ")
+
+        -- 3) back from a screen loan: the loan timer ends it and the next frame
+        --    is the launcher again, still without a key press
+        H.rmrf("/apps")
+        H.app_package("/apps/aaforever.app", painter("aaforever", "forever ui"))
+        local loan = boot_with({
+            { "key", 14 },   -- launch aaforever (index 1)
+            { "timer", 7 },  -- the loan timer ends the loan
+            { "terminate" },
+        }, "/apps")
+        H.check("loan_back_run_ok", loan.ok, tostring(loan.run))
+        H.has(loan.lines, "DESKTOP_LOAN_END app=aaforever reason=timeout")
+        local after_loan = loan.frames[3]
+        local ltext = table.concat(after_loan or {}, "\n")
+        H.contains("loan_back_list", ltext, "apps sel")
+        H.contains("loan_back_hint", (after_loan or {})[18] or "", "display only: ")
+        H.rmrf("/apps")
+    end
+
+    -- -----------------------------------------------------------------
     H.group("desktop_loop.leave")
     -- Exit semantics of round 6: on the desktop q/Q/escape are only a hint -- the
     -- machine stays; Ctrl+T is the way out, and it is scoped: while an app owns
@@ -981,7 +1101,7 @@ end
         H.eq("term_ok", result.ok, true)
         H.eq("term_reason", result.desktop_reason, "terminate")
         H.eq("term_pulled", result.desktop and result.desktop.pulled, 2)
-        H.eq("term_delivered", result.desktop and result.desktop.delivered, 1)
+        H.eq("term_delivered", result.desktop and result.desktop.delivered, 2)
         H.has(lines, "STARTUP_DESKTOP_EXIT reason=terminate")
         -- the launcher never saw the terminate event; the dispatcher owns it
         H.lacks("term_not_delivered", lines, "msg=key=terminate")
