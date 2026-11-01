@@ -10,6 +10,7 @@ Output (git-ignored):
         dcnet-1.3.2.zip                 standalone project (dcnet/ + LICENSE)
         dcnet-psh-package-1.3.2.zip     Pyromputer OS package contents + LICENSE
         dcnet-worker-1.3.2.zip          compute-node image + LICENSE
+        psh-cjk-font.zip                Minecraft resource pack for "lang zh"
         dcnet-INSTALL.txt
         SHA256SUMS.txt
         RELEASE.md                      GitHub release body for this commit
@@ -30,6 +31,8 @@ DCNET = REPO / "dcnet"
 PKG = HERE / "pkgs" / "dcnet"
 WORKER = PSH / "dist" / "worker-image"
 OUT = PSH / "dist" / "release-dcnet"
+RESPACK = PSH / "tools" / "respack" / "make_pack.py"
+FONT_PACK = "psh-cjk-font.zip"
 
 VERSION = "1.3.2"
 SKIP_DIRS = {".git", "__pycache__", ".ccdata", ".cloud_url", ".pytest_cache"}
@@ -78,7 +81,7 @@ def build_zip(name, fill):
     return path
 
 
-def install_text(project, package, worker):
+def install_text(project, package, worker, font_pack):
     return """dcnet %s - installation
 ====================================
 
@@ -111,17 +114,29 @@ C. Compute-node image
    - boot: it runs "dcnet worker --headless" in a loop. No psh, no fonts, no UI.
    - its log is /var/lib/dcnet/logs/node-<id>.log.
 
+D. Minecraft client resource pack (only needed for "lang zh")
+   - put %s into <minecraft>/resourcepacks/ and enable it in Options >
+     Resource Packs. It is a client-side pack: do NOT copy it into any
+     in-game computer.
+   - the in-game glyph disks are a different, in-game artifact:
+     pyromputer-os-fonts-size12-two-disks.zip from the Pyromputer OS release.
+     Without the disks "lang zh" stays English (it never renders garbage).
+   - rebuild it for another Minecraft version with
+     python tools/respack/make_pack.py --out psh-cjk-font.zip --pack-format N
+
 Assets
 ------
 %s  %d bytes
 %s  %d bytes
 %s  %d bytes
+%s  %d bytes
 
 License: MIT (LICENSE in each zip).
-""" % (VERSION, VERSION, VERSION,
+""" % (VERSION, VERSION, VERSION, FONT_PACK,
        project.name, project.stat().st_size,
        package.name, package.stat().st_size,
-       worker.name, worker.stat().st_size)
+       worker.name, worker.stat().st_size,
+       font_pack.name, font_pack.stat().st_size)
 
 
 def main():
@@ -141,11 +156,20 @@ def main():
     worker = build_zip("dcnet-worker-%s.zip" % VERSION,
                        lambda zf: add_tree(zf, WORKER, ""))
 
+    # the CJK resource pack is a Minecraft client asset, not an in-game file:
+    # it is built here so "download psh-cjk-font.zip from the dcnet release"
+    # in dcnet/README.md stays true. make_pack.py writes fixed timestamps, so
+    # this stays byte-reproducible like the other three assets.
+    run(str(RESPACK), "--out", str(OUT / FONT_PACK), "--quiet")
+    font_pack = OUT / FONT_PACK
+    if not font_pack.is_file():
+        raise SystemExit("release: %s was not produced" % FONT_PACK)
+
     (OUT / "dcnet-INSTALL.txt").write_text(
-        install_text(project, package, worker), encoding="utf-8", newline="\n")
+        install_text(project, package, worker, font_pack), encoding="utf-8", newline="\n")
 
     sums = []
-    for path in (project, package, worker):
+    for path in (project, package, worker, font_pack):
         sums.append("%s  %s" % (sha256(path), path.name))
     (OUT / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n",
                                        encoding="utf-8", newline="\n")

@@ -223,7 +223,13 @@
 
 ## 6. 版本与兼容
 
-- `ver` 不匹配时双方行为未定义；升级时请同时替换主控与节点。
+- **版本闸门在握手上**：`proto.valid()` 只做结构校验（table 且 `t` 是字符串），
+  `proto.compatible()` 才比对 `ver`。`hello` 到达时主控先跑 `compatible()`，不匹配就在控制台打红字
+  `Worker #<id> protocol version incompatible: protocol version mismatch (peer N, local M)`
+  并提示升级方式，**不发 `welcome`**——节点因此停在未注册状态，后续任务也就不会派给它。
+- 非握手消息（`pull` / `result` / `progress` 等）不单独校验 `ver`：它们只可能来自已注册节点，
+  而注册已经过同一道闸门。所以结论是：**升级时两侧同时替换**；混跑时旧节点会被挡在握手这一步，
+  不会静默算错。
 - 新增消息类型是向后兼容的：未知 `t` 会被 `proto.valid()` 判为无关消息而忽略
   （`sched:onMessage` / `worker` 的接收循环只在匹配时采取动作）。
 - `dcpush` 与 `dccomp` 相互独立，只升级节点代码时不会影响正在跑的作业。

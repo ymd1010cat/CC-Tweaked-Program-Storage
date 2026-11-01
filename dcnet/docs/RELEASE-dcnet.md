@@ -42,8 +42,9 @@
 | `dcnet-1.3.2.zip` | 独立项目：`dcnet/` 源码、`dist/` 单文件、文档、作业、CraftOS-PC 回归套件与 Python 云端参考服务端 | 解压得到 `dcnet/`；部署用其中的 `dist/master.lua`、`dist/worker.lua`、可选的 `dist/screen.lua` |
 | `dcnet-psh-package-1.3.2.zip` | Pyromputer OS 包：`manifest`、`bin/dcnet.lua`、`lib/dcnet/` 模块、作业、worker 种子与配置样例 | 解压内容到包存储器的 `usr/pkgs/dcnet/`（或放进 `pkgserver` 的仓库） |
 | `dcnet-worker-1.3.2.zip` | 计算端镜像：`startup.lua` + worker 所需的 dcnet 模块；无 psh/字体/UI | 解压内容到计算节点电脑文件系统根，开机直接跑 worker |
-| `dcnet-INSTALL.txt` | 三种安装形态的说明 | - |
-| `SHA256SUMS.txt` | 三个 zip 的 SHA-256 | - |
+| `psh-cjk-font.zip` | Minecraft **客户端**资源包（`pack_format` 15 = 1.20.1）：把 128–191 这 64 个 2×3 子像素块换成本系统的 CJK 字形。只有 `lang zh` 需要它 | 放进 `<minecraft>/resourcepacks/` 并在游戏内启用；**不要**解压进任何 CC 电脑。字体盘另见 Pyromputer OS release 的 `pyromputer-os-fonts-size12-two-disks.zip` |
+| `dcnet-INSTALL.txt` | 四种安装形态的说明（含上面的客户端资源包） | - |
+| `SHA256SUMS.txt` | 四个 zip 的 SHA-256 | - |
 
 每个 zip 根附带仓库 `LICENSE`（MIT）。
 
