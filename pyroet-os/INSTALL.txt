@@ -52,7 +52,7 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
 
 3. FIRST BOOT
 1. reboot. Expect a splash first (logo, "Pyroet OS 0.2.0", a progress bar and the
-   step name: checking system / starting services / desktop, ~0.2 s in total),
+   step name: checking system / starting services / desktop, ~5 s in total),
    then a first frame like:
      Pyroet OS 0.2.0
      kernel ok

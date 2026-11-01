@@ -91,7 +91,7 @@ splash, headless, clock, sleep, perms_interactive.
 `splash = true` forces the boot splash on in a headless run (the splash suite
 needs that); `splash = false` opts out. `headless = true` and `loop = false` are
 headless boots and never draw it; `clock`/`sleep` are the injected time source the
-`ms=` figure and the ~50 ms step waits come from. `perms_interactive` forces the
+`ms=` figure and the 1.25 s step waits (4 paints = 5 s) come from. `perms_interactive` forces the
 Android ask policy on or off (see `P.perms_interactive`).
 
 `pull_event` is the desktop loop's one blocking event source (a function, like
@@ -229,7 +229,7 @@ P.SPLASH_LOGO = {
 }
 P.SPLASH_STEPS = { "checking system", "starting services", "desktop" }
 P.SPLASH_BAR = 12
-P.SPLASH_SLEEP = 0.05
+P.SPLASH_SLEEP = 1.25
 
 -- "[####        ]  33%": `width` cells, then the percentage, 0..100
 function P.splash_bar(pct, width)

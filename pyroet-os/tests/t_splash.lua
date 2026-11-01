@@ -132,7 +132,7 @@ return function(H)
         H.eq("step_1", startup.SPLASH_STEPS[1], "checking system")
         H.eq("step_2", startup.SPLASH_STEPS[2], "starting services")
         H.eq("step_3", startup.SPLASH_STEPS[3], "desktop")
-        H.eq("sleep_is_short", startup.SPLASH_SLEEP, 0.05)
+        H.eq("sleep_is_five_seconds", startup.SPLASH_SLEEP, 1.25)
 
         -- the enable rules, as a table
         H.eq("off_explicit", select(2, startup.splash_enabled({ splash = false })), "disabled")
@@ -165,7 +165,7 @@ return function(H)
                 return function()
                     n = n + 1
                     if n == 1 then return 0 end
-                    return 0.25
+                    return 5
                 end
             end)(),
         })
@@ -176,7 +176,7 @@ return function(H)
         H.eq("boot_plan", run.result and run.result.plan.action, "normal")
         H.eq("frames", #run.shots, #startup.SPLASH_STEPS + 1)
         H.has(run.lines, "SPLASH_BEGIN version=" .. startup.VERSION)
-        H.has(run.lines, "SPLASH_DONE ms=250")
+        H.has(run.lines, "SPLASH_DONE ms=5000")
         H.lacks("no_abort", run.lines, "SPLASH_ABORT")
         H.lacks("no_skip", run.lines, "SPLASH_SKIP")
         -- the splash is announced before anything the boot decided

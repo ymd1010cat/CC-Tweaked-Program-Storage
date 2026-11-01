@@ -1357,7 +1357,7 @@ GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校�
 
 43.6 **体积与取舍（硬账）**：本轮 599,301 → **624,626 B**（余 4,519 B），`install.set` 仍 **29 条**（splash 写在 startup.lua、队列写在 permissions.lua，没有新增镜像文件）。为了塞进硬门禁删了三处**已死**内容（都不是功能取舍）：`kernel/permissions.lua` 的 `P.prompt_lines`（旧"首启一屏"，改由 launcher 画，镜像里无任何调用者）与只被它使用的 `P.fit`；`settings.app` 的 `sample_state`/`selftest`/`layout_selftest`（镜像与套件都无调用者；同一布局规则由 `t_settings` 的多尺寸渲染断言覆盖得更严）。
 
-43.7 **测试**：新增 `tests/t_splash.lua`（5 组：纯行布局逐字、四帧 0/33/66/100% + `SPLASH_DONE ms=250` + 首帧在清屏之后、fatal 不画、三种 skip、无终端）、`tests/t_perm_ask.lua`（7 组：launcher 模态逐字 + A/D + 不可关掉 + 重试启动 + 无桥、desktop 只投一次、运行时延迟/回答/拒绝/开关/门禁/清单、链路 headless 不问、链路交互式入队并在回答后持久化（下次启动不问）、镜像包不弹窗、设置页两级 + 落盘 + 回读 + 无桥 + 写失败）；`t_permissions` 的 `prompt_screen` 组换成 `perms.queue`（入队、去重、answer、SET、states、已决不再问）；`t_desktop` 的 settings `items=2`→`items=3`；`t_installer_bridge` 的 `SYS_FUNCTIONS` 10→13 并补三个桥方法断言。
+43.7 **测试**：新增 `tests/t_splash.lua`（5 组：纯行布局逐字、四帧 0/33/66/100% + `SPLASH_DONE ms=5000` + 首帧在清屏之后、fatal 不画、三种 skip、无终端）、`tests/t_perm_ask.lua`（7 组：launcher 模态逐字 + A/D + 不可关掉 + 重试启动 + 无桥、desktop 只投一次、运行时延迟/回答/拒绝/开关/门禁/清单、链路 headless 不问、链路交互式入队并在回答后持久化（下次启动不问）、镜像包不弹窗、设置页两级 + 落盘 + 回读 + 无桥 + 写失败）；`t_permissions` 的 `prompt_screen` 组换成 `perms.queue`（入队、去重、answer、SET、states、已决不再问）；`t_desktop` 的 settings `items=2`→`items=3`；`t_installer_bridge` 的 `SYS_FUNCTIONS` 10→13 并补三个桥方法断言。
 
 ## 修订记录
 

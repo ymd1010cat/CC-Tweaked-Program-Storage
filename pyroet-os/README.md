@@ -140,7 +140,7 @@ pyroet-os/
   └─ pcall(loadfile, "/system/startup.lua") 并调用它；失败就打印 ASCII 错误并退回 ROM shell
        ├─ 1. boot.begin()       读 /system、journal、/boot.ok；必要时先回滚，再决定 normal/trial/fatal
        ├─ 1b. 启动画面          logo + 版本 + 三步进度条（checking system / starting services / desktop，
-                                每步 ~50 ms，`SPLASH_BEGIN` / `SPLASH_DONE ms=`）；**fatal 计划不画**，
+                                每步 ~1.25 s，`SPLASH_BEGIN` / `SPLASH_DONE ms=`）；**fatal 计划不画**，
                                 headless / `loop=false` / 离线套件跳过，收尾清屏把屏交给首帧
        ├─ 2. kernel.new()       构建服务管理器
        ├─ 3. apps.new()         扫描 /apps 与 /system/system/*.app
