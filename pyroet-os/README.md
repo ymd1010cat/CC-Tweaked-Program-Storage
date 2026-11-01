@@ -316,7 +316,7 @@ compat：manifest **不写** `capabilities` = 声明空列表 = 全部拒绝，*
 | `launcher.app` | 0.2.0 | `fs.read`, `fs.write`（写只用于 `/etc/launcher.recent`，被拒就忽略）, `input`, `terminal`（D1：常驻桌面对话循环） |
 | `settings.app` | 0.1.0 | `fs.read`（**严格只读**，没有写路径） |
 | `installer.app` | 0.1.0 | `fs.read`, `fs.write`（读来源盘与两个已装根；写只发生在安装事务里） |
-| `net.app` | 0.1.0 | `net.rpv`, `fs.read` |
+| `net.app` (可选示例，不在镜像) | 0.1.0 | `net.rpv`, `fs.read` |
 
 ### 5.5 安装器 UI（`installer.app`）
 

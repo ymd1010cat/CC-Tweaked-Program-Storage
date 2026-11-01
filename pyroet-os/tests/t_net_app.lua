@@ -2,7 +2,7 @@
 -- 26x20 layout, target parsing, probe output, runtime integration.
 
 Loads the shipped package files straight from the staged image paths
-(/system/system/net.app/*.lua), so the test covers the real manifest and the real UI
+(/tests/net.app/*.lua), so the test covers the real manifest and the real UI
 code. No modem, no sockets: the network host is a stub whose probe handle the
 test completes by hand.
 
@@ -14,9 +14,9 @@ local APPS = dofile("/system/kernel/apps.lua")
 -- test hook (same pattern as startup.lua): ask the app file for its module
 -- table instead of the entry body, so the pure UI helpers are reachable
 rawset(_G, "PYROET_NET_APP_TEST", true)
-local body = assert(loadfile("/system/system/net.app/main.lua"))()
+local body = assert(loadfile("/tests/net.app/main.lua"))()
 rawset(_G, "PYROET_NET_APP_TEST", nil)
-local manifest_raw = assert(loadfile("/system/system/net.app/manifest.lua"))()
+local manifest_raw = assert(loadfile("/tests/net.app/manifest.lua"))()
 
 local function fake_api(opts)
     local o = opts or {}
@@ -77,7 +77,7 @@ return function(H)
     -- -----------------------------------------------------------------
     H.group("net.app.manifest")
     do
-        local m, err = APPS.validate_manifest(manifest_raw, "/system/system/net.app")
+        local m, err = APPS.validate_manifest(manifest_raw, "/tests/net.app")
         H.table("manifest", m)
         H.eq("manifest_error", err, nil)
         H.eq("manifest_name", m and m.name, "net")
@@ -94,12 +94,12 @@ return function(H)
             end
             return false
         end)(), false)
-        H.eq("entry_exists", H.exists("/system/system/net.app/main.lua"), true)
-        H.eq("entry_is_body", type(assert(loadfile("/system/system/net.app/main.lua"))()),
+        H.eq("entry_exists", H.exists("/tests/net.app/main.lua"), true)
+        H.eq("entry_is_body", type(assert(loadfile("/tests/net.app/main.lua"))()),
             "function")
         H.eq("view_cols", body.VIEW.cols, 26)
         H.eq("view_rows", body.VIEW.rows, 20)
-        H.ascii_check("main_source_ascii", H.read("/system/system/net.app/main.lua") or "")
+        H.ascii_check("main_source_ascii", H.read("/tests/net.app/main.lua") or "")
 
         -- the runtime refuses unknown capabilities before the app ever runs
         local bad, bad_err = APPS.validate_manifest({
@@ -365,8 +365,8 @@ return function(H)
     H.group("net.app.runtime")
     do
         local apps = APPS
-        local main_src = assert(H.read("/system/system/net.app/main.lua"))
-        local man_src = assert(H.read("/system/system/net.app/manifest.lua"))
+        local main_src = assert(H.read("/tests/net.app/main.lua"))
+        local man_src = assert(H.read("/tests/net.app/manifest.lua"))
 
         -- denied: a manifest that does not declare net.rpv gets a denying
         -- stub, so the real app code sees nil, "capability denied: net.rpv"

@@ -59,8 +59,7 @@ foreach ($required in @("startup.lua", "system\startup.lua", "system\boot.lua",
         "system\kernel\installer.lua", "system\kernel\ota.lua",
         "system\rpv\crypto.lua", "system\rpv\loader.lua",
         "system\net\hosts.lua", "system\net\service.lua",
-        "system\system\net.app\manifest.lua", "system\system\net.app\main.lua",
-        "system\system\launcher.app\manifest.lua", "system\system\launcher.app\main.lua",
+                "system\system\launcher.app\manifest.lua", "system\system\launcher.app\main.lua",
         "system\system\settings.app\manifest.lua", "system\system\settings.app\main.lua",
     "system\system\web.app\manifest.lua", "system\system\web.app\main.lua",
         "system\system\installer.app\manifest.lua", "system\system\installer.app\main.lua",
@@ -89,7 +88,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "recovery") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "ota") | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\net.app") | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $comp "tests\net.app") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\launcher.app") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\settings.app") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\web.app") | Out-Null
@@ -111,7 +110,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\web.ap
     Copy-Item (Join-Path $osRoot "system\net\*.lua")           (Join-Path $comp "system\net")         -Force
     # the system apps are image payload (G1), so they are staged with the other
     # image content; there is no /examples copy to drift against
-    Copy-Item (Join-Path $osRoot "system\system\net.app\*") (Join-Path $comp "system\system\net.app") -Force
+Copy-Item (Join-Path $osRoot "examples\net.app\*") (Join-Path $comp "tests\net.app") -Force
     Copy-Item (Join-Path $osRoot "recovery\*.lua")             (Join-Path $comp "recovery")           -Force
     # the distribution side (ota/server.lua) is a dev tool like recovery/: it is
     # staged so t_ota_server can drive it, and it is NOT in install.set

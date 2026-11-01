@@ -27,7 +27,7 @@ local SETTINGS = assert(loadfile("/system/system/settings.app/main.lua"))()
 _G.PYROET_SETTINGS_TEST = nil
 
 _G.PYROET_NET_APP_TEST = true
-local NET = assert(loadfile("/system/system/net.app/main.lua"))()
+local NET = assert(loadfile("/tests/net.app/main.lua"))()
 _G.PYROET_NET_APP_TEST = nil
 
 _G.PYROET_INSTALLER_TEST = true
@@ -127,7 +127,7 @@ return function(H)
             return raw, set
         end
         local settings, settings_caps = caps_of("/system/system/settings.app/manifest.lua")
-        local net, net_caps = caps_of("/system/system/net.app/manifest.lua")
+        local net, net_caps = caps_of("/tests/net.app/manifest.lua")
         local installer, installer_caps = caps_of("/tests/installer.app/manifest.lua")
         for _, case in ipairs({
             { name = "settings", raw = settings, caps = settings_caps },
@@ -312,7 +312,7 @@ return function(H)
         -- this app is driven through its body, so the sink carries the raw line
         -- (the runtime prepends APP_LOG when the app really runs)
         local logtext = H.joined(lines)
-        H.contains("installer_ready", logtext, "ready entries=4 source=none")
+        H.contains("installer_ready", logtext, "ready entries=3 source=none")
         H.contains("installer_move", logtext, "key=down action=move")
         -- the selected row is a system package: pressing enter says it is locked
         -- (a real answer, not a fake install)

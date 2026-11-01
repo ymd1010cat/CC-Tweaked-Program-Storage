@@ -88,6 +88,8 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 creates it), q back
      net        up/down scroll the hosts, enter or r refresh (rpv status,
                 hosts, probe target), q back
+     net        (optional example package, not in the image) copy examples/net.app
+                to /pkgs/net.app, then install it from the installer or Update
      web        built-in text browser: enter opens the address (/etc/browser.home
                 or the default home), up/down scroll, b back, r reload, q quit
      installer  up/down (or a digit) pick a package, enter installs /

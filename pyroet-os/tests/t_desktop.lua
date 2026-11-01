@@ -57,14 +57,14 @@ return function(H)
         H.table("apps", result.apps)
 
         -- the system packages are scanned next to the boot chain
-        H.has(lines, "APP_SCAN root=/system/system loaded=4 failed=0")
+        H.has(lines, "APP_SCAN root=/system/system loaded=3 failed=0")
         H.has(lines, "APP_LOAD name=launcher version=0.2.0 caps=fs.read,fs.write,input,terminal")
-        H.has(lines, "APP_LOAD name=net version=0.2.0 caps=net.rpv,fs.read,input,terminal")
+        H.has(lines, "APP_LOAD name=web version=0.1.0 caps=fs.read,http,input,terminal")
         H.has(lines, "APP_LOAD name=settings version=0.2.0 caps=fs.read,fs.write,input,terminal")
 
         -- nothing is decided yet, and reading the table does not prompt
         H.has(lines, "STARTUP_PERMS_READY root=/etc/perms")
-        H.has(lines, "STARTUP_PERMS_TABLE apps=4 loaded=0 pending=4 bad=0")
+        H.has(lines, "STARTUP_PERMS_TABLE apps=3 loaded=0 pending=3 bad=0")
         H.eq("no_prompt_before_launcher", H.count(lines, "PERMS_PROMPT"), 1)
         H.has(lines, "PERMS_PROMPT app=launcher caps=fs.read,fs.write,input,terminal")
 
@@ -76,14 +76,14 @@ return function(H)
         H.has(lines, "APP_START name=launcher")
         H.has(lines, "STARTUP_DESKTOP_TICK advanced=true")
         H.eq("launcher_running", result.apps:app("launcher").state, "running")
-        H.eq("net_loaded_only", result.apps:app("net").state, "loaded")
+        H.eq("web_loaded_only", result.apps:app("web").state, "loaded")
         H.eq("settings_loaded_only", result.apps:app("settings").state, "loaded")
 
         local cfg = H.read("/etc/perms/launcher.cfg")
         H.contains("cfg_header", cfg, "# PYROET-PERMS-1 app=launcher")
         H.contains("cfg_read", cfg, "fs.read=granted")
         H.contains("cfg_write", cfg, "fs.write=granted")
-        H.eq("no_net_decision_yet", H.exists("/etc/perms/net.cfg"), false)
+        H.eq("no_web_decision_yet", H.exists("/etc/perms/web.cfg"), false)
 
         H.has(lines, "STARTUP_COMMITTED version=")
         -- D1: the offline suite runs headless, so the resident loop is off and
@@ -178,7 +178,7 @@ return function(H)
     do
         local log, lines = H.logger()
         local rt = APPS.new({ fs = F, log = log, apps_root = "/system/system" })
-        H.eq("scan", rt:scan(), 4)
+        H.eq("scan", rt:scan(), 3)
 
         local function read_file(path)
             if not F.exists(path) then return nil end
@@ -214,26 +214,25 @@ return function(H)
         }
 
         local state = LAUNCHER.build(api)
-        H.eq("entries", #state.entries, 4)
+        H.eq("entries", #state.entries, 3)
         H.eq("entry_names", table.concat({
-            state.entries[1].name, state.entries[2].name, state.entries[3].name,
-            state.entries[4].name }, ","),
-            "launcher,net,settings,web")
-        H.eq("net_version", state.entries[2].version, "0.2.0")
+            state.entries[1].name, state.entries[2].name, state.entries[3].name }, ","),
+            "launcher,settings,web")
+        H.eq("settings_version", state.entries[2].version, "0.2.0")
         local lines_first = LAUNCHER.render(state, 26, 20)
         H.eq("render_rows", #lines_first, 20)
-        H.contains("status_first", lines_first[20], "4 apps sel 1/4")
+        H.contains("status_first", lines_first[20], "3 apps sel 1/3")
 
-        -- Enter on the second row starts net.app through the runtime
+        -- Enter on the second row starts settings.app through the runtime
         H.eq("down", LAUNCHER.handle_key(state, "down", api), "move")
-        H.eq("selected", state.entries[state.index].name, "net")
+        H.eq("selected", state.entries[state.index].name, "settings")
         H.eq("enter", LAUNCHER.handle_key(state, "enter", api), "launch")
-        H.eq("launch_message", state.message, "started net")
-        H.eq("net_running", rt:app("net").state, "running")
-        H.has(lines, "APP_START name=net")
+        H.eq("launch_message", state.message, "started settings")
+        H.eq("settings_running", rt:app("settings").state, "running")
+        H.has(lines, "APP_START name=settings")
         rt:tick()
-        H.has(lines, "APP_LOG app=net msg=ready health=degraded ip=nil")
-        H.eq("still_running", rt:app("net").state, "running")
+        H.has(lines, "APP_LOG app=settings msg=ready item=1 items=2")
+        H.eq("still_running", rt:app("settings").state, "running")
 
         -- and the whole frame loop does the same from a key sequence
         local rt2 = APPS.new({ fs = F, log = function() end, apps_root = "/system/system" })
@@ -255,12 +254,12 @@ return function(H)
             paint = false,
             each = function(value) seen = value end,
         })
-        H.eq("run_launched", run_state.launched, "net")
-        H.eq("run_net_running", rt2:app("net").state, "running")
+        H.eq("run_launched", run_state.launched, "settings")
+        H.eq("run_settings_running", rt2:app("settings").state, "running")
         H.table("run_seen", seen)
         H.eq("run_seen_index", seen and seen.index, 2)
-        rt2:kill("net")
-        rt:kill("net")
+        rt2:kill("settings")
+        rt:kill("settings")
     end
 
     -- -----------------------------------------------------------------

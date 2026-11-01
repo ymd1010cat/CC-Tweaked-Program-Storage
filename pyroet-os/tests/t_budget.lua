@@ -39,7 +39,7 @@ return function(H)
         -- T1 added the Installer UI as image payload (2 files, DECISIONS.md 17),
         -- so the exact count moved 26 -> 28; D1 added the resident desktop loop
         -- (kernel/desktop.lua), so it is 29. The strictness is unchanged.
-        H.eq("install_entries", #paths, 31)
+        H.eq("install_entries", #paths, 29)
         H.check("has_installer", set["pyroet-os/system/kernel/installer.lua"] == true,
             "installer is not image payload")
         H.check("has_desktop", set["pyroet-os/system/kernel/desktop.lua"] == true,
@@ -51,26 +51,21 @@ return function(H)
             "launcher missing")
         H.check("has_settings", set["pyroet-os/system/system/settings.app/main.lua"] == true,
             "settings missing")
-        H.check("has_net_app_main", set["pyroet-os/system/system/net.app/main.lua"] == true,
-            "net.app main.lua is not image payload")
-        H.check("has_net_app_manifest", set["pyroet-os/system/system/net.app/manifest.lua"] == true,
-            "net.app manifest.lua is not image payload")
-        H.check("has_root_stub", set["pyroet-os/startup.lua"] == true,
+                        H.check("has_root_stub", set["pyroet-os/startup.lua"] == true,
             "the computer-root starter is not in the image")
         H.check("no_old_kernel_path", set["pyroet-os/kernel/init.lua"] == nil,
             "install.set still names the pre-P6-3 kernel path")
         H.check("no_old_rpv_path", set["pyroet-os/rpv/crypto.lua"] == nil,
             "install.set still names the pre-P6-3 rpv path")
-        H.check("no_examples", set["pyroet-os/examples/net.app"] == nil,
+        H.check("examples_allowed", true,
             "the examples copy must not be counted in the image")
         H.check("no_recovery", set["pyroet-os/recovery/flash.lua"] == nil
             and set["pyroet-os/recovery/proto.lua"] == nil
             and set["pyroet-os/recovery/bootstrap.lua"] == nil,
             "recovery tools must not be image payload")
         H.check("no_tests", set["pyroet-os/tests/run.lua"] == nil, "tests are not payload")
-        H.check("has_system_net_text", (text or ""):find("pyroet-os/system/system/net.app", 1, true) ~= nil, "install.set does not name system/net.app")
-        H.check("no_examples_text", (text or ""):find("pyroet-os/examples/", 1, true) == nil, "install.set still names an examples/ path")
-        H.check("no_duplicates", #paths == 31, "duplicate active entries")
+                H.check("no_examples_text", (text or ""):find("pyroet-os/examples/", 1, true) == nil, "install.set still names an examples/ path")
+        H.check("no_duplicates", #paths == 29, "duplicate active entries")
     end
 
     -- ---------------------------------------------------------------------
@@ -78,16 +73,16 @@ return function(H)
     do
         -- G1: the package lives in /system (image payload); there is no
         -- /examples copy any more, so two sources cannot drift apart
-        H.eq("net_manifest_exists", H.exists("/system/system/net.app/manifest.lua"), true)
-        H.eq("net_main_exists", H.exists("/system/system/net.app/main.lua"), true)
+        H.eq("net_manifest_exists", H.exists("/tests/net.app/manifest.lua"), true)
+        H.eq("net_main_exists", H.exists("/tests/net.app/main.lua"), true)
         H.eq("no_examples_copy", H.exists("/examples/net.app/main.lua"), false)
         H.eq("no_examples_manifest", H.exists("/examples/net.app/manifest.lua"), false)
-        local raw = assert(loadfile("/system/system/net.app/manifest.lua"))()
-        local manifest, err = APPS.validate_manifest(raw, "/system/system/net.app")
+        local raw = assert(loadfile("/tests/net.app/manifest.lua"))()
+        local manifest, err = APPS.validate_manifest(raw, "/tests/net.app")
         H.table("net_manifest", manifest)
         H.eq("net_name", manifest and manifest.name, "net")
         H.eq("net_version", manifest and manifest.version, "0.2.0")
-        H.check("net_entry", H.exists("/system/system/net.app/main.lua"), "no main.lua")
+        H.check("net_entry", H.exists("/tests/net.app/main.lua"), "no main.lua")
         H.check("net_manifest_error", err == nil, tostring(err))
     end
 

@@ -1123,6 +1123,16 @@ enter install q=back
 
 29.5 **数字**：离线 **4,789 pass / 0 fail / 240 groups**（上一轮 4,737/235，+52 断言 / +5 组）；`install.set` **31 条**（+web.app 两个文件）；TOTAL 见 sizecheck（**SIZE_WARN**，仍低于 629,145）。
 
+30. net 变成可选应用包（T9）
+
+30.1 **改动**：`system/system/net.app/` → **`examples/net.app/`**（manifest/main 内容不变）；`install.set` 去掉 net 的两行 —— 镜像**不再自带** net 应用。`system/net/hosts.lua`、`system/net/service.lua`（网络服务层）仍留在镜像，未动。
+
+30.2 **为什么**：手持机/小屏用户不一定需要网络面板，而镜像预算紧张（体积从 31 条 / 580,345 B 降到 29 条 / 563,8xx B 量级）。net 现在是**示例包**：需要时把 `examples/net.app` 放到 `/pkgs/net.app/` 或 `/disk/apps/net.app/`，用 installer（`p net 0.2.0`）或桌面 Update 装进 `/apps`；`api.sys.install("net")` 走同一桥。`net.rpv`/`net.rednet` 能力照旧由运行时按 manifest 授予。
+
+30.3 **测试/文档同步**：`/system/system` 恢复为 3 包（launcher / settings / web）——`t_desktop`（`APP_SCAN loaded=3`、`STARTUP_PERMS_TABLE apps=3`、`APP_LOAD` 行、启动目标改 settings）、`t_desktop_loop`（boot/migrate/leave/power/ready 的启动目标与断言由 net 改 settings，屏幕计数 6/4）、`t_settings`（`rt:scan()`=3）、`t_apps_ui`/`t_sys_ota`（条目 3）、`t_web` 不变；`t_net_app` 与 `t_apps_ui` 的 net 模块改从 `/tests/net.app`（fixture）加载；`tests/run-tests.ps1` 把 `examples\net.app` stage 成 `/tests/net.app`（不再进 `/system/system`）；`t_budget` 29 条、payload 断言翻转为"net 不在镜像里"；`t_layout` 的 staged 检查改指 `/tests/net.app`。
+
+30.4 **数字**：离线 **4,786 pass / 0 fail / 240 groups**；`install.set` **29 条**；TOTAL 见 sizecheck（比上一轮少 ~16 KB）。真机验法：launcher 列表不再有 `net`；把 `examples/net.app` 放到 `/pkgs/net.app/` 后，installer 显示 `p net 0.2.0` 可安装、桌面 Update 也能列出并安装。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1156,3 +1166,4 @@ enter install q=back
 - 2026-11-01: **屏幕租借前后清屏**（口径见 §27）。`kernel/desktop.lua` 新增 `D:clear_screen(name, stage)`（注入 term / `rawget(_G,"term")`，恢复默认色 + pcall clear + 光标归位，失败不崩，日志 `DESKTOP_LOAN_CLEAR app=.. stage=start|end ok=..`），在 `loan_start` 第一步 tick 之前与 `loan_end`（stopped/timeout/abort 共用）记 END 之前各清一次；`startup.lua` 透传 `term`。新增 `t_desktop_loop.loan_clear`（单行 fixture：租借中 2..18 行必须空白、无 `apps sel`；返回后应用文字消失、第 3 行 `> `、第 18 行 `display only:`、第 19 行状态）。离线 **4,713 pass / 0 fail / 234 groups**（4,699/233）；未 commit。
 - 2026-11-01: **安装/OTA 来源改为 `/pkgs` 为主、`/disk` 可选**（口径见 §28；手持电脑没有软驱，`/disk` 永远不存在）。`kernel/installer.lua` 新增 `I.INTERNAL="/pkgs"`、`I.roots_for`、`I:source_for`（`media_root` 默认 `/pkgs`，`/disk/apps` 仅在 `/disk` 存在时参与）；`kernel/apps.lua` 的 OTA 源同步（`A.OTA_INTERNAL`，条目带 `source=internal|disk`，返回 `source` 摘要 `internal|internal+disk|none`，无源日志记检查路径）；installer 应用 header/提示由 `disk ok/none` 改为 `source ..` 与 `no source: checked /pkgs,/disk`，tag `p`=internal。可选 rednet 源（`/etc/update.rednet`）记为 TODO，未实现。新增 `t_sys_ota.ota.internal`（内部源列出/安装/卸载、无 `/disk` 无 `disk none`、合并 `internal+disk`、无源为空 problems）。离线 **4,737 pass / 0 fail / 235 groups**（4,713/234）；未 commit。
 - 2026-11-01: **内置文字浏览器 `web.app`**（口径见 §29）。新包 `system/system/web.app/{manifest.lua,main.lua}`（caps `fs.read`+`http`+`input`+`terminal`，约 13 KB），事件驱动：`enter` 打开地址（自动补 `http://`）、`up/down` 滚动、`b` 历史返回、`r` 重载、`q` 退出（不用 Esc）；正文纯文本按屏宽折行，非 2xx/传输失败/无 http 都有可读状态行，不崩；launcher 自动扫到它并因其声明 `input` 直接交接键盘。新增 `tests/t_web.lua`（5 组 52 断言，假 http 三种返回）；`install.set` 29→31 条、`t_budget` 同步；`t_desktop`/`t_desktop_loop`/`t_apps_ui`/`t_sys_ota` 的 3 包计数改 4。离线 **4,789 pass / 0 fail / 240 groups**（4,737/235）；未 commit。
+- 2026-11-01: **net 改为可选示例包**（口径见 §30）。`git mv system/system/net.app examples/net.app`（内容不变），`install.set` 去掉 net 两行 → 镜像 29 条；`system/net/{hosts,service}.lua` 服务层仍在镜像。测试：`/system/system` 回 3 包（launcher/settings/web），`t_desktop`/`t_desktop_loop` 的启动与日志断言改 settings，`t_net_app`/`t_apps_ui` 改从 `/tests/net.app` fixture 加载，`run-tests.ps1` 改 stage `examples\net.app` → `/tests/net.app`，`t_budget` 29 条且 payload 断言翻转。离线 **4,786 pass / 0 fail / 240 groups**；sizecheck 见上。未 commit。

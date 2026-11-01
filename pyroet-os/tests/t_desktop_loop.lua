@@ -325,7 +325,7 @@ return function(H)
         local pulls = 0
         local committed_at_first_pull = false
         local events = {
-            { "key", 11 },   -- down: the launcher moves to "net"
+            { "key", 11 },   -- down: the launcher moves to "settings"
             { "key", 14 },   -- enter: start net.app through api.sys.launch
             -- net declares input now: Enter is a full handover (keyboard+screen),
             -- so this escape goes to net and quits it ...
@@ -397,19 +397,19 @@ return function(H)
         -- escape quit net, the second escape quit the desktop
         H.has(lines, "DESKTOP_EVENT n=1 event=key arg=down app=launcher")
         H.has(lines, "DESKTOP_EVENT n=2 event=key arg=enter app=launcher")
-        H.has(lines, "DESKTOP_EVENT n=3 event=key arg=escape app=net")
+        H.has(lines, "DESKTOP_EVENT n=3 event=key arg=escape app=settings")
         H.has(lines, "DESKTOP_EVENT n=4 event=terminate app=-")
         H.has(lines, "DESKTOP_TERMINATE scope=desktop event=terminate")
-        H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=net")
+        H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=settings")
         H.has(lines, "APP_LOG app=launcher msg=key=enter action=launch"
-            .. " index=2 sel=net detail=net")
-        H.has(lines, "APP_START name=net")
+            .. " index=2 sel=settings detail=settings")
+        H.has(lines, "APP_START name=settings")
         -- the handover: net gets both, escape quits it, the launcher takes the
         -- screen back and is told to repaint (no loan: net owns a keyboard now)
-        H.has(lines, "DESKTOP_FOREGROUND app=net reason=launch")
-        H.has(lines, "APP_EXIT app=net")
+        H.has(lines, "DESKTOP_FOREGROUND app=settings reason=launch")
+        H.has(lines, "APP_EXIT app=settings")
         H.has(lines, "DESKTOP_FOREGROUND app=launcher reason=settle")
-        H.has(lines, "APP_LOG app=launcher msg=focus msg=back from net")
+        H.has(lines, "APP_LOG app=launcher msg=focus msg=back from settings")
         -- the desktop itself does not quit on a letter: it is still running,
         -- the machine is just handed back to the shell by Ctrl+T
         H.lacks("boot_no_launcher_quit", lines, "app=launcher msg=quit")
@@ -481,13 +481,13 @@ return function(H)
         H.eq("migrate_desktop_reason", result.desktop_reason, "terminate")
         H.has(lines, "STARTUP_DESKTOP_ENTER name=launcher source=injected")
         H.has(lines, "DESKTOP_EVENT n=1 event=key arg=down app=launcher")
-        H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=net")
-        H.has(lines, "APP_START name=net")
-        H.has(lines, "DESKTOP_FOREGROUND app=net reason=launch")
-        H.has(lines, "APP_EXIT app=net")
+        H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=settings")
+        H.has(lines, "APP_START name=settings")
+        H.has(lines, "DESKTOP_FOREGROUND app=settings reason=launch")
+        H.has(lines, "APP_EXIT app=settings")
         H.has(lines, "DESKTOP_FOREGROUND app=launcher reason=settle")
-        H.has(lines, "APP_LOG app=launcher msg=focus msg=back from net")
-        H.eq("migrate_net_result", result.apps:app("net").result, "quit")
+        H.has(lines, "APP_LOG app=launcher msg=focus msg=back from settings")
+        H.eq("migrate_settings_result", result.apps:app("settings").result, "quit")
         H.eq("migrate_launcher_state", result.apps:app("launcher").state, "running")
         H.eq("migrate_pulls", pulls, 4)
         H.ascii_check("migrate_logs_ascii", H.joined(lines))
@@ -685,13 +685,13 @@ end
         local back = run1.frames[9]
         H.eq("screen_back_markers", (markers(back)), 1)
         H.eq("screen_back_heads", heads(back), "  |  |> |  ")
-        H.contains("screen_back_status", (back or {})[19] or "", "7 apps sel 3/7")
+        H.contains("screen_back_status", (back or {})[19] or "", "6 apps sel 3/6")
         -- the launcher launched itself: refused, logged, the screen stays
         H.has(run1.lines, "APP_START_DENIED name=launcher reason=already_running")
         H.contains("screen_self_message", (run1.frames[11] or {})[18] or "",
             "cannot start launcher")
         H.contains("screen_self_status", (run1.frames[11] or {})[19] or "",
-            "7 apps sel 4/7")
+            "6 apps sel 4/6")
         H.ascii_check("screen_logs_ascii", H.joined(run1.lines))
 
         -- 2) an app that stops by itself ends the loan without any timer, and the
@@ -719,7 +719,7 @@ end
         H.eq("stop_moved_markers", count, 1)
         H.eq("stop_moved_row", where, 2)
         H.eq("stop_moved_heads", heads(run2.frames[4]), "  |> |  |  ")
-        H.contains("stop_status", (run2.frames[4] or {})[19] or "", "5 apps sel 2/5")
+        H.contains("stop_status", (run2.frames[4] or {})[19] or "", "4 apps sel 2/4")
         H.ascii_check("stop_logs_ascii", H.joined(run2.lines))
         H.rmrf("/apps")
     end
@@ -952,7 +952,7 @@ end
         local returned = back.frames[4]
         local rtext = table.concat(returned or {}, "\n")
         H.contains("back_list", rtext, "apps sel")
-        H.eq("back_hint", ((returned or {})[18] or ""):sub(1, 13), "back from net")
+        H.contains("back_hint", (returned or {})[18] or "", "back from settings")
         H.contains("back_marker", rtext, "> ")
 
         -- 3) back from a screen loan: the loan timer ends it and the next frame
@@ -1088,8 +1088,8 @@ end
             { "terminate" },    -- now on the desktop: the menu opens
         })
         H.check("power_app_run_ok", two.ok, tostring(two.run))
-        H.has(two.lines, "DESKTOP_TERMINATE scope=app app=net event=terminate")
-        H.has(two.lines, "APP_EXIT app=net")
+        H.has(two.lines, "DESKTOP_TERMINATE scope=app app=settings event=terminate")
+        H.has(two.lines, "APP_EXIT app=settings")
         H.eq("power_menu_once", H.count(two.lines, "DESKTOP_POWER_MENU"), 1)
         H.eq("power_app_no_reboot", calls.reboot, 0)
 
@@ -1321,8 +1321,8 @@ end
             frame = function() return true end,
         })
         H.eq("leave_app_reason", result2.desktop_reason, "terminate")
-        H.has(lines2, "DESKTOP_TERMINATE scope=app app=net event=terminate")
-        H.has(lines2, "APP_EXIT app=net")
+        H.has(lines2, "DESKTOP_TERMINATE scope=app app=settings event=terminate")
+        H.has(lines2, "APP_EXIT app=settings")
         H.has(lines2, "DESKTOP_FOREGROUND app=launcher reason=settle")
         H.has(lines2, "DESKTOP_TERMINATE scope=desktop event=terminate")
         H.eq("leave_app_pulls", pulls2, 4)

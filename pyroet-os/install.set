@@ -136,8 +136,6 @@ pyroet-os/system/system/installer.app/main.lua
 # come from versus the P5b reading of 343,375. Listed file by file for the same
 # reason as the desktop packages: a directory entry would sweep in whatever
 # development material ends up next to them.
-pyroet-os/system/system/net.app/manifest.lua
-pyroet-os/system/system/net.app/main.lua
 # P5a/P5b: application installer + system OTA client (DECISIONS.md 11). The pair
 # measures 26,165 B (installer 13,253 + ota 12,912). P5b paid for it by moving
 # system/net.app (15,930 B) out to examples/net.app; G1 reversed that
