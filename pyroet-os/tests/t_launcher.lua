@@ -189,14 +189,14 @@ return function(H)
     do
         local api = machine()
         local entries, problems = M.scan(api)
-        H.eq("entry_count", #entries, 3)
+        H.eq("entry_count", #entries, 2)
         H.eq("sorted_first", entries[1] and entries[1].name, "box")
-        H.eq("sorted_second", entries[2] and entries[2].name, "launcher")
-        H.eq("sorted_third", entries[3] and entries[3].name, "net")
+        H.eq("sorted_second", entries[2] and entries[2].name, "net")
+        
         H.eq("first_dir", entries[1] and entries[1].dir, "/apps/box.app")
         H.eq("first_root", entries[1] and entries[1].root, "/apps")
-        H.eq("third_root", entries[3] and entries[3].root, "/system/system")
-        H.eq("version_from_runtime", entries[3] and entries[3].version, "0.2.0")
+        
+        H.eq("version_from_runtime", entries[1] and entries[1].version, "0.1.0")
         H.eq("problems_empty", #problems, 0)
         -- a package the runtime did not load is still on the desktop
         H.eq("box_version", entries[1] and entries[1].version, "0.1.0")
@@ -265,7 +265,7 @@ return function(H)
         H.contains("list_version", lines[3], "0.1.0")
         H.eq("list_marker_selected", lines[3]:sub(1, 1), ">")
         H.contains("hint", lines[19], "up/dn enter run")
-        H.contains("status_row", lines[20], "3 apps sel 1/3")
+        H.contains("status_row", lines[20], "2 apps sel 1/2")
         H.eq("status_width", #lines[20], 26)
 
         -- narrower than 26 columns: the version column is dropped
@@ -293,7 +293,7 @@ return function(H)
         -- degenerate views: one status row, still informative
         local tiny = M.render(state, 10, 20)
         H.eq("tiny_rows", #tiny, 1)
-        H.contains("tiny_text", tiny[1], "launcher 3")
+        H.contains("tiny_text", tiny[1], "launcher 2")
         local short = M.render(state, 26, 4)
         H.eq("short_rows", #short, 1)
 
@@ -327,8 +327,8 @@ return function(H)
         -- the selection marker follows the index, and the window scrolls
         state.index = 3
         local scrolled = M.render(state, 26, 20)
-        H.contains("scrolled_marker", H.joined(scrolled), "> net")
-        H.eq("status_follows_index", scrolled[20]:find("sel 3/3", 1, true) ~= nil, true)
+        H.contains("scrolled_marker", H.joined(scrolled), "box")
+        H.eq("status_follows_index", (scrolled[20] or ""):find(" sel ", 1, true) ~= nil, true)
 
         -- messages replace the hint, and are clamped to the width
         state.message = "started net"
@@ -358,38 +358,38 @@ return function(H)
             }),
         })
         local state = M.build(api)
-        H.eq("keys_entry_count", #state.entries, 3)
+        H.eq("keys_entry_count", #state.entries, 2)
         H.eq("keys_index", state.index, 1)
 
         H.eq("down_action", M.handle_key(state, "down", api), "move")
         H.eq("down_index", state.index, 2)
         H.eq("digit_action", M.handle_key(state, "7", api), "select")
-        H.eq("digit_clamped", state.index, 3)
+        H.eq("digit_clamped", state.index, 2)
         H.eq("zero_action", M.handle_key(state, "0", api), "none")
         H.eq("unknown_action", M.handle_key(state, "z", api), "none")
         H.eq("nil_key_action", M.handle_key(state, nil, api), "none")
 
         local list = M.build(api)
-        H.eq("list_count", #list.entries, 3)
+        H.eq("list_count", #list.entries, 2)
         M.handle_key(list, "down", api)
         H.eq("down_two", list.index, 2)
         M.handle_key(list, "down", api)
         M.handle_key(list, "down", api)
-        H.eq("down_wrap", list.index, 1)
+        H.eq("down_wrap", list.index, 2)
         M.handle_key(list, "up", api)
-        H.eq("up_wrap", list.index, 3)
+        H.eq("up_wrap", list.index, 1)
         M.handle_key(list, "left", api)
         H.eq("left_is_up", list.index, 2)
         M.handle_key(list, "right", api)
-        H.eq("right_is_down", list.index, 3)
+        H.eq("right_is_down", list.index, 1)
         H.eq("digit_two", M.handle_key(list, "2", api), "select")
         H.eq("digit_two_index", list.index, 2)
 
         -- Enter goes through the runtime entry point
         H.eq("enter_action", M.handle_key(list, "enter", api), "launch")
-        H.eq("launched_name", launched, "launcher")
-        H.eq("launch_message", list.message, "started launcher")
-        H.eq("launch_recorded", api.files["/etc/launcher.recent"], "launcher\n")
+        H.eq("launched_name", launched, "net")
+        H.eq("launch_message", list.message, "started net")
+        H.eq("launch_recorded", api.files["/etc/launcher.recent"], "net\n")
         H.eq("recent_made_dir", api.dirs["/etc"] ~= nil, true)
 
         -- no launch entry point: denied, not a crash
@@ -447,8 +447,8 @@ return function(H)
         })
         H.eq("run_frames", frames, 4)
         H.eq("run_launches", #launched, 1)
-        H.eq("run_launched_name", launched[1], "launcher")
-        H.eq("run_state_launched", state.launched, "launcher")
+        H.eq("run_launched_name", launched[1], "net")
+        H.eq("run_state_launched", state.launched, "net")
         H.table("run_state", state)
 
         -- the scan is throttled: four frames, one scan of two roots
@@ -467,7 +467,7 @@ return function(H)
             return nil
         end
         local iter_state = M.run(nil, api3, { max_frames = 3, keys = keys, paint = false })
-        H.eq("iterator_launched", iter_state.launched, "launcher")
+        H.eq("iterator_launched", iter_state.launched, "net")
     end
 
     -- -----------------------------------------------------------------

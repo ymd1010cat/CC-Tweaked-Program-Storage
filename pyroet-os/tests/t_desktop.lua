@@ -214,14 +214,13 @@ return function(H)
         }
 
         local state = LAUNCHER.build(api)
-        H.eq("entries", #state.entries, 2)
+        H.eq("entries", #state.entries, 1)
         H.eq("entry_names", table.concat({
-            state.entries[1].name, state.entries[2].name }, ","),
-            "launcher,settings")
-        H.eq("settings_version", state.entries[2].version, "0.2.0")
+            state.entries[1].name }, ","), "settings")
+        H.eq("settings_version", state.entries[1].version, "0.2.0")
         local lines_first = LAUNCHER.render(state, 26, 20)
         H.eq("render_rows", #lines_first, 20)
-        H.contains("status_first", lines_first[20], "2 apps sel 1/2")
+        H.contains("status_first", lines_first[20], "1 app sel 1/1")
 
         -- Enter on the second row starts settings.app through the runtime
         H.eq("down", LAUNCHER.handle_key(state, "down", api), "move")
@@ -257,7 +256,7 @@ return function(H)
         H.eq("run_launched", run_state.launched, "settings")
         H.eq("run_settings_running", rt2:app("settings").state, "running")
         H.table("run_seen", seen)
-        H.eq("run_seen_index", seen and seen.index, 2)
+        H.eq("run_seen_index", seen and seen.index, 1)
         rt2:kill("settings")
         rt:kill("settings")
     end

@@ -80,6 +80,8 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
    longer declares "input". A stale /etc/perms/launcher.cfg written by an older
    image is migrated on the next boot: the log shows PERMS_STALE ...
    caps=input,terminal and PERMS_SAVED ... granted=4 denied=0.
+   launcher is the desktop itself: it never appears in its own app list, so a
+   boot shows only the packages that are actually launchable.
    The three system apps are keyboard-operable (T14): enter on settings /
    installer / net hands them the keyboard and the screen.
      settings   up/down pick a row, left/right/enter cycle its value and

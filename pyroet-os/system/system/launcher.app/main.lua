@@ -54,6 +54,9 @@ M.HINT = "up/dn enter run"
 -- q used to drop the whole machine to the CraftOS shell, which is not what
 -- "back" means on this desktop.
 M.LEAVE_HINT = "Ctrl+T opens power menu"
+-- the package name of this app: it must never appear in its own list. A second
+-- copy under /apps is skipped by the same rule (the package name, not the path).
+M.SELF = "launcher"
 -- The power menu (round 8). Ctrl+T used to drop the machine to the CraftOS
 -- shell, which the user does not want; the desktop now intercepts `terminate`
 -- and shows this instead. It is drawn by the launcher itself: no new app, no
@@ -214,6 +217,7 @@ function M.scan(api, opts)
             capabilities = type(record) == "table" and record.capabilities or nil,
         }
     end
+    local skipped_self = 0
     for r = 1, #roots do
         local root = tostring(roots[r])
         local called, names = pcall(fsx.list, root)
@@ -235,6 +239,14 @@ function M.scan(api, opts)
                     end
                     if not manifest then
                         problems[#problems + 1] = "no manifest " .. app
+                    elseif app == M.SELF then
+                        -- the desktop itself: not an app row (a second copy under
+                        -- /apps is skipped by the same rule)
+                        skipped_self = skipped_self + 1
+                        if type(api) == "table" and type(api.log) == "function" then
+                            pcall(api.log, "LAUNCHER_SKIP_SELF name=" .. app
+                                .. " path=" .. dir)
+                        end
                     elseif seen[app] then
                         problems[#problems + 1] = "duplicate " .. app
                     else

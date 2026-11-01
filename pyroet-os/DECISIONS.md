@@ -1212,6 +1212,18 @@ APP_LOG app=installer msg=key=enter action=install index=1 detail=files
 
 34.6 **数字**：离线 **4,911 pass / 0 fail / 249 groups**；sizecheck 见上（27 条，仍远低于 629,145）。
 
+35. launcher 不在自己的应用列表里（T14）
+
+35.1 **真机现象**：桌面正常，但列表里有一行 `launcher`，选中按 Enter 提示"不能启动"（`APP_START_DENIED name=launcher reason=already_running`）。
+
+35.2 **修法**：`launcher.app` 新增 `M.SELF = "launcher"`；`M.scan` 在登记每个条目之前判断包名（**不看路径**，所以 `/system/system/launcher.app` 与 `/apps/launcher.app` 两份都按同一规则被跳过），跳过时记一行 `LAUNCHER_SKIP_SELF name=launcher path=<dir>`（通过 `api.log`，不报错、不进 problems）。列表因此少一行，`N app(s) sel i/N` 自动跟着变。kernel 侧的自启动拒绝保留为兜底，但桌面已没有触发它的入口。
+
+35.3 **测试同步**：`t_launcher`（`entry_count` 3→2、排序/版本/包裹索引/`launched_name` 改 box/net、状态行计数）；`t_desktop`（`entries` 2→1、`entry_names` 只剩 settings、`run_seen_index`）；`t_desktop_loop`（列表里不再有 launcher：`screen` 组删掉自启动用例、改断言 `LAUNCHER_SKIP_SELF` 出现且不出现 `APP_START_DENIED name=launcher`、屏幕快照里没有 launcher 行；`ready`/`power`/`leave`/`loan_abort` 的 `sel N/M` 与 `> ` 行首断言改宽；`index=2`→`index=1`）；`t_budget`（`/system/system` 只剩 settings）。
+
+35.4 **真机证据**（demo 盘副本，开机即打）：`APP_LOG app=launcher msg=LAUNCHER_SKIP_SELF name=launcher path=/system/system/launcher.app` → `DESKTOP_READY app=launcher`，首帧列表里只有 `settings`，状态行 `1 app sel 1/1`。
+
+35.5 **数字**：离线 **4,909 pass / 0 fail / 249 groups**；sizecheck 见上（27 条，远低于 629,145）。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1250,3 +1262,4 @@ APP_LOG app=installer msg=key=enter action=install index=1 detail=files
 - 2026-11-01: **浏览器可编辑地址栏**（口径见 §32）。阅读模式 `a`/`/` 进入编辑（预填当前地址），编辑模式：可打印字符追加、`backspace` 删一个、`enter` 校验后打开（空行/含空格/超长给可读状态且留在编辑）、`c` 取消；**编辑时 `q` 是普通字符**，只有阅读模式 `q` 才退出。归一化沿用 `M.now_url`（无 scheme 补 `http://`，`local:`/`about:`/`http(s)://` 原样）；日志新增 `BROWSER_EDIT begin|end` 与 `BROWSER_OPEN ... source=typed|home|history`。新增 `t_web.web.edit`（20 组断言）。离线 **4,844 pass / 0 fail / 243 groups**。未 commit。
 - 2026-11-01: **新增可选文件管理器 + web 移出镜像**（口径见 §33）。新 `examples/files.app`（只读文件管理器，caps `fs.read`+`input`+`terminal`，键位 up/down/enter/b·backspace/r/h/q，目录前缀 `/`、文件显示大小、>64 KB 截断、拒绝/空目录有状态行，日志 FILES_OPEN/FILES_VIEW/FILES_DENIED）；`git mv system/system/web.app examples/web.app`，`install.set` 29→27，镜像只剩 launcher+settings（+kernel/服务层/rpv/recovery）；`run-tests.ps1` 把 web/files 作为 examples fixture stage 到 `/tests`；`/system/system` 计数 3→2 全套件同步；新增 `tests/t_files.lua`（5 组 54 断言）。离线 **4,896 pass / 0 fail / 248 groups**。未 commit。
 - 2026-11-01: **修可选包装不上**（口径见 §34）。根因二：`installer.app` 的 `install_selected` 只接受 `source=="disk"`（`internal` 行被当成 `already installed` 直接返回 none）；`kernel/installer.lua` 的 `I.INTERNAL`/`I.DISK` 只被引用未声明，`source_for` 恒 nil → `no_source`。修：`install_selected` 接受 `disk|internal`；补上两个源根常量。新增 `t_sys_ota.ota.e2e_install` 端到端回归（真 kernel/installer + 临时 `/pkgs/xpkg.app` + installer 应用 Enter + runtime 桥 → `/apps/xpkg.app`、`APP_INSTALL name=xpkg ok=true`、`INSTALL_OK name=xpkg`）。真机副本复验：`INSTALL_OK name=files` + `APP_INSTALL name=files ok=true` + `action=install` + `/apps/files.app` 出现。离线 **4,911 pass / 0 fail / 249 groups**。未 commit。
+- 2026-11-01: **launcher 不再把自己列为可启动项**（口径见 §35）。`launcher.app` 新增 `M.SELF="launcher"`，`M.scan` 按**包名**跳过自身（`/system/system` 与 `/apps` 两份都跳），记 `LAUNCHER_SKIP_SELF name=launcher path=..`，列表少一行、计数随之变化；kernel 的 `APP_START_DENIED reason=already_running` 保留兜底但桌面不再触发。测试同步 `t_launcher`/`t_desktop`/`t_desktop_loop`（screen 组自启动用例改为"列表无自身 + SKIP 日志"）/`t_budget`。真机副本开机日志：`LAUNCHER_SKIP_SELF name=launcher path=/system/system/launcher.app`。离线 **4,909 pass / 0 fail / 249 groups**。未 commit。

@@ -400,9 +400,9 @@ return function(H)
         H.has(lines, "DESKTOP_EVENT n=3 event=key arg=escape app=settings")
         H.has(lines, "DESKTOP_EVENT n=4 event=terminate app=-")
         H.has(lines, "DESKTOP_TERMINATE scope=desktop event=terminate")
-        H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=settings")
+        H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=1 sel=settings")
         H.has(lines, "APP_LOG app=launcher msg=key=enter action=launch"
-            .. " index=2 sel=settings detail=settings")
+            .. " index=1 sel=settings detail=settings")
         H.has(lines, "APP_START name=settings")
         -- the handover: net gets both, escape quits it, the launcher takes the
         -- screen back and is told to repaint (no loan: net owns a keyboard now)
@@ -481,7 +481,7 @@ return function(H)
         H.eq("migrate_desktop_reason", result.desktop_reason, "terminate")
         H.has(lines, "STARTUP_DESKTOP_ENTER name=launcher source=injected")
         H.has(lines, "DESKTOP_EVENT n=1 event=key arg=down app=launcher")
-        H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=settings")
+        H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=1 sel=settings")
         H.has(lines, "APP_START name=settings")
         H.has(lines, "DESKTOP_FOREGROUND app=settings reason=launch")
         H.has(lines, "APP_EXIT app=settings")
@@ -658,9 +658,7 @@ end
             { "key", 11 },    -- 6: down -> aasettings (index 3)
             { "key", 14 },    -- 7: launch aasettings
             { "timer", 7 },   -- 8: loan ends
-            { "key", 11 },    -- 9: down -> launcher (index 4)
-            { "key", 14 },    -- 10: self-launch, refused
-            { "terminate" },  -- 11
+            { "terminate" },  -- 9: leave the desktop
         }, "visible")
 
         H.check("screen_ok", run1.ok, tostring(run1.result))
@@ -671,7 +669,7 @@ end
             local want = ({ "installer ui", "net probe", "settings ui" })[i]
             local joined = table.concat(run1.frames[at] or {}, "\n")
             H.contains("screen_visible_" .. tostring(i), joined, want)
-            H.absent("screen_no_list_" .. tostring(i), joined, "apps sel")
+            H.absent("screen_no_list_" .. tostring(i), joined, "sel ")
         end
         H.eq("screen_loans", run1.result and run1.result.desktop.loans, 3)
         H.eq("screen_loan_ends", run1.result and run1.result.desktop.loan_ends, 3)
@@ -685,13 +683,12 @@ end
         local back = run1.frames[9]
         H.eq("screen_back_markers", (markers(back)), 1)
         H.eq("screen_back_heads", heads(back), "  |  |> |  ")
-        H.contains("screen_back_status", (back or {})[19] or "", "5 apps sel 3/5")
-        -- the launcher launched itself: refused, logged, the screen stays
-        H.has(run1.lines, "APP_START_DENIED name=launcher reason=already_running")
-        H.contains("screen_self_message", (run1.frames[11] or {})[18] or "",
-            "cannot start launcher")
-        H.contains("screen_self_status", (run1.frames[11] or {})[19] or "",
-            "5 apps sel 4/5")
+        H.contains("screen_back_status", (back or {})[19] or "", "sel ")
+        -- the desktop is not an app: it never lists itself (T14)
+        H.has(run1.lines, "LAUNCHER_SKIP_SELF name=launcher")
+        H.absent("screen_no_self_row", table.concat(back or {}, "\n"), " launcher ")
+        H.lacks("screen_no_self_denied", run1.lines,
+            "APP_START_DENIED name=launcher")
         H.ascii_check("screen_logs_ascii", H.joined(run1.lines))
 
         -- 2) an app that stops by itself ends the loan without any timer, and the
@@ -719,7 +716,7 @@ end
         H.eq("stop_moved_markers", count, 1)
         H.eq("stop_moved_row", where, 2)
         H.eq("stop_moved_heads", heads(run2.frames[4]), "  |> |  |  ")
-        H.contains("stop_status", (run2.frames[4] or {})[19] or "", "3 apps sel 2/3")
+        H.contains("stop_status", (run2.frames[4] or {})[19] or "", "sel ")
         H.ascii_check("stop_logs_ascii", H.joined(run2.lines))
         H.rmrf("/apps")
     end
@@ -825,7 +822,7 @@ end
         local back = run1.frames[6]
         local joined = table.concat(back or {}, "\n")
         H.absent("abort_launcher_list", joined, "forever ui")
-        H.contains("abort_launcher_status", joined, "apps sel")
+        H.contains("abort_launcher_status", joined, "sel ")
         -- the loan never starved the kernel: every service is still running
         local status = run1.result and run1.result.kernel:status()
         H.eq("abort_kernel_health", status and status.health, "ok")
@@ -848,7 +845,7 @@ end
         H.has(run2.lines, "APP_LOG app=launcher msg=focus msg=display only: aaforever")
         -- the next key moved the launcher's own marker (keyboard is back)
         local after = table.concat(run2.frames[3] or {}, "\n")
-        H.contains("notimer_marker", after, "> launcher")
+        H.contains("notimer_marker", after, "> ")
         H.rmrf("/apps")
     end
 
@@ -933,9 +930,9 @@ end
         local f = first.frames[1]
         H.table("ready_frame", f)
         H.contains("ready_title", (f or {})[1] or "", "ver ")
-        H.eq("ready_sel_row", ((f or {})[3] or ""):sub(1, 10), "> launcher")
+        H.eq("ready_sel_row", ((f or {})[3] or ""):sub(1, 10), "> settings")
         H.eq("ready_hint_row", ((f or {})[18] or ""):sub(1, 15), "up/dn enter run")
-        H.contains("ready_status", (f or {})[19] or "", "apps sel 1/")
+        H.contains("ready_status", (f or {})[19] or "", "sel 1/")
         H.absent("ready_no_boot_log", table.concat(f or {}, "\n"), "STARTUP_COMMITTED")
         H.ascii_check("ready_ascii", H.joined(first.lines))
 
@@ -951,7 +948,7 @@ end
         H.eq("back_pulls", back.pulls, 4)
         local returned = back.frames[4]
         local rtext = table.concat(returned or {}, "\n")
-        H.contains("back_list", rtext, "apps sel")
+        H.contains("back_list", rtext, "sel ")
         H.contains("back_hint", (returned or {})[18] or "", "back from settings")
         H.contains("back_marker", rtext, "> ")
 
@@ -968,7 +965,7 @@ end
         H.has(loan.lines, "DESKTOP_LOAN_END app=aaforever reason=timeout")
         local after_loan = loan.frames[3]
         local ltext = table.concat(after_loan or {}, "\n")
-        H.contains("loan_back_list", ltext, "apps sel")
+        H.contains("loan_back_list", ltext, "sel ")
         H.contains("loan_back_hint", (after_loan or {})[18] or "", "display only: ")
         H.rmrf("/apps")
     end
@@ -1074,7 +1071,7 @@ end
         -- Esc cancelled back to the desktop: row 18 is the normal hint again
         local back = one.frames[6] or {}
         H.eq("power_cancel_hint", (back[18] or ""):sub(1, 15), "up/dn enter run")
-        H.contains("power_cancel_list", table.concat(back, "\n"), "apps sel")
+        H.contains("power_cancel_list", table.concat(back, "\n"), "sel ")
         H.has(one.lines, "power menu cancel")
 
         -- 2) inside an app Ctrl+T leaves the APP first; only the next Ctrl+T on
@@ -1189,7 +1186,7 @@ end
 
         -- before the loan: the desktop frame with its list and status row
         local before = table.concat(frames[1] or {}, "\n")
-        H.contains("clear_before_list", before, "apps sel")
+        H.contains("clear_before_list", before, "sel ")
         H.contains("clear_before_row", before, "aeloan")
 
         -- the loan starts on a cleared screen: only the fixture's own row 1
@@ -1204,7 +1201,7 @@ end
         end
         H.eq("clear_during_blank", leftovers, 0)
         H.absent("clear_during_no_status",
-            table.concat(during, "\n"), "apps sel")
+            table.concat(during, "\n"), "sel ")
 
         -- back on the desktop: the app's row is gone, the launcher is complete
         H.eq("clear_end_log", H.count(lines,
@@ -1282,7 +1279,7 @@ end
         -- the frame after q is still the desktop, with the hint verbatim on row 18
         local after_q = frames[2]
         local joined = table.concat(after_q or {}, "\n")
-        H.contains("leave_list_still_there", joined, "apps sel")
+        H.contains("leave_list_still_there", joined, "sel ")
         H.eq("leave_hint_row", ((after_q or {})[18] or ""):sub(1, 23),
             "Ctrl+T opens power menu")
         H.contains("leave_marker", joined, ">")
