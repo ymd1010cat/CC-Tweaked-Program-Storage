@@ -115,16 +115,19 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
      appstore   built-in package downloader: a edits the server line, enter
                 downloads the selected package into /pkgs and installs it.
                 With no /etc/appstore.servers the default server is
-                http://store.pyrotechnic.org/ , so a fresh machine can install
-                without pressing a first; a still overrides it for this session.
+                rhtp://store.pyrotechnic.org/ (RHTP/1.0, default port 8080), so a
+                fresh machine can install without pressing a first; a still
+                overrides it for this session. Typing a bare host[:port]/path is
+                read as rhtp://; a http:// address is refused.
                 The last row of the list, "System update", is the image update:
                 enter reads <base>/meta.txt (base = first line of
-                /etc/ota.servers, else http://pyroet.pyrotechnic.org/upgrade),
+                /etc/ota.servers, else rhtp://pyroet.pyrotechnic.org/upgrade),
                 shows the remote version, then downloads and applies every file
                 with a "fetching <rel> (i/n)" progress row; the result is
                 "reboot to apply", and any failure is one readable line with the
                 running system untouched.
-                Server layout (plain text, any static file server):
+                Server layout (plain text, any RHTP server: GET <path>, and the
+                optional "off=<n> len=<n>" chunk extension answered with 206):
                   index.txt           "app <name> <version> <dir>" per line
                   <dir>/files.txt     one relative path per line
                   <dir>/<relpath>     the file
@@ -146,12 +149,19 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 Without a drive t only says "no disk drive" and the target
                 stays self.
       pushpkg    (a copy on the OTHER computer; not part of the image)
-                pushpkg <target-id|broadcast> [name] reads index.txt and the
-                package files over http, then streams them to the handheld
-                (PYROET-PKG/1, channel 4101 by default). /etc/pushpkg.conf:
-                server=<http base>, protocol=, channel= (logged), timeout=.
-                The default server (no config file, or no server= line) is
-                http://store.pyrotechnic.org/ .
+                pushpkg [--http] <target-id|broadcast> [name] reads index.txt
+                and the package files over RHTP, then streams them to the
+                handheld (PYROET-PKG/1, channel 4101 by default).
+                /etc/pushpkg.conf: server=<rhtp base>, http=1, protocol=,
+                channel= (logged), timeout=. The default server (no config file,
+                or no server= line) is rhtp://store.pyrotechnic.org/ .
+                RHTP is the default but this tool runs on ANOTHER computer: it
+                loads /system/rpv/loader.lua + /system/net/service.lua +
+                /system/net/rhtp.lua from the OS installed there and reuses that
+                one client. A machine without the rpv stack reports
+                "PUSHPKG_FAIL err=no_rhtp reason=.. hint=--http" instead of
+                falling back quietly; --http (or http=1) uses the ROM http table
+                and is a host-side debugging path only.
                 index.txt takes "app <name> <version> <dir>" and
                 "lua <name> <version> <file.lua>"; a lua entry is wrapped
                 into manifest.lua + main.lua (capabilities
@@ -202,16 +212,23 @@ The net service ships but is not registered by the default boot chain in
   -- pass { services = { spec } } to /system/startup.lua run(opts)
 
 5. UPDATE AND RECOVERY
-System OTA over the network (the normal path), base = first line of
-/etc/ota.servers or http://pyroet.pyrotechnic.org/upgrade:
-  local ota = dofile("/system/kernel/ota.lua").new({ http = http, log = print })
+System OTA over the network (the normal path, RHTP/1.0), base = first line of
+/etc/ota.servers or rhtp://pyroet.pyrotechnic.org/upgrade. The client belongs to
+the net service (it owns the one rpv node), so start one first:
+  local rpv = dofile("/system/rpv/loader.lua")
+  local svc = dofile("/system/net/service.lua").new({ rpv = rpv, peripheral = peripheral })
+  svc:start()
+  local ota = dofile("/system/kernel/ota.lua").new({
+      rhtp = { get = function(u) return svc:rhtp_get(u) end,
+               fetch = function(u, s) return svc:rhtp_fetch(u, s) end },
+      log = print })
   ota:update() ; print(ota:status().state)
 The desktop entry is appstore's "System update" row (enter, then wait for
 "reboot to apply"). The server serves the same description as the rednet peer:
   GET <base>/meta.txt   -> PYROET-OTA/2 META version=.. files=.. manifest_sha=..
                            then one "<relpath> <size> <sha256>" line per file
   GET <base>/<relpath>  -> the file body
-System OTA over rednet (no http host, publisher rednet id 12):
+System OTA over rednet (no network client needed, publisher rednet id 12):
   local ota = dofile("/system/kernel/ota.lua").new({ host = 12, log = print })
   ota:update() ; print(ota:status().state)
 Either source verifies the manifest hash and the backup cap BEFORE touching

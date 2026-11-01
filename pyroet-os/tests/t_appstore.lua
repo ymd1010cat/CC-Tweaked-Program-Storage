@@ -1,8 +1,9 @@
 --[[- pyroet-os/tests/t_appstore.lua -- the package downloader (system/system/appstore.app).
 
-The server is plain http + plain text: index.txt, <dir>/files.txt, the files
-themselves and an optional SHA256.txt. http is faked here (a URL -> body map)
-and the file system is the real one, so the staged package is inspected on disk.
+The server is plain RHTP + plain text: index.txt, <dir>/files.txt, the files
+themselves and an optional SHA256.txt. The RHTP client is faked here (a URL ->
+body map behind api.net.rhtp_get) and the file system is the real one, so the
+staged package is inspected on disk.
 
 No non-ASCII bytes in this file.
 ]]
@@ -17,20 +18,24 @@ local KEYS = { up = 10, down = 11, enter = 14, q = 16, a = 17, r = 19,
 return function(H)
     local F = H.real_fs()
 
-    local function http_from(map)
+    -- one RHTP GET over a URL -> body map: the net service answers (body) or
+    -- (nil, "rhtp 404"), exactly like the real client
+    local function rhtp_from(map)
         local calls = {}
-        return {
-            get = function(url)
-                calls[#calls + 1] = url
-                local item = map[url]
-                if item == nil then return nil, "not found" end
-                if type(item) == "table" then return item end
-                return { ok = true, status = 200, body = item }
-            end,
-        }, calls
+        local fake = {}
+        fake.get = function(url)
+            calls[#calls + 1] = url
+            local item = map[url]
+            if item == nil then return nil, "rhtp 404" end
+            if type(item) == "table" then return item.body, item.err end
+            return item, nil
+        end
+        fake.fetch = fake.get
+        return fake, calls
     end
 
-    local function api_with(http, sys)
+    -- the appstore no longer touches api.http at all: only api.net.rhtp_get
+    local function api_with(rhtp, sys)
         local log, lines = H.logger()
         local api = {
             fs = {
@@ -55,7 +60,10 @@ return function(H)
                 delete = function(path) return pcall(F.delete, path) end,
                 move = function(a, b) return pcall(F.move, a, b) end,
             },
-            http = http,
+            net = {
+                rhtp_get = rhtp and rhtp.get or nil,
+                rhtp_fetch = rhtp and rhtp.fetch or nil,
+            },
             sys = sys,
             input = { keys = KEYS, pullEvent = function() return nil end },
             yield = function() end,
@@ -64,7 +72,7 @@ return function(H)
         return api, lines
     end
 
-    local BASE = "http://example.com/pkg/"
+    local BASE = "rhtp://example.com/pkg/"
     local function server()
         return {
             [BASE .. "index.txt"] = "app demo 1.0.0 demo\napp other 2.0.0 other\n"
@@ -87,7 +95,8 @@ return function(H)
         for i = 1, #(raw.capabilities or {}) do caps[raw.capabilities[i]] = true end
         H.eq("appstore_name", raw.name, "appstore")
         H.eq("appstore_version", raw.version, "0.1.0")
-        H.eq("appstore_http", caps.http, true)
+        H.eq("appstore_rhtp", caps["net.rhtp"], true)
+        H.eq("appstore_no_http", caps.http, nil)
         H.eq("appstore_write", caps["fs.write"], true)
         H.eq("appstore_read", caps["fs.read"], true)
         H.eq("appstore_input", caps.input, true)
@@ -98,13 +107,13 @@ return function(H)
     -- -----------------------------------------------------------------
     H.group("appstore.index")
     do
-        local http = http_from(server())
+        local http = rhtp_from(server())
         local api = api_with(http)
         local state = P.new_state(api)
         -- 2026-11-01: the built-in default is the project store, not a .invalid
         -- placeholder, so a fresh machine needs no `a` press before it can install
-        H.eq("index_default_server", state.server, "http://store.pyrotechnic.org/")
-        H.eq("index_default_constant", P.DEFAULT_SERVER, "http://store.pyrotechnic.org/")
+        H.eq("index_default_server", state.server, "rhtp://store.pyrotechnic.org/")
+        H.eq("index_default_constant", P.DEFAULT_SERVER, "rhtp://store.pyrotechnic.org/")
         H.check("index_no_invalid", (P.DEFAULT_SERVER or ""):find("invalid", 1, true) == nil,
             "the default server is still a placeholder")
         local entries, bad = P.parse_index("app a 1.0.0 da\nnonsense\napp b 2.0 d2\n", BASE)
@@ -114,21 +123,21 @@ return function(H)
         H.eq("index_first_dir", entries[1].dir, "da")
 
         -- a 404 is a readable status and no entries
-        local api404 = api_with(http_from({})[1])
+        local api404 = api_with(rhtp_from({})[1])
         local state404 = P.new_state(api404)
         state404.server_index = 1
         H.eq("index_404", P.load_index(state404, api404), "error")
-        H.contains("index_404_status", state404.status, "index ")
+        H.contains("index_404_status", state404.status, "store: ")
         H.eq("index_404_entries", #state404.entries, 0)
 
         -- a 404 status is named verbatim
         local api404b = api_with({ get = function()
-            return { ok = true, status = 404, body = "nope" }
+            return nil, "rhtp 404"
         end })
         local state404b = P.new_state(api404b)
         state404b.servers = { BASE }
         H.eq("index_404b", P.load_index(state404b, api404b), "error")
-        H.eq("index_404b_status", state404b.status, "index http 404")
+        H.eq("index_404b_status", state404b.status, "store: rhtp 404")
 
         -- the real server listing: two apps and a bad-line count
         local state2 = P.new_state(api)
@@ -143,10 +152,20 @@ return function(H)
         H.contains("index_app_row", table.concat(frame, "\n"), "demo 1.0.0")
         H.contains("index_hint", frame[19] or "", "up/dn enter r reload a url q quit")
 
-        -- no http at all
+        -- no net.rhtp grant/host at all: a readable line, no request
         local state3 = P.new_state(api_with(nil)[1])
-        H.eq("index_no_http", P.load_index(state3, api_with(nil)[1]), "error")
-        H.eq("index_no_http_status", state3.status, "index no http")
+        H.eq("index_no_rhtp", P.load_index(state3, api_with(nil)[1]), "error")
+        H.eq("index_no_rhtp_status", state3.status, "store: no rhtp")
+
+        -- the two other named failures keep their exact words on the status line
+        local dns_api = api_with({ get = function() return nil, "dns: unknown host" end })
+        local state_dns = P.new_state(dns_api)
+        H.eq("index_dns_action", P.load_index(state_dns, dns_api), "error")
+        H.eq("index_dns_status", state_dns.status, "store: dns unknown host")
+        local to_api = api_with({ get = function() return nil, "timeout" end })
+        local state_to = P.new_state(to_api)
+        H.eq("index_timeout_action", P.load_index(state_to, to_api), "error")
+        H.eq("index_timeout_status", state_to.status, "store: timeout")
     end
 
     -- -----------------------------------------------------------------
@@ -155,7 +174,7 @@ return function(H)
         H.rmrf("/pkgs")
         local calls
         local http
-        http, calls = http_from(server())
+        http, calls = rhtp_from(server())
         local installed = {}
         local sysx = {
             install = function(name)
@@ -186,7 +205,7 @@ return function(H)
         -- a server without the optional SHA256.txt is honest about it
         H.hrmrf = H.rmrf
         H.rmrf("/pkgs")
-        local http2, calls2 = http_from(server())
+        local http2, calls2 = rhtp_from(server())
         local api2, lines2 = api_with(http2, nil)
         local state2 = P.new_state(api2)
         state2.servers = { BASE }
@@ -208,7 +227,7 @@ return function(H)
         local map = server()
         map[BASE .. "demo/SHA256.txt"] = string.rep("00", 32) .. " manifest.lua\n"
             .. string.rep("00", 32) .. " main.lua\n"
-        local api, lines = api_with(http_from(map), nil)
+        local api, lines = api_with(rhtp_from(map), nil)
         local state = P.new_state(api)
         state.servers = { BASE }
         state.server_index = 1
@@ -228,7 +247,7 @@ return function(H)
             local map2 = server()
             map2[BASE .. "demo/SHA256.txt"] = P.sha_of(manifest) .. " manifest.lua\n"
                 .. P.sha_of(main) .. " main.lua\n"
-            local api2, lines2 = api_with(http_from(map2), nil)
+            local api2, lines2 = api_with(rhtp_from(map2), nil)
             local state2 = P.new_state(api2)
             state2.servers = { BASE }
             state2.server_index = 1
@@ -248,7 +267,7 @@ return function(H)
     H.group("appstore.edit")
     do
         H.rmrf("/pkgs")
-        local http, calls = http_from(server())
+        local http, calls = rhtp_from(server())
         local api, lines = api_with(http, nil)
         local state = P.new_state(api)
         state.servers = { BASE }
@@ -263,11 +282,11 @@ return function(H)
         H.contains("edit_hint", frame[19] or "", "enter accept c cancel bs del")
 
         -- typing is appended; q is a letter while editing
-        state.edit_text = "http://"
+        state.edit_text = "rhtp://"
         P.dispatch_event(state, "char", "q", api)
-        H.eq("edit_q_text", state.edit_text, "http://q")
+        H.eq("edit_q_text", state.edit_text, "rhtp://q")
         H.eq("edit_back", P.dispatch_event(state, "key", "backspace", api), "move")
-        H.eq("edit_back_text", state.edit_text, "http://")
+        H.eq("edit_back_text", state.edit_text, "rhtp://")
         H.eq("edit_off", P.dispatch_event(state, "key", "c", api), "repaint")
         H.eq("edit_cancelled", state.editing, nil)
         H.has(lines, "APPSTORE_EDIT end reason=cancel")
@@ -282,6 +301,17 @@ return function(H)
         H.eq("edit_no_space", P.valid_url("two words"), false)
         H.eq("edit_no_empty", P.valid_url("   "), false)
         H.eq("edit_too_long", P.valid_url(string.rep("x", 200)), false)
+        -- a bare host[:port]/path is accepted and normalized to rhtp://
+        H.eq("edit_bare", P.normalize_server("box:8081/pkg/"),
+            "rhtp://box:8081/pkg/")
+        H.eq("edit_bare_default_port", P.normalize_server("box/pkg"),
+            "rhtp://box/pkg")
+        -- the host http scheme is refused instead of being stored as reachable
+        H.eq("edit_http_refused", P.valid_url("http://store.pyrotechnic.org/"),
+            false)
+        H.eq("edit_http_reason", select(2, P.valid_url("http://x/")),
+            "only rhtp:// addresses")
+        H.eq("edit_bad_port", P.valid_url("rhtp://box:0/x"), false)
     end
 
     -- -----------------------------------------------------------------
@@ -667,7 +697,7 @@ return function(H)
 
     H.group("appstore.keys")
     do
-        local api = api_with(http_from(server()), nil)
+        local api = api_with(rhtp_from(server()), nil)
         local state = P.new_state(api)
         state.servers = { BASE }
         state.server_index = 1
@@ -681,9 +711,9 @@ return function(H)
         H.eq("keys_up", P.dispatch_event(state, "key", "up", api), "move")
         H.eq("keys_up_index", state.index, 1)
         -- several servers: `s` cycles, the first line is what `a` edits
-        state.servers = { BASE, "http://second.example/" }
+        state.servers = { BASE, "rhtp://second.example/" }
         H.eq("keys_server_cycle", P.dispatch_event(state, "key", "s", api), "repaint")
-        H.eq("keys_server_second", P.server_of(state), "http://second.example/")
+        H.eq("keys_server_second", P.server_of(state), "rhtp://second.example/")
         H.eq("keys_server_wrap", P.dispatch_event(state, "key", "s", api), "repaint")
         H.eq("keys_server_first", P.server_of(state), BASE)
         -- the list has no entries and enter does nothing
@@ -705,7 +735,7 @@ return function(H)
         H.rmrf("/pkgs")
         H.rmrf("/disk")
         local installed = {}
-        local api, lines = api_with(http_from(server()), { install = function(name)
+        local api, lines = api_with(rhtp_from(server()), { install = function(name)
             installed[#installed + 1] = name
             return true, { version = "1.0.0" }
         end })
@@ -736,7 +766,7 @@ return function(H)
         H.mkdirp("/disk")
         H.check("target_disk_created", F.isDir("/disk"), "/disk is not a directory")
         local installed2 = {}
-        local api2, lines2 = api_with(http_from(server()), { install = function(name)
+        local api2, lines2 = api_with(rhtp_from(server()), { install = function(name)
             installed2[#installed2 + 1] = name
             return true, { version = "2.0.0" }
         end })
@@ -796,7 +826,7 @@ return function(H)
         assert(loadfile("/system/rpv/crypto.lua"))(CR)
         local OTA = assert(loadfile("/system/kernel/ota.lua"))()
         local function sha(text) return CR.hex(CR.sha256(text)) end
-        local UP = "http://up.example/upgrade"
+        local UP = "rhtp://up.example/upgrade"
         local body = "-- kernel v2\n"
         local rec = { relpath = "kernel/a.lua", size = #body, sha256 = sha(body) }
         local manifest = OTA.manifest_hash({ rec }, CR.sha256)
@@ -806,10 +836,10 @@ return function(H)
 
         -- the OTA base is /etc/ota.servers' first line (not the package server)
         H.mkdirp("/etc")
-        H.write("/etc/ota.servers", "# upgrade\n" .. UP .. "\nhttp://other/\n")
+        H.write("/etc/ota.servers", "# upgrade\n" .. UP .. "\nrhtp://other/\n")
 
         -- the row is the last item, and it shows the remote version after a load
-        local http = http_from({
+        local http = rhtp_from({
             [INDEX] = "app demo 1.0.0 demo\n",
             [UP .. "/meta.txt"] = meta,
         })
@@ -826,7 +856,7 @@ return function(H)
         H.contains("update_row_hint", text, "up/dn enter r reload a url q quit")
 
         -- no remote meta: the row is still there, just without a version
-        local http_plain = http_from({ [INDEX] = "app demo 1.0.0 demo\n" })
+        local http_plain = rhtp_from({ [INDEX] = "app demo 1.0.0 demo\n" })
         local api_plain = api_with(http_plain)
         local plain = P.new_state(api_plain)
         plain.servers = { BASE }
@@ -835,25 +865,27 @@ return function(H)
         H.contains("update_plain_row", table.concat(P.render(plain, 51, 19), "\n"),
             "System update")
 
-        -- the ROM http table answers with a response handle (readAll), not with
-        -- {status,body}: the meta check has to read both shapes
-        local http_handle = {
-            get = function(url)
-                if url == UP .. "/meta.txt" then
-                    return { status = 200, readAll = function() return meta end }
-                end
-                if url == INDEX then
-                    return { status = 200,
-                        readAll = function() return "app demo 1.0.0 demo\n" end }
-                end
-                return nil, "not found"
-            end,
-        }
-        local api_h = api_with(http_handle)
-        local st_h = P.new_state(api_h)
-        st_h.servers = { BASE }
-        P.load_index(st_h, api_h)
-        H.eq("update_handle_version", st_h.ota_version, "0.4.0")
+        -- the RHTP reasons reach the OTA row unchanged: a name that does not
+        -- resolve and a request that timed out each say so
+        local function meta_reason(err)
+            local fake = rhtp_from({ [INDEX] = "app demo 1.0.0 demo\n" })
+            local get = function(url)
+                if url == UP .. "/meta.txt" then return nil, err end
+                return fake.get(url)
+            end
+            local api_r = api_with({ get = get })
+            local st_r = P.new_state(api_r)
+            st_r.servers = { BASE }
+            P.load_index(st_r, api_r)
+            st_r.index = P.ota_index(st_r)
+            return st_r, api_r
+        end
+        local st_dns, api_dns = meta_reason("dns: unknown host")
+        H.eq("update_dns_action", P.ota_enter(st_dns, api_dns), "error")
+        H.eq("update_dns_status", st_dns.status, "update: dns unknown host")
+        local st_to, api_to = meta_reason("timeout")
+        H.eq("update_timeout_action", P.ota_enter(st_to, api_to), "error")
+        H.eq("update_timeout_status", st_to.status, "update: timeout")
 
         -- Enter on the row: the bridge is called with the base and a progress
         -- callback, the callback line is painted, and the status says reboot
@@ -891,27 +923,27 @@ return function(H)
         H.eq("update_fail_action", P.enter(st3, api3), "error")
         H.eq("update_fail_status", st3.status, "update failed: digest 0123")
 
-        -- no http at all: a readable line and no bridge call
+        -- no net.rhtp at all: a readable line and no bridge call
         local api4 = api_with(nil)
         local st4 = P.new_state(api4)
-        H.eq("update_nohttp_action", P.ota_enter(st4, api4), "error")
-        H.eq("update_nohttp_status", st4.status, "update: no http")
+        H.eq("update_norhtp_action", P.ota_enter(st4, api4), "error")
+        H.eq("update_norhtp_status", st4.status, "update: no rhtp")
 
         -- a transport failure (no reply) and a 404 are both readable lines
-        local api5 = api_with(http_from({}))
+        local api5 = api_with(rhtp_from({}))
         local st5 = P.new_state(api5)
         H.eq("update_404_action", P.ota_enter(st5, api5), "error")
-        H.eq("update_transport_status", st5.status, "update: not found")
+        H.eq("update_transport_status", st5.status, "update: rhtp 404")
         local api5b = api_with({ get = function()
-            return { ok = true, status = 404, body = "gone" }
+            return nil, "rhtp 404"
         end })
         local st5b = P.new_state(api5b)
         H.eq("update_404b_action", P.ota_enter(st5b, api5b), "error")
-        H.eq("update_404b_status", st5b.status, "update: http 404")
+        H.eq("update_404b_status", st5b.status, "update: rhtp 404")
 
         -- a bad meta body is a readable line too
         local api5c = api_with({ get = function()
-            return { ok = true, status = 200, body = "garbage\n" }
+            return "garbage\n", nil
         end })
         local st5c = P.new_state(api5c)
         H.eq("update_badmeta_action", P.ota_enter(st5c, api5c), "error")
@@ -928,7 +960,7 @@ return function(H)
 
         -- with no config file the built-in default is the project store
         H.rmrf("/etc/ota.servers")
-        H.eq("update_default_base", P.OTA_DEFAULT, "http://pyroet.pyrotechnic.org/upgrade")
+        H.eq("update_default_base", P.OTA_DEFAULT, "rhtp://pyroet.pyrotechnic.org/upgrade")
         H.eq("update_default_used", P.ota_base(api), P.OTA_DEFAULT)
     end
 end

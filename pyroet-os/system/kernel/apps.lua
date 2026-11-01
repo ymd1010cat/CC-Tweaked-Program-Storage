@@ -16,7 +16,12 @@ api.yield() end`); the scheduler pulls it forward one step per `tick()`.
 Capabilities (the whole list, no inheritance):
 
     fs.read  fs.write  net.rpv  net.rednet  redstone  peripheral  http
-    input    terminal
+    input    terminal  net.rhtp
+
+`net.rhtp` is the service protocol (DECISIONS.md 45): `api.net.rhtp_get(url)` and
+`api.net.rhtp_fetch(url, opts)` reach the net service's RHTP/1.0 client, which
+borrows the one rpv node this machine has. It is appended at the tail like the
+UI capabilities were, so existing decision files keep their meaning.
 
 The two UI capabilities are deliberately separate. `input` is the event side:
 `api.input.pullEvent(...)` (a gated function; the host supplies the raw pull
@@ -118,7 +123,7 @@ local A = {}
 A.VERSION = "1.0"
 A.DEFAULT_MAX_STARTS = 8
 A.CAPS = { "fs.read", "fs.write", "net.rpv", "net.rednet", "redstone", "peripheral",
-    "http", "input", "terminal" }
+    "http", "input", "terminal", "net.rhtp" }
 
 local CAP_SET = {}
 for i = 1, #A.CAPS do CAP_SET[A.CAPS[i]] = true end
@@ -259,6 +264,9 @@ function A.new(opts)
         redstone = o.redstone,
         peripheral = o.peripheral,
         http = o.http,
+        -- the net service's RHTP client ({ get =, fetch = }); a table, not the
+        -- per-request status form, because every caller wants the body
+        rhtp = o.rhtp,
         -- O3: the UI hosts. `input` is a table { pullEvent = fn, keys = api } (a
         -- bare function is accepted as the pull), `terminal` is a term-like table.
         input = o.input,
@@ -363,9 +371,10 @@ A.SYS_INSTALLER = {
 -- itself -- the kernel reads the medium, parses the meta with kernel/ota.lua and
 -- applies a package through the same installer object as api.sys.install
 -- (2026-11-01) `ota_apply("image")` is no longer refused: it runs the real
--- network image update (kernel/ota.lua over http, the same single-tree journal
--- flow recovery/flash.lua drives) because only the kernel has the fs the updater
--- needs. The app that asks for it must declare http as well as fs.read/fs.write.
+-- network image update (kernel/ota.lua over RHTP/1.0, the same single-tree
+-- journal flow recovery/flash.lua drives) because only the kernel has the fs the
+-- updater needs. The app that asks for it must declare net.rhtp as well as
+-- fs.read/fs.write: no host http table is involved any more.
 A.SYS_OTA = {
     ota_list = { cap = "fs.read", method = "sys_ota_list" },
     ota_apply = { cap = "fs.write", method = "sys_ota_apply" },
@@ -660,11 +669,11 @@ end
 function A:sys_ota_image(record, extra)
     local o = type(extra) == "table" and extra or {}
     if not record.caps["fs.read"] then return self:denied(record, "fs.read") end
-    if not record.caps["http"] then return self:denied(record, "http") end
-    local http = type(self.hosts) == "table" and self.hosts.http or nil
-    if type(http) ~= "table" or type(http.get) ~= "function" then
-        self:log("APP_OTA_IMAGE ok=false reason=no_http")
-        return nil, "no http"
+    if not record.caps["net.rhtp"] then return self:denied(record, "net.rhtp") end
+    local rhtp = type(self.hosts) == "table" and self.hosts.rhtp or nil
+    if type(rhtp) ~= "table" or type(rhtp.get) ~= "function" then
+        self:log("APP_OTA_IMAGE ok=false reason=no_rhtp")
+        return nil, "no rhtp"
     end
     local module, merr = self:ota_module_for()
     if not module then
@@ -674,7 +683,7 @@ function A:sys_ota_image(record, extra)
     local function sink(line) self:log(line) end
     local client = module.new({
         fs = self.fs,
-        http = http,
+        rhtp = rhtp,
         base = o.base,
         boot = self.opts.boot,
         boot_opts = { fs = self.fs, root = self.opts.root, log = sink },
@@ -1082,6 +1091,12 @@ function A:build_api(record)
     api.net = {
         rpv = tree(self, record, "net.rpv", self.hosts.rpv),
         rednet = tree(self, record, "net.rednet", self.hosts.rednet),
+        -- the service protocol (DECISIONS.md 45). Functions like api.fs.read, so
+        -- a denied app gets the same callable stub shape and never nil-indexes.
+        rhtp_get = gate(self, record, "net.rhtp", self.hosts.rhtp
+            and self.hosts.rhtp.get or nil),
+        rhtp_fetch = gate(self, record, "net.rhtp", self.hosts.rhtp
+            and self.hosts.rhtp.fetch or nil),
     }
     api.redstone = tree(self, record, "redstone", self.hosts.redstone)
     api.peripheral = tree(self, record, "peripheral", self.hosts.peripheral)

@@ -5,19 +5,34 @@ install.set. Copy it to the OTHER computer (CraftOS or Pyromputer OS), keep the
 handheld on this side running appstore with its receiver armed (press `l`; the
 status row shows `listening ch=<n> id=<computer id>`), then run:
 
-    pushpkg <target-id|broadcast> [name]
+    pushpkg [--http] <target-id|broadcast> [name]
 
     target-id   the rednet id appstore prints, or `broadcast` for every receiver
     name        one package from index.txt; omitted = every package in it
+    --http      host-side debug fallback (see "Transport" below)
+
+Transport: RHTP/1.0 is the default, but this tool runs on ANOTHER computer, so it
+cannot assume the handheld's net service is there. It loads the copy installed on
+this machine -- /system/rpv/loader.lua, /system/net/rhtp.lua and
+/system/net/service.lua with /etc/network.conf -- starts that service's one node
+and fetches through its RHTP client. Reusing the shipped modules (instead of
+embedding a second client) is deliberate: there is exactly one RHTP
+implementation to keep correct, and a `pushpkg` run exercises the same code the
+handheld runs. `--http` (or `http=1` in the config) keeps the old host `http`
+table for a machine with no rpv stack; RHTP stays the default and the fallback
+is never silent.
 
 /etc/pushpkg.conf (optional, one key=value per line, '#' starts a comment):
 
-    server=<http base>    default http://store.pyrotechnic.org/
+    server=<rhtp base>    default rhtp://store.pyrotechnic.org/
+                          (a bare host[:port]/path is read as rhtp://)
+    http=1                use the host http table instead of RHTP
     protocol=<name>       default PYROET-PKG/1 (appstore may override its side)
     channel=<n>           informational; rednet has no numeric channel here
     timeout=<seconds>     ack timeout, default 5
 
-Server layout, the same one appstore reads:
+Server layout, the same one appstore reads (RHTP GET, so `off`/`len` must be
+ignored or honoured for `/index.txt`, `/files.txt` and every file body):
 
     GET <base>/index.txt          "app <name> <version> <dir>" per line
                                   or "lua <name> <version> <file.lua>"
@@ -41,7 +56,11 @@ local M = {}
 M.VERSION = "0.1.0"
 M.PROTOCOL = "PYROET-PKG/1"
 M.CONF = "/etc/pushpkg.conf"
-M.SERVER = "http://store.pyrotechnic.org/"
+M.SERVER = "rhtp://store.pyrotechnic.org/"
+M.RPV_LOADER = "/system/rpv/loader.lua"
+M.RHTP_MODULE = "/system/net/rhtp.lua"
+M.NET_MODULE = "/system/net/service.lua"
+M.NET_CONF = "/etc/network.conf"
 M.TIMEOUT = 5
 M.RETRIES = 2          -- two retries after the first attempt = three sends
 M.CHUNK = 8192
@@ -199,7 +218,10 @@ function M.parse_conf(text)
         if clean ~= "" and clean:sub(1, 1) ~= "#" then
             local key, value = clean:match("^([%w_]+)%s*=%s*(%S+)$")
             if key == "server" then
-                if value:match("^https?://") then out.server = value end
+                local url = M.normalize_server(value)
+                if url ~= nil then out.server = url end
+            elseif key == "http" then
+                out.http = (value == "1" or value == "true" or value == "yes")
             elseif key == "protocol" then
                 if #value <= 32 and not value:find("[^\32-\126]") then
                     out.protocol = value
@@ -233,14 +255,104 @@ function M.conf(env)
     return M.parse_conf(text)
 end
 
+-- host[:port][/path] -> rhtp://host[:port][/path]; any other explicit scheme is
+-- refused, so an old http:// line in the config cannot stay silently wrong
+function M.normalize_server(text)
+    local value = trim(text)
+    if value == "" then return nil end
+    if value:sub(1, 7):lower() ~= "rhtp://" then
+        if value:find("://", 1, true) then return nil end
+        value = "rhtp://" .. value
+    end
+    local rest = value:sub(8)
+    local host = rest:match("^([^/]*)")
+    if host == nil or host == "" then return nil end
+    local name = host:match("^([^:]+)")
+    if name == nil or name == "" or not name:match("^[%w%._%-]+$") then return nil end
+    local port_text = host:match("^[^:]+:(%d+)$")
+    if port_text ~= nil then
+        local number = tonumber(port_text)
+        if not number or number < 1 or number > 65535 then return nil end
+    end
+    return value
+end
+
 function M.http_of(env)
-    local http = env and env.http or rawget(_G, "http")
+    -- explicit only: the shell entry passes rawget(_G, "http") when --http was
+    -- asked for, so the fallback can never happen by accident
+    local http = env and env.http or nil
     if type(http) ~= "table" or type(http.get) ~= "function" then return nil end
     return http
 end
 
--- one GET -> body, status, err (a 4xx/5xx answer is not a transport failure)
+function M.rhtp_of(env)
+    local rhtp = env and env.rhtp or nil
+    if type(rhtp) ~= "table" or type(rhtp.get) ~= "function" then return nil end
+    return rhtp
+end
+
+-- Load the RHTP client from the OS installed on THIS machine: the rpv library,
+-- the net service (which owns the only node) and the rhtp module it builds. nil,
+-- reason when any piece is missing -- the caller then has to decide (the
+-- documented answer is `--http`), never a silent downgrade.
+function M.load_rhtp(env)
+    local fsx = env and env.fs or rawget(_G, "fs")
+    if type(fsx) ~= "table" then return nil, "no fs" end
+    if type(fsx.exists) ~= "function" then return nil, "no fs" end
+    local function module_at(path)
+        local called, chunk = pcall(loadfile, path)
+        if not called or type(chunk) ~= "function" then return nil end
+        local ok, mod = pcall(chunk)
+        if not ok or type(mod) ~= "table" then return nil end
+        return mod
+    end
+    if not fsx.exists(M.RPV_LOADER) then return nil, "no rpv" end
+    local rpv = module_at(M.RPV_LOADER)
+    if rpv == nil or type(rpv.node_new) ~= "function" then return nil, "no rpv" end
+    if not fsx.exists(M.NET_MODULE) then return nil, "no net service" end
+    local service = module_at(M.NET_MODULE)
+    if service == nil or type(service.new) ~= "function" then return nil, "no net service" end
+    if not fsx.exists(M.RHTP_MODULE) then return nil, "no rhtp" end
+    local client_mod = module_at(M.RHTP_MODULE)
+    if client_mod == nil or type(client_mod.new) ~= "function" then return nil, "no rhtp" end
+    local svc = service.new({
+        fs = fsx,
+        rpv = rpv,
+        peripheral = env and env.peripheral or rawget(_G, "peripheral"),
+        log = function() end,
+        rhtp_module = client_mod,
+        config_path = M.NET_CONF,
+    })
+    local called = pcall(svc.start, svc)
+    if not called then return nil, "net start" end
+    local client = svc:rhtp_client()
+    if client == nil then return nil, "no node" end
+    return {
+        get = function(url, opts) return svc:rhtp_get(url, opts) end,
+        fetch = function(url, size, opts) return svc:rhtp_fetch(url, size, opts) end,
+        stop = function() pcall(svc.stop, svc) end,
+    }
+end
+
+-- which transport this run uses: RHTP unless the caller asked for the fallback
+function M.transport_of(env, conf)
+    if type(env) == "table" and env.transport ~= nil then return env.transport end
+    if type(conf) == "table" and conf.http then return "http" end
+    return "rhtp"
+end
+
+-- one GET -> body, status, err (a 4xx/5xx answer is not a transport failure).
+-- The RHTP path is the default; the http path exists only for --http / http=1.
 function M.get(env, url)
+    if M.transport_of(env, env and env.conf) ~= "http" then
+        local rhtp = M.rhtp_of(env)
+        if rhtp == nil then return nil, nil, "no rhtp" end
+        local called, body, err = pcall(rhtp.get, url)
+        if not called then return nil, nil, plain(body, 40) end
+        if body == nil then return nil, nil, plain(err or "failed", 40) end
+        if type(body) ~= "string" then return nil, nil, "bad response" end
+        return body, 200
+    end
     local http = M.http_of(env)
     if http == nil then return nil, nil, "no http" end
     local called, res, extra = pcall(http.get, url)
@@ -530,13 +642,32 @@ end
 -- ---------------------------------------------------------------------------
 
 function M.run(env, args)
+    env = env or {}
     local list = args or {}
     local conf, note = M.conf(env)
     if note ~= nil then M.log(env, "PUSHPKG_CONF reason=" .. tostring(note)) end
+    -- transport first: a machine without the rpv stack has to be told --http
+    -- explicitly, so the fallback can never be the silent outcome of a typo
+    local transport = M.transport_of(env, conf)
+    if transport == "http" then
+        if M.http_of(env) == nil then
+            M.log(env, "PUSHPKG_FAIL err=no_http")
+            return nil, "no_http"
+        end
+    elseif M.rhtp_of(env) == nil then
+        local client, why = M.load_rhtp(env)
+        if client == nil then
+            M.log(env, "PUSHPKG_FAIL err=no_rhtp reason=" .. plain(why, 40)
+                .. " hint=--http")
+            return nil, "no_rhtp"
+        end
+        env.rhtp = client
+    end
+    env.transport = transport
     local target, terr = M.target_of(list[1])
     if terr ~= nil then
         M.log(env, "PUSHPKG_FAIL err=" .. tostring(terr))
-        M.log(env, "PUSHPKG_USAGE pushpkg <target-id|broadcast> [name]")
+        M.log(env, "PUSHPKG_USAGE pushpkg [--http] <target-id|broadcast> [name]")
         return nil, terr
     end
     local net = M.net_of(env)
@@ -545,6 +676,8 @@ function M.run(env, args)
         return nil, "no_rednet"
     end
     local opened = M.open_modems(env, net)
+    M.log(env, "PUSHPKG_TRANSPORT kind=" .. transport .. " server="
+        .. plain(conf.server, 60))
     M.log(env, "PUSHPKG_TARGET target=" .. tostring(target) .. " protocol="
         .. conf.protocol .. " modems=" .. tostring(opened))
     local index_body, status, ierr = M.get(env, join(conf.server, "index.txt"))
@@ -603,7 +736,18 @@ return function(...)
         peripheral = rawget(_G, "peripheral"),
         log = function(line) print(line) end,
     }
-    local reports = M.run(env, { ... })
+    -- `--http` is the only way to the host http table; anything else is RHTP
+    local args = {}
+    for i = 1, select("#", ...) do
+        local arg = tostring(select(i, ...))
+        if arg == "--http" then
+            env.transport = "http"
+        else
+            args[#args + 1] = arg
+        end
+    end
+    local reports = M.run(env, args)
+    if env.rhtp and env.rhtp.stop then pcall(env.rhtp.stop) end
     if reports == nil then return 1 end
     print("PUSHPKG_SENT packages=" .. tostring(#reports))
     return 0

@@ -1,10 +1,11 @@
 --[[- pyroet-os/tests/t_pushpkg.lua -- tools/pushpkg.lua, the OTHER computer.
 
 pushpkg is a development tool, not image payload: run-tests.ps1 copies it to
-/tests/pushpkg.lua. Everything around it is faked here -- http is a URL -> body
-map, rednet is a scripted transport, the file system only answers
-/etc/pushpkg.conf -- so the tool's own parsing, wrapping, chunking, ack/retry
-and logging are what these groups assert.
+/tests/pushpkg.lua. Everything around it is faked here -- the RHTP client is a
+URL -> body map, the host http table exists only for the --http fallback group,
+rednet is a scripted transport, the file system only answers /etc/pushpkg.conf --
+so the tool's own parsing, wrapping, chunking, ack/retry, transport choice and
+logging are what these groups assert.
 
 No non-ASCII bytes in this file.
 ]]
@@ -14,11 +15,19 @@ local P = assert(loadfile("/tests/pushpkg.lua"))()
 rawset(_G, "PYROET_PUSHPKG_TEST", nil)
 
 return function(H)
+    local function rhtp_from(map)
+        return { get = function(url)
+            local item = map[url]
+            if item == nil then return nil, "rhtp 404" end
+            if type(item) == "table" then return item.body, item.err end
+            return item, nil
+        end }
+    end
+
     local function http_from(map)
         return { get = function(url)
             local item = map[url]
             if item == nil then return nil, "not found" end
-            if type(item) == "table" then return item end
             return { ok = true, status = 200, body = item }
         end }
     end
@@ -26,16 +35,23 @@ return function(H)
     local function env_with(opts)
         local o = opts or {}
         local env = {
-            http = o.http or http_from({}),
             rednet = o.rednet,
             peripheral = o.peripheral or { getNames = function() return {} end },
             clock = o.clock or function() return 0 end,
             logs = {},
         }
-        env.fs = { read = function(path)
-            if o.conf ~= nil and path == P.CONF then return o.conf end
-            return nil, "not found"
-        end }
+        -- `rhtp = false` means "this machine has no RHTP client at all"
+        if o.rhtp ~= false then env.rhtp = o.rhtp or rhtp_from({}) end
+        if o.http ~= nil then env.http = o.http end
+        if o.transport ~= nil then env.transport = o.transport end
+        env.fs = {
+            read = function(path)
+                if o.conf ~= nil and path == P.CONF then return o.conf end
+                return nil, "not found"
+            end,
+            -- no OS installed on this fake machine: the RHTP modules are absent
+            exists = function() return false end,
+        }
         env.log = function(line)
             env.logs[#env.logs + 1] = tostring(line)
         end
@@ -91,7 +107,7 @@ return function(H)
 
     local MANIFEST = 'return { name = "demo", version = "1.0.0" }\n'
     local MAIN = "return function(manifest, api) return nil end\n"
-    local BASE = "http://example.com/pkg/"
+    local BASE = "rhtp://example.com/pkg/"
 
     local function demo_pkg()
         return { name = "demo", version = "1.0.0", kind = "app",
@@ -125,28 +141,36 @@ return function(H)
         H.eq("conf_default_server", conf.server, P.SERVER)
         -- the host tool and appstore share the 2026-11-01 default: the project
         -- store, not a .invalid placeholder
-        H.eq("conf_builtin_server", P.SERVER, "http://store.pyrotechnic.org/")
+        H.eq("conf_builtin_server", P.SERVER, "rhtp://store.pyrotechnic.org/")
         H.check("conf_no_invalid", (P.SERVER or ""):find("invalid", 1, true) == nil,
             "pushpkg still defaults to a placeholder server")
         H.eq("conf_default_protocol", conf.protocol, "PYROET-PKG/1")
         H.eq("conf_default_timeout", conf.timeout, 5)
         H.eq("conf_path", P.CONF, "/etc/pushpkg.conf")
         local parsed = P.parse_conf(
-            "# comment\nserver=http://host/pkg/\nprotocol=PYROET-PKG/2\n"
+            "# comment\nserver=host/pkg/\nprotocol=PYROET-PKG/2\n"
             .. "channel=4200\ntimeout=9\n")
-        H.eq("conf_server", parsed.server, "http://host/pkg/")
+        H.eq("conf_server", parsed.server, "rhtp://host/pkg/")
+        -- an explicit rhtp:// line is kept as written, a bare one is normalized
+        H.eq("conf_rhtp_server", P.parse_conf("server=rhtp://a.b:9000/x\n").server,
+            "rhtp://a.b:9000/x")
+        H.eq("conf_http_fallback", P.parse_conf("server=" .. BASE .. "\nhttp=1\n").http,
+            true)
         H.eq("conf_protocol", parsed.protocol, "PYROET-PKG/2")
         H.eq("conf_channel", parsed.channel, 4200)
         H.eq("conf_timeout", parsed.timeout, 9)
         local bad = P.parse_conf("server=ftp://x/\nchannel=0\ntimeout=-1\n"
             .. "protocol=two words\n")
         H.eq("conf_bad_server", bad.server, P.SERVER)
+        -- an old http:// line is refused too: RHTP is the protocol now
+        H.eq("conf_http_line_refused",
+            P.parse_conf("server=http://store.pyrotechnic.org/\n").server, P.SERVER)
         H.eq("conf_bad_channel", bad.channel, nil)
         H.eq("conf_bad_timeout", bad.timeout, P.TIMEOUT)
         H.eq("conf_bad_protocol", bad.protocol, P.PROTOCOL)
-        local env = env_with({ conf = "server=http://c/\nprotocol=P2\n" })
+        local env = env_with({ conf = "server=c\nprotocol=P2\n" })
         local loaded, note = P.conf(env)
-        H.eq("conf_loaded", loaded.server, "http://c/")
+        H.eq("conf_loaded", loaded.server, "rhtp://c")
         H.eq("conf_loaded_protocol", loaded.protocol, "P2")
         H.eq("conf_loaded_note", note, nil)
         local missing, why = P.conf(env_with({}))
@@ -202,7 +226,7 @@ return function(H)
         local index_body = "lua hello 0.1.0 hello.lua\n"
         local entries = P.parse_index(index_body, BASE)
         H.eq("wrap_index_entries", #entries, 1)
-        local env = env_with({ http = http_from({
+        local env = env_with({ rhtp = rhtp_from({
             [BASE .. "hello.lua"] = "print('hi')\n",
         }) })
         local pkg, err = P.load_package(env, { server = BASE }, entries[1])
@@ -213,7 +237,7 @@ return function(H)
         H.eq("wrap_load_files", pkg and #pkg.files, 2)
         H.eq("wrap_load_main", pkg and pkg.files[2].body, "print('hi')\n")
         -- a 404 on the lua file is a clean failure
-        local env404 = env_with({ http = http_from({}) })
+        local env404 = env_with({ rhtp = rhtp_from({}) })
         local none, why = P.load_package(env404, { server = BASE }, entries[1])
         H.eq("wrap_load_none", none, nil)
         H.contains("wrap_load_why", tostring(why), "lua ")
@@ -233,7 +257,7 @@ return function(H)
             return map
         end
         -- every file arrives and is handed to the stream as {rel, body}
-        local env = env_with({ http = http_from(server()) })
+        local env = env_with({ rhtp = rhtp_from(server()) })
         local pkg, err = P.load_package(env, { server = BASE }, index[1])
         H.eq("app_load_err", err, nil)
         H.eq("app_load_kind", pkg and pkg.kind, "app")
@@ -244,37 +268,37 @@ return function(H)
         local good = server({ [BASE .. "demo/SHA256.txt"] =
             P.sha256(MANIFEST) .. " manifest.lua\n"
             .. P.sha256(MAIN) .. " main.lua\n" })
-        local checked = P.load_package(env_with({ http = http_from(good) }),
+        local checked = P.load_package(env_with({ rhtp = rhtp_from(good) }),
             { server = BASE }, index[1])
         H.check("app_sha_ok", checked ~= nil, "a verified package was refused")
         local bad = server({ [BASE .. "demo/SHA256.txt"] =
             string.rep("0", 64) .. " main.lua\n" })
-        local refused, why = P.load_package(env_with({ http = http_from(bad) }),
+        local refused, why = P.load_package(env_with({ rhtp = rhtp_from(bad) }),
             { server = BASE }, index[1])
         H.eq("app_sha_bad", refused, nil)
         H.eq("app_sha_bad_why", why, "sha256 main.lua")
         -- the package must ship a manifest (the receiver publishes an .app)
         local no_manifest = server({ [BASE .. "demo/files.txt"] = "main.lua\n" })
-        local nm, nmwhy = P.load_package(env_with({ http = http_from(no_manifest) }),
+        local nm, nmwhy = P.load_package(env_with({ rhtp = rhtp_from(no_manifest) }),
             { server = BASE }, index[1])
         H.eq("app_no_manifest", nm, nil)
         H.eq("app_no_manifest_why", nmwhy, "no manifest.lua")
         -- files.txt itself is required, and a bad path in it is refused
         local no_files = server({})
         no_files[BASE .. "demo/files.txt"] = nil
-        local nf, nfwhy = P.load_package(env_with({ http = http_from(no_files) }),
+        local nf, nfwhy = P.load_package(env_with({ rhtp = rhtp_from(no_files) }),
             { server = BASE }, index[1])
         H.eq("app_no_files", nf, nil)
         H.contains("app_no_files_why", tostring(nfwhy), "files ")
         local bad_path = server({ [BASE .. "demo/files.txt"] = "../etc/passwd\n" })
-        local bp, bpwhy = P.load_package(env_with({ http = http_from(bad_path) }),
+        local bp, bpwhy = P.load_package(env_with({ rhtp = rhtp_from(bad_path) }),
             { server = BASE }, index[1])
         H.eq("app_bad_path", bp, nil)
         H.contains("app_bad_path_why", tostring(bpwhy), "bad path")
         -- a missing file body is named, not silently skipped
         local missing = server({})
         missing[BASE .. "demo/main.lua"] = nil
-        local mp, mpwhy = P.load_package(env_with({ http = http_from(missing) }),
+        local mp, mpwhy = P.load_package(env_with({ rhtp = rhtp_from(missing) }),
             { server = BASE }, index[1])
         H.eq("app_missing_file", mp, nil)
         H.contains("app_missing_file_why", tostring(mpwhy), "fetch main.lua")
@@ -412,7 +436,7 @@ return function(H)
                 [BASE .. "hello.lua"] = "print('hi')\n",
             }
         end
-        local env = env_with({ http = http_from(server()),
+        local env = env_with({ rhtp = rhtp_from(server()),
             rednet = fake_net(), conf = "server=" .. BASE .. "\n" })
         local reports, err = P.run(env, { "12" })
         H.eq("run_err", err, nil)
@@ -421,11 +445,12 @@ return function(H)
         H.eq("run_second", reports and reports[2].name, "hello")
         H.eq("run_begins", H.count(env.logs, "PUSHPKG_BEGIN"), 2)
         H.eq("run_ends", H.count(env.logs, "PUSHPKG_END"), 2)
+        H.has(env.logs, "PUSHPKG_TRANSPORT kind=rhtp server=" .. BASE)
         H.has(env.logs, "PUSHPKG_TARGET target=12 protocol=PYROET-PKG/1")
         H.has(env.logs, "PUSHPKG_INDEX entries=2 bad=0")
         H.has(env.logs, "PUSHPKG_BEGIN name=hello pkg=lua files=2")
         -- a name selects exactly one package
-        local one_env = env_with({ http = http_from(server()),
+        local one_env = env_with({ rhtp = rhtp_from(server()),
             rednet = fake_net(), conf = "server=" .. BASE .. "\n" })
         local one = P.run(one_env, { "12", "hello" })
         H.eq("run_one", type(one) == "table" and #one, 1)
@@ -433,7 +458,7 @@ return function(H)
         H.eq("run_one_begins", H.count(one_env.logs, "PUSHPKG_BEGIN"), 1)
         -- broadcast uses rednet.broadcast for every message
         local cast = fake_net()
-        local cast_env = env_with({ http = http_from(server()),
+        local cast_env = env_with({ rhtp = rhtp_from(server()),
             rednet = cast, conf = "server=" .. BASE .. "\n" })
         local cast_reports = P.run(cast_env, { "broadcast", "hello" })
         H.eq("run_broadcast", type(cast_reports) == "table" and #cast_reports, 1)
@@ -443,7 +468,7 @@ return function(H)
         -- a bad target, a missing index and an unknown name are clean failures
         local bad = P.run(env_with({ rednet = fake_net() }), { "nowhere" })
         H.eq("run_bad_target", bad, nil)
-        local bad_env = env_with({ http = http_from({}), rednet = fake_net() })
+        local bad_env = env_with({ rhtp = rhtp_from({}), rednet = fake_net() })
         local no_index, index_why = P.run(bad_env, { "12" })
         H.eq("run_no_index", no_index, nil)
         H.eq("run_no_index_why", index_why, "index")
@@ -451,16 +476,16 @@ return function(H)
         local ghost, ghost_why = P.run(env, { "12", "ghost" })
         H.eq("run_ghost", ghost, nil)
         H.eq("run_ghost_why", ghost_why, "no such package")
-        local empty_env = env_with({ http = http_from({
+        local empty_env = env_with({ rhtp = rhtp_from({
             [BASE .. "index.txt"] = "" }), rednet = fake_net(),
             conf = "server=" .. BASE .. "\n" })
         local empty, empty_why = P.run(empty_env, { "12" })
         H.eq("run_empty", empty, nil)
         H.eq("run_empty_why", empty_why, "empty index")
-        -- no rednet at all: named, and no http request is made
+        -- no rednet at all: named before any RHTP request is made
         local saved_net = rawget(_G, "rednet")
         rawset(_G, "rednet", nil)
-        local naked = env_with({ http = http_from(server()) })
+        local naked = env_with({ rhtp = rhtp_from(server()) })
         local none, net_why = P.run(naked, { "12" })
         rawset(_G, "rednet", saved_net)
         H.eq("run_no_rednet", none, nil)
@@ -469,12 +494,77 @@ return function(H)
         -- a package that fails to download does not stop the next one
         local partial = server()
         partial[BASE .. "demo/files.txt"] = nil
-        local part_env = env_with({ http = http_from(partial),
+        local part_env = env_with({ rhtp = rhtp_from(partial),
             rednet = fake_net(), conf = "server=" .. BASE .. "\n" })
         local pulled = P.run(part_env, { "12" })
         H.eq("run_partial", type(pulled) == "table" and #pulled, 1)
         H.eq("run_partial_name", pulled and pulled[1].name, "hello")
         H.has(part_env.logs, "PUSHPKG_FAIL name=demo err=files ")
+    end
+
+    -- -----------------------------------------------------------------
+    -- Transport: RHTP is the default; --http is the explicit host-side fallback
+    H.group("pushpkg.transport")
+    do
+        local function server()
+            return {
+                [BASE .. "index.txt"] = "lua hello 0.1.0 hello.lua\n",
+                [BASE .. "hello.lua"] = "print('hi')\n",
+            }
+        end
+
+        -- default: the RHTP client is used and the log says so
+        local env = env_with({ rhtp = rhtp_from(server()), rednet = fake_net(),
+            conf = "server=" .. BASE .. "\n" })
+        local reports, err = P.run(env, { "12" })
+        H.eq("transport_default_err", err, nil)
+        H.eq("transport_default_pkgs", type(reports) == "table" and #reports, 1)
+        H.has(env.logs, "PUSHPKG_TRANSPORT kind=rhtp server=" .. BASE)
+
+        -- --http (env.transport = "http") still works through the host table
+        local h_env = env_with({ rhtp = false, http = http_from(server()),
+            rednet = fake_net(), conf = "server=" .. BASE .. "\n",
+            transport = "http" })
+        local h_reports, h_err = P.run(h_env, { "12" })
+        H.eq("transport_http_err", h_err, nil)
+        H.eq("transport_http_pkgs", type(h_reports) == "table" and #h_reports, 1)
+        H.has(h_env.logs, "PUSHPKG_TRANSPORT kind=http server=" .. BASE)
+
+        -- http asked for and missing: named, no silent RHTP switch
+        local h_none = env_with({ rhtp = rhtp_from(server()), rednet = fake_net(),
+            conf = "server=" .. BASE .. "\n", transport = "http" })
+        local hn, hwhy = P.run(h_none, { "12" })
+        H.eq("transport_no_http", hn, nil)
+        H.eq("transport_no_http_why", hwhy, "no_http")
+        H.has(h_none.logs, "PUSHPKG_FAIL err=no_http")
+
+        -- RHTP is the default and the machine has no rpv stack: the run fails
+        -- with the documented hint instead of falling back silently
+        local naked = env_with({ rhtp = false, rednet = fake_net(),
+            conf = "server=" .. BASE .. "\n" })
+        local nn, nwhy = P.run(naked, { "12" })
+        H.eq("transport_no_rhtp", nn, nil)
+        H.eq("transport_no_rhtp_why", nwhy, "no_rhtp")
+        H.has(naked.logs, "PUSHPKG_FAIL err=no_rhtp reason=no rpv hint=--http")
+
+        -- `http=1` in the config selects the fallback without a flag
+        local conf_env = env_with({ rhtp = false, http = http_from(server()),
+            rednet = fake_net(),
+            conf = "server=" .. BASE .. "\nhttp=1\n" })
+        local c_reports = P.run(conf_env, { "12" })
+        H.eq("transport_conf_http", type(c_reports) == "table" and #c_reports, 1)
+        H.has(conf_env.logs, "PUSHPKG_TRANSPORT kind=http")
+
+        -- server lines: rhtp:// or bare, anything else refused
+        H.eq("normalize_bare", P.normalize_server("box/pkg"),
+            "rhtp://box/pkg")
+        H.eq("normalize_port", P.normalize_server("box:9000/pkg"),
+            "rhtp://box:9000/pkg")
+        H.eq("normalize_rhtp", P.normalize_server("rhtp://box:8080/"),
+            "rhtp://box:8080/")
+        H.eq("normalize_http", P.normalize_server("http://box/"), nil)
+        H.eq("normalize_empty", P.normalize_server("  "), nil)
+        H.eq("normalize_bad_port", P.normalize_server("box:0/x"), nil)
     end
 
     -- -----------------------------------------------------------------

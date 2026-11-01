@@ -75,11 +75,11 @@ P.FILE_HEADER = "# PYROET-PERMS-1"
 
 -- Kept in sync with kernel/apps.lua A.CAPS; tests assert the two lists match,
 -- and apps.lua hands its own list in through `known`, so a drift here can only
--- show up as a refused line, never as an invented capability. The last two were
--- appended (O3) so existing decision files, which list a prefix of this order,
--- keep parsing and keep their meaning.
+-- show up as a refused line, never as an invented capability. The last three were
+-- appended (O3, then the RHTP service protocol) so existing decision files, which
+-- list a prefix of this order, keep parsing and keep their meaning.
 P.CAPS = { "fs.read", "fs.write", "net.rpv", "net.rednet", "redstone", "peripheral",
-    "http", "input", "terminal" }
+    "http", "input", "terminal", "net.rhtp" }
 
 local function short(value, max)
     local s = tostring(value == nil and "nil" or value)

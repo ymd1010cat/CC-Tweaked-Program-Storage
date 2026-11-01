@@ -131,11 +131,11 @@ return function(H)
         H.has(lines, "APP_OTA_APPLY name=demo ok=true")
 
         -- The image update is a real network update since 2026-11-01 (group
-        -- ota.image below). The launcher does not declare `http`, so the bridge
-        -- answers with the capability gate instead of the old placeholder text.
+        -- ota.image below). The launcher does not declare `net.rhtp`, so the
+        -- bridge answers with the capability gate instead of the old placeholder.
         local iok, ierr = api.sys.ota_apply("image")
         H.eq("image_apply_ok", iok, nil)
-        H.eq("image_apply_reason", ierr, "capability denied: http")
+        H.eq("image_apply_reason", ierr, "capability denied: net.rhtp")
         H.lacks("image_not_recovery_only", lines, "image ota needs recovery")
 
         -- a package that is not on the medium: the installer's own error text
@@ -154,13 +154,14 @@ return function(H)
     -- -----------------------------------------------------------------
     H.group("ota.image")
     -- 2026-11-01: api.sys.ota_apply("image") runs the real network update. The
-    -- kernel drives kernel/ota.lua over a fake http map, and the target is a
-    -- sandbox root (`root = dir`), so the staged image is never touched.
+    -- kernel drives kernel/ota.lua over a fake RHTP client map (get for meta.txt,
+    -- fetch for the chunked file bodies), and the target is a sandbox root
+    -- (`root = dir`), so the staged image is never touched.
     do
         local CR = {}
         assert(loadfile("/system/rpv/crypto.lua"))(CR)
         local function sha(text) return CR.hex(CR.sha256(text)) end
-        local BASE = "http://up.example/upgrade"
+        local BASE = "rhtp://up.example/upgrade"
 
         -- meta.txt: the META line then one FILE line, exactly what the server serves
         local function meta_body(version, relpath, data, opts)
@@ -173,24 +174,27 @@ return function(H)
                 .. " " .. rec.sha256 .. "\n"
         end
 
-        local function http_map(meta, relpath, data, shape)
+        -- The net service's client shape: get(url) -> body | nil, reason and
+        -- fetch(url, size) -> body | nil, reason. One body answers both here,
+        -- which is exactly what a server that ignores off/len does; the real
+        -- client splits it into chunks. hits counts network calls, not chunks.
+        local function rhtp_map(meta, relpath, data)
             local hits = {}
-            local function answer(body)
-                if shape == "handle" then
-                    -- the ROM's response handle: status plus readAll()
-                    return { status = 200, readAll = function() return body end }
-                end
-                return { ok = true, status = 200, body = body }
+            local function body_at(url)
+                if url == BASE .. "/meta.txt" then return meta, nil end
+                if url == BASE .. "/" .. relpath then return data, nil end
+                return nil, "rhtp 404"
             end
-            local http = {
-                get = function(url)
-                    hits[#hits + 1] = url
-                    if url == BASE .. "/meta.txt" then return answer(meta) end
-                    if url == BASE .. "/" .. relpath then return answer(data) end
-                    return nil, "not found"
-                end,
-            }
-            return http, hits
+            local client = {}
+            client.get = function(url)
+                hits[#hits + 1] = url
+                return body_at(url)
+            end
+            client.fetch = function(url, size)
+                hits[#hits + 1] = url
+                return body_at(url)
+            end
+            return client, hits
         end
 
         local function sandbox(name, files)
@@ -203,16 +207,16 @@ return function(H)
         end
 
         -- one app that declares the three capabilities the image update needs
-        local function updater(dir, http)
+        local function updater(dir, client)
             H.rmrf("/apps")
             H.app_package("/apps/updater.app", {
                 manifest = 'return { name = "updater", version = "1.0.0",'
-                    .. ' capabilities = { "http", "fs.read", "fs.write" } }',
+                    .. ' capabilities = { "net.rhtp", "fs.read", "fs.write" } }',
                 main = 'return function(manifest, api) return nil end\n',
             })
             local log, lines = H.logger()
             local rt = APPS.new({
-                fs = F, log = log, root = dir, http = http,
+                fs = F, log = log, root = dir, rhtp = client,
                 apps_root = "/apps", installer = installer_for(), sys = {},
             })
             H.eq("updater_scan", rt:scan(), 1)
@@ -225,8 +229,8 @@ return function(H)
         do
             local dir = sandbox("ok", { ["kernel/a.lua"] = old })
             local meta = meta_body("0.3.0", "kernel/a.lua", new)
-            local http, hits = http_map(meta, "kernel/a.lua", new)
-            local rt, log, lines = updater(dir, http)
+            local client, hits = rhtp_map(meta, "kernel/a.lua", new)
+            local rt, log, lines = updater(dir, client)
             local api = launch(rt, "updater")
             local progress = {}
             local ok, info = api.sys.ota_apply("image", {
@@ -246,7 +250,7 @@ return function(H)
             -- the .part is consumed by the move: no unverified bytes stay behind
             H.eq("image_part_gone", H.exists(dir .. "/update.stage/kernel/a.lua.part"),
                 false)
-            H.has(lines, "OTA_SOURCE kind=http base=" .. BASE)
+            H.has(lines, "OTA_SOURCE kind=rhtp base=" .. BASE)
             H.has(lines, "OTA_NET_OK stage=meta")
             H.has(lines, "APP_OTA_IMAGE ok=true state=ready")
             H.has(lines, "OTA_READY version=0.3.0")
@@ -260,8 +264,8 @@ return function(H)
             local dir = sandbox("bad_manifest", { ["kernel/a.lua"] = old })
             local meta = meta_body("0.3.1", "kernel/a.lua", new,
                 { manifest = string.rep("f", 64) })
-            local http, hits = http_map(meta, "kernel/a.lua", new)
-            local rt, log, lines = updater(dir, http)
+            local client, hits = rhtp_map(meta, "kernel/a.lua", new)
+            local rt, log, lines = updater(dir, client)
             local api = launch(rt, "updater")
             local ok, err = api.sys.ota_apply("image", { base = BASE })
             H.eq("image_badmanifest_ok", ok, nil)
@@ -280,8 +284,8 @@ return function(H)
             local evil = "-- a v9\n"
             H.eq("evil_same_size", #evil, #new)
             local meta = meta_body("0.3.2", "kernel/a.lua", new)
-            local http = http_map(meta, "kernel/a.lua", evil)
-            local rt, log, lines = updater(dir, http)
+            local client = rhtp_map(meta, "kernel/a.lua", evil)
+            local rt, log, lines = updater(dir, client)
             local api = launch(rt, "updater")
             local ok, err, info = api.sys.ota_apply("image", { base = BASE })
             H.eq("image_digest_ok", ok, nil)
@@ -298,8 +302,8 @@ return function(H)
             local dir = sandbox("bad_size", { ["kernel/a.lua"] = old })
             local short = "-- a v2"
             local meta = meta_body("0.3.3", "kernel/a.lua", new)
-            local http = http_map(meta, "kernel/a.lua", short)
-            local rt, log, lines = updater(dir, http)
+            local client = rhtp_map(meta, "kernel/a.lua", short)
+            local rt, log, lines = updater(dir, client)
             local api = launch(rt, "updater")
             local ok, err, info = api.sys.ota_apply("image", { base = BASE })
             H.eq("image_size_ok", ok, nil)
@@ -312,14 +316,14 @@ return function(H)
         -- 5) a 404 for meta.txt: one readable reason, nothing staged
         do
             local dir = sandbox("meta_404", { ["kernel/a.lua"] = old })
-            local http = { get = function()
-                return { ok = true, status = 404, body = "nope" }
+            local client = { get = function()
+                return nil, "rhtp 404"
             end }
-            local rt, log, lines = updater(dir, http)
+            local rt, log, lines = updater(dir, client)
             local api = launch(rt, "updater")
             local ok, err = api.sys.ota_apply("image", { base = BASE })
             H.eq("image_404_ok", ok, nil)
-            H.eq("image_404_err", err, "http 404")
+            H.eq("image_404_err", err, "rhtp 404")
             H.eq("image_404_untouched", H.read(dir .. "/system/kernel/a.lua"), old)
             H.has(lines, "OTA_NET_FAIL stage=meta")
             H.has(lines, "APP_OTA_IMAGE ok=false state=failed")
@@ -328,10 +332,10 @@ return function(H)
         -- 6) a bad meta line (not the protocol) is refused by the parser
         do
             local dir = sandbox("bad_meta", { ["kernel/a.lua"] = old })
-            local http = { get = function()
-                return { ok = true, status = 200, body = "nonsense here\n" }
+            local client = { get = function()
+                return "nonsense here\n", nil
             end }
-            local rt, log, lines = updater(dir, http)
+            local rt, log, lines = updater(dir, client)
             local api = launch(rt, "updater")
             local ok, err = api.sys.ota_apply("image", { base = BASE })
             H.eq("image_badmeta_ok", ok, nil)
@@ -339,45 +343,55 @@ return function(H)
             H.eq("image_badmeta_stage", H.exists(dir .. "/update.stage"), false)
         end
 
-        -- 7) no http host at all: a readable line, not a crash
+        -- 7) no RHTP client at all: a readable line, not a crash
         do
-            local dir = sandbox("no_http", { ["kernel/a.lua"] = old })
+            local dir = sandbox("no_rhtp", { ["kernel/a.lua"] = old })
             local rt, log, lines = updater(dir, nil)
             local api = launch(rt, "updater")
             local ok, err = api.sys.ota_apply("image", { base = BASE })
-            H.eq("image_nohttp_ok", ok, nil)
-            H.eq("image_nohttp_err", err, "no http")
-            H.has(lines, "APP_OTA_IMAGE ok=false reason=no_http")
-            H.eq("image_nohttp_untouched", H.read(dir .. "/system/kernel/a.lua"), old)
+            H.eq("image_norhtp_ok", ok, nil)
+            H.eq("image_norhtp_err", err, "no rhtp")
+            H.has(lines, "APP_OTA_IMAGE ok=false reason=no_rhtp")
+            H.eq("image_norhtp_untouched", H.read(dir .. "/system/kernel/a.lua"), old)
         end
 
         -- 8) /etc/ota.servers overrides the base when the caller passes none
         do
             H.mkdirp("/etc")
-            H.write("/etc/ota.servers", "# upgrade server\n" .. BASE .. "\nhttp://x/\n")
+            H.write("/etc/ota.servers", "# upgrade server\n" .. BASE .. "\nrhtp://x/\n")
             local dir = sandbox("conf", { ["kernel/a.lua"] = old })
             local meta = meta_body("0.3.4", "kernel/a.lua", new)
-            local http = http_map(meta, "kernel/a.lua", new)
-            local rt, log, lines = updater(dir, http)
+            local client = rhtp_map(meta, "kernel/a.lua", new)
+            local rt, log, lines = updater(dir, client)
             local api = launch(rt, "updater")
             local ok = api.sys.ota_apply("image")
             H.eq("image_conf_ok", ok, true)
-            H.has(lines, "OTA_SOURCE kind=http base=" .. BASE)
+            H.has(lines, "OTA_SOURCE kind=rhtp base=" .. BASE)
             H.eq("image_conf_written", H.read(dir .. "/system/kernel/a.lua"), new)
             H.rmrf("/etc/ota.servers")
         end
 
-        -- 9) the real ROM http table answers with a response handle (readAll),
-        -- not with {status,body}: both shapes must work
+        -- 9) a file body really arrives through fetch() (the chunked off/len
+        -- path), not through get(): a client that answers files only on fetch
+        -- must still complete the update
         do
-            local dir = sandbox("handle", { ["kernel/a.lua"] = old })
+            local dir = sandbox("fetch_only", { ["kernel/a.lua"] = old })
             local meta = meta_body("0.3.5", "kernel/a.lua", new)
-            local http = http_map(meta, "kernel/a.lua", new, "handle")
-            local rt, log, lines = updater(dir, http)
+            local client = {
+                get = function(url)
+                    if url == BASE .. "/meta.txt" then return meta, nil end
+                    return nil, "rhtp 404"
+                end,
+                fetch = function(url, size)
+                    if url == BASE .. "/kernel/a.lua" then return new, nil end
+                    return nil, "rhtp 404"
+                end,
+            }
+            local rt, log, lines = updater(dir, client)
             local api = launch(rt, "updater")
             local ok = api.sys.ota_apply("image", { base = BASE })
-            H.eq("image_handle_ok", ok, true)
-            H.eq("image_handle_written", H.read(dir .. "/system/kernel/a.lua"), new)
+            H.eq("image_fetch_ok", ok, true)
+            H.eq("image_fetch_written", H.read(dir .. "/system/kernel/a.lua"), new)
             H.has(lines, "OTA_READY version=0.3.5")
         end
 

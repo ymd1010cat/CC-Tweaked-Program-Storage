@@ -83,7 +83,7 @@ Usage under test (returns the module instead of booting):
 Options accepted by run(opts): fs, root (boot state prefix), boot, kernel, apps,
 boot_path, kernel_path, apps_path, apps_root, system_root, log, now, term,
 frame, loop, reboot, version, services, rpv, rednet, redstone, peripheral, http,
-input, terminal, write_limit, permissions, permissions_path, perms_root, ask,
+rhtp, input, terminal, write_limit, permissions, permissions_path, perms_root, ask,
 launcher, net, net_path, net_config, net_hosts, installer, installer_path,
 media_root, packages, sha, desktop, desktop_path, desktop_events, pull_event,
 splash, headless, clock, sleep, perms_interactive.
@@ -1026,6 +1026,38 @@ function P.run(opts)
         return sys_host
     end
 
+    -- The RHTP bridge (DECISIONS.md 45): the service protocol the appstore and
+    -- the kernel OTA client fetch over. It is a pair of closures, not the client
+    -- itself, because the runtime is built (step 3b) before the net service is
+    -- started (steps 4/5); the lookup runs when a request is actually made, and
+    -- the one rpv node in this process belongs to that service either way -- no
+    -- app and no second node list is involved.
+    local function net_service()
+        local kernel = ctx.kernel
+        if type(kernel) ~= "table" or type(kernel.get) ~= "function" then return nil end
+        local record = kernel:get(P.NET_NAME)
+        local spec = type(record) == "table" and record.spec or nil
+        local service = type(spec) == "table" and spec.service or nil
+        if type(service) ~= "table" then return nil end
+        return service
+    end
+    local rhtp_host = {
+        get = function(url, opts)
+            local service = net_service()
+            if not service then return nil, "no network" end
+            local called, body, err = pcall(service.rhtp_get, service, url, opts)
+            if not called then return nil, short(body) end
+            return body, err
+        end,
+        fetch = function(url, size, opts)
+            local service = net_service()
+            if not service then return nil, "no network" end
+            local called, body, err = pcall(service.rhtp_fetch, service, url, size, opts)
+            if not called then return nil, short(body) end
+            return body, err
+        end,
+    }
+
     local apps_mod = o.apps or load_module(o.apps_path or P.APPS_PATH)
     -- 3b. the installer object, injected into the runtime so that
     -- api.sys.install/uninstall/list have something to forward to (T4)
@@ -1045,6 +1077,9 @@ function P.run(opts)
             redstone = o.redstone,
             peripheral = o.peripheral,
             http = http_api,
+            -- the service protocol bridge (DECISIONS.md 45); `opts.rhtp` lets a
+            -- host or a test replace the whole table (a fake {get=,fetch=})
+            rhtp = o.rhtp or rhtp_host,
             input = ctx.input,
             terminal = o.terminal or rawget(_G, "term"),
             sys = sys_for,

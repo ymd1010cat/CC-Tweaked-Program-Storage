@@ -11,6 +11,7 @@ No non-ASCII bytes in this file.
 
 local NET = dofile("/system/net/service.lua")
 local HOSTS = dofile("/system/net/hosts.lua")
+local RHTP = dofile("/system/net/rhtp.lua")
 local KERNEL = dofile("/system/kernel/init.lua")
 
 local function ip2int(text)
@@ -107,6 +108,14 @@ local function fake_rpv(opts)
                     dst = dst, dport = dport, data = data, ttl = ttl,
                 }
                 if o.send_error then return false end
+                -- an optional inline server: the reply is delivered through the
+                -- socket handler before sendto returns, like a real stack
+                if o.reply then
+                    local response = o.reply(tostring(data), dst, dport)
+                    if response ~= nil and socket.handler then
+                        socket.handler(response, dst, dport, socket)
+                    end
+                end
                 return true
             end
             function socket:close() socket.closed = true end
@@ -632,6 +641,77 @@ return function(H)
         H.eq("register_kernel_error", select(2, NET.register(nil, {})),
             "kernel table required")
         H.ascii_check("service_source_ascii", H.read("/system/net/service.lua") or "")
+    end
+    -- -----------------------------------------------------------------
+    H.group("net.rhtp")
+    -- The service protocol (DECISIONS.md 44): the net service owns the one node
+    -- and hands out the RHTP client. The node is a stub, so this group asserts
+    -- the wiring, the config keys and the readable failures; t_rhtp owns the
+    -- protocol itself (parsing, chunks, timeouts).
+    do
+        local files = {
+            ["/etc/network.conf"] = "ip=10.0.0.5\nrhtp_port=8088\nrhtp_chunk=64\n"
+                .. "rhtp_timeout=2\n",
+        }
+        local log, lines = H.logger()
+        local rpv = fake_rpv({
+            reply = function(data)
+                local path = tostring(data):match("^GET (%S+)")
+                if path == "/index.txt" then
+                    return "RHTP/1.0 200 OK\r\n\r\napp demo 1.0.0 demo"
+                end
+                if path == "/file" then
+                    return "RHTP/1.0 200 OK\r\n\r\n0123456789"
+                end
+                return "RHTP/1.0 404 Not Found\r\n\r\nPage Not Found"
+            end,
+        })
+        local svc = NET.new({ rpv = rpv, fs = mem_fs(files), log = log,
+            hosts_module = HOSTS, rhtp_module = RHTP })
+        H.eq("rhtp_start", svc:start(), true)
+        local cfg = svc.cfg
+        H.eq("rhtp_port_cfg", cfg and cfg.rhtp_port, 8088)
+        H.eq("rhtp_chunk_cfg", cfg and cfg.rhtp_chunk, 64)
+        H.eq("rhtp_timeout_cfg", cfg and cfg.rhtp_timeout, 2)
+        H.eq("rhtp_status_port", svc:status().rhtp_port, 8088)
+        local client = svc:rhtp_client()
+        H.table("rhtp_client", client)
+        H.eq("rhtp_client_port", client and client.port, 8088)
+        H.eq("rhtp_client_chunk", client and client.max_bytes, 64)
+        H.has(lines, "NET_RHTP port=8088 chunk=64 timeout=2.00")
+
+        -- a direct address: the stub node answers inline, so no pump is needed
+        local body, err = svc:rhtp_get("rhtp://10.0.0.9/index.txt")
+        H.eq("rhtp_get_err", err, nil)
+        H.eq("rhtp_get_body", body, "app demo 1.0.0 demo")
+        local fetched, ferr = svc:rhtp_fetch("rhtp://10.0.0.9/file", 10)
+        H.eq("rhtp_fetch_err", ferr, nil)
+        H.eq("rhtp_fetch_body", fetched, "0123456789")
+        H.eq("rhtp_get_404", select(2, svc:rhtp_get("rhtp://10.0.0.9/missing")),
+            "rhtp 404")
+        H.eq("rhtp_get_dns", select(2, svc:rhtp_get("rhtp://ghost/x")),
+            "dns: unknown host")
+        H.eq("rhtp_pump", select(2, svc:pump(1)), "no pump")
+
+        -- no node (degraded network): a readable failure, never a raise
+        local dead = NET.new({ rpv = fake_rpv(), fs = mem_fs({}), log = log,
+            hosts_module = HOSTS, rhtp_module = RHTP })
+        H.eq("rhtp_dead_start", dead:start(), true)
+        H.eq("rhtp_dead_health", dead:health(), "degraded")
+        H.eq("rhtp_no_node_body", select(1, dead:rhtp_get("rhtp://10.0.0.9/x")), nil)
+        H.eq("rhtp_no_node_err", select(2, dead:rhtp_get("rhtp://10.0.0.9/x")),
+            "no network")
+        H.eq("rhtp_no_node_fetch",
+            select(2, dead:rhtp_fetch("rhtp://10.0.0.9/x", 4)), "no network")
+
+        -- a missing module is named, not crashed on
+        local bare = NET.new({ rpv = fake_rpv(), fs = mem_fs(files), log = log,
+            hosts_module = HOSTS })
+        bare:start()
+        H.eq("rhtp_module_missing",
+            select(2, bare:rhtp_get("rhtp://10.0.0.9/x")), "no rhtp module")
+
+        H.ascii_check("rhtp_source_ascii", H.read("/system/net/rhtp.lua") or "")
     end
     -- -----------------------------------------------------------------
     H.group("net.iface_auto")

@@ -10,6 +10,18 @@ the system talks through and the static data that replaces the cut modules
     4. apply static routes                rpv.route_add(..., "file")
     5. load /etc/hosts.conf               via net/hosts.lua, inject node.hosts
     6. bind the probe socket              UDP send-one/receive-one reachability
+    7. hand out the RHTP client           net/rhtp.lua over this node (RHTP/1.0)
+
+The RHTP client is the system's service protocol (DECISIONS.md 45): the
+appstore and the kernel OTA client fetch index/files/meta over it, and the
+node's resolver is used for names. `S:rhtp_get(url)` / `S:rhtp_fetch(url)` are
+the app-facing form (body, nil | nil, reason); the raw client from
+`S:rhtp_client()` speaks the module API (status, body). Nothing here creates a
+second node: the client borrows the one service socket owner in this process.
+
+Pumping: the client's wait loop drives `node:pump` when the node has one, so a
+host that runs the desktop loop can make a request complete. A node without a
+pump still returns after the deadline instead of spinning.
 
 Failure policy: a missing or invalid config, a missing rpv table, a raising
 setup and a refused probe socket all end in `health = "degraded"` plus a
@@ -32,6 +44,9 @@ Config keys (all optional except `ip`):
     probe_port=47100       default 47100
     hosts_interval=5       default 5 s between mtime checks
     neighbor_ttl=3600      default 3600 s for static ARP entries
+    rhtp_port=8080         default 8080, the server port a bare RHTP path means
+    rhtp_chunk=4096        default 4096, RHTP fetch chunk (off/len) size
+    rhtp_timeout=3         default 3 s per RHTP request
     static_neighbor=10.0.0.9,1001     repeatable
     static_route=10.9.0.0/16 via 10.0.0.9   repeatable
 
@@ -100,6 +115,9 @@ end
 S.DEFAULT_PROBE_PORT = 47100
 S.DEFAULT_HOSTS_INTERVAL = 5
 S.DEFAULT_NEIGHBOR_TTL = 3600
+S.DEFAULT_RHTP_PORT = 8080
+S.DEFAULT_RHTP_CHUNK = 4096
+S.DEFAULT_RHTP_TIMEOUT = 3
 S.PROBE_PAYLOAD = "PYROET-NET-PROBE-1"
 S.MAX_PROBES = 8
 S.MAX_TIMEOUT = 10
@@ -109,6 +127,7 @@ local KNOWN_KEYS = {
     iface_name = true, channel = true, mtu = true, linktype = true,
     role = true, hosts_file = true, probe_port = true,
     hosts_interval = true, neighbor_ttl = true,
+    rhtp_port = true, rhtp_chunk = true, rhtp_timeout = true,
 }
 
 local function short(value, max)
@@ -313,6 +332,29 @@ function S.parse_config(text)
     end
     cfg.neighbor_ttl = ttl
 
+    local rhtp_port = tonumber(raw.rhtp_port)
+    if raw.rhtp_port == nil then rhtp_port = S.DEFAULT_RHTP_PORT end
+    if not rhtp_port or rhtp_port % 1 ~= 0
+        or rhtp_port < 1 or rhtp_port > 65535 then
+        return nil, "bad rhtp_port '" .. tostring(raw.rhtp_port) .. "'"
+    end
+    cfg.rhtp_port = math.floor(rhtp_port)
+
+    local rhtp_chunk = tonumber(raw.rhtp_chunk)
+    if raw.rhtp_chunk == nil then rhtp_chunk = S.DEFAULT_RHTP_CHUNK end
+    if not rhtp_chunk or rhtp_chunk % 1 ~= 0
+        or rhtp_chunk < 1 or rhtp_chunk > 60000 then
+        return nil, "bad rhtp_chunk '" .. tostring(raw.rhtp_chunk) .. "' (want 1..60000)"
+    end
+    cfg.rhtp_chunk = math.floor(rhtp_chunk)
+
+    local rhtp_timeout = tonumber(raw.rhtp_timeout)
+    if raw.rhtp_timeout == nil then rhtp_timeout = S.DEFAULT_RHTP_TIMEOUT end
+    if not rhtp_timeout or rhtp_timeout <= 0 or rhtp_timeout > 60 then
+        return nil, "bad rhtp_timeout '" .. tostring(raw.rhtp_timeout) .. "'"
+    end
+    cfg.rhtp_timeout = rhtp_timeout
+
     local unknown = {}
     for key in pairs(raw) do
         if not KNOWN_KEYS[key] then unknown[#unknown + 1] = key end
@@ -339,6 +381,8 @@ function S.new(opts)
     self.config_path = o.config_path or S.DEFAULT_CONFIG_PATH
     self.hosts_path = o.hosts_path or S.DEFAULT_HOSTS_PATH
     self.hosts_module = o.hosts_module
+    self.rhtp_module = o.rhtp_module
+    self.rhtp = nil
     self.hosts = nil
     self.cfg = nil
     self.node = nil
@@ -419,6 +463,87 @@ function S:load_hosts_module()
         end
     end
     return nil
+end
+
+-- net/rhtp.lua is the service protocol client (DECISIONS.md 45). Loaded the same
+-- lazy way as net/hosts.lua, so a missing module degrades with a NET_RHTP_* line
+-- instead of a crash, and the client is built at most once per service.
+function S:load_rhtp_module()
+    local fsx = self.fs
+    local candidates = { "/system/net/rhtp.lua", "system/net/rhtp.lua" }
+    for i = 1, #candidates do
+        local path = candidates[i]
+        if fsx and type(fsx.exists) == "function" then
+            local ok, exists = pcall(fsx.exists, path)
+            if ok and exists then
+                local loaded, module = pcall(dofile, path)
+                if loaded and type(module) == "table"
+                    and type(module.new) == "function" then
+                    return module
+                end
+                self:log("NET_RHTP_MODULE_FAIL path=%s err=%s",
+                    short(path, 40), short(module, 60))
+            end
+        end
+    end
+    return nil
+end
+
+-- The one RHTP client this service owns. `self.node` is the only rpv node in the
+-- process, so every caller shares it and no app ever creates its own node.
+function S:rhtp_client()
+    if self.rhtp then return self.rhtp end
+    if not self.node then return nil, "no network" end
+    local mod = self.rhtp_module or self:load_rhtp_module()
+    self.rhtp_module = mod
+    if type(mod) ~= "table" or type(mod.new) ~= "function" then
+        self:log("NET_RHTP_UNAVAILABLE reason=no_module")
+        return nil, "no rhtp module"
+    end
+    local cfg = self.cfg or {}
+    local client = mod.new({
+        node = self.node,
+        log = function(line) self:log("%s", tostring(line)) end,
+        port = cfg.rhtp_port or S.DEFAULT_RHTP_PORT,
+        max_bytes = cfg.rhtp_chunk or S.DEFAULT_RHTP_CHUNK,
+        timeout = cfg.rhtp_timeout or S.DEFAULT_RHTP_TIMEOUT,
+        clock = self.clock,
+    })
+    self.rhtp = client
+    self:log("NET_RHTP port=%d chunk=%d timeout=%.2f",
+        cfg.rhtp_port or S.DEFAULT_RHTP_PORT,
+        cfg.rhtp_chunk or S.DEFAULT_RHTP_CHUNK,
+        cfg.rhtp_timeout or S.DEFAULT_RHTP_TIMEOUT)
+    return client
+end
+
+-- App-facing form: body, nil on a 2xx answer, nil, reason otherwise. The raw
+-- client keeps the (status, body) shape; this wrapper is what hosts.rhtp hands
+-- to the app runtime and to kernel/ota.lua, and it is the same call either way.
+function S:rhtp_get(url, opts)
+    local client, err = self:rhtp_client()
+    if not client then return nil, err or "no network" end
+    local code, body = client:get(url, opts)
+    if code == nil then return nil, body end
+    return body
+end
+
+function S:rhtp_fetch(url, size, opts)
+    local client, err = self:rhtp_client()
+    if not client then return nil, err or "no network" end
+    local ok, body = client:fetch(url, size, opts)
+    if not ok then return nil, body end
+    return body
+end
+
+-- Bounded node pump, for a host that wants to drive the stack while a request is
+-- in flight. Nothing in this image calls it yet (the desktop loop owns
+-- os.pullEvent); it is the documented seam for an app-side network wait.
+function S:pump(seconds)
+    if not self.node or type(self.node.pump) ~= "function" then
+        return nil, "no pump"
+    end
+    return self.node:pump(seconds)
 end
 
 function S:create_node()
@@ -809,6 +934,7 @@ function S:status()
         channel = cfg.channel,
         hosts = self.hosts and self.hosts:count() or 0,
         probe_port = self.probe_port,
+        rhtp_port = cfg.rhtp_port or S.DEFAULT_RHTP_PORT,
         reasons = reasons,
     }
 end

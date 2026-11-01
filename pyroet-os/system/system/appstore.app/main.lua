@@ -1,11 +1,14 @@
---[[- pyroet-os/system/system/appstore.app/main.lua -- download a package over http.
+--[[- pyroet-os/system/system/appstore.app/main.lua -- download a package over RHTP.
 
 The server is chosen by the user: `a` edits the address line (the first line of
 /etc/appstore.servers is the default). With no config file at all the built-in
-default `http://store.pyrotechnic.org/` is used, so a fresh machine can install
+default `rhtp://store.pyrotechnic.org/` is used, so a fresh machine can install
 without pressing `a` first; `a` still overrides it for this session and puts the
-new address at the top of the list. Any static file server works -- the layout is
-plain text, there is no zip and no JSON:
+new address at the top of the list. The transport is the project's own RHTP/1.0
+(DECISIONS.md 45) through `api.net.rhtp_get`, never a host http table: the
+package server is any RHTP server (the rhtp_server app) serving static text --
+the layout is plain text, there is no zip and no JSON. A bare `host[:port]/path`
+typed into the editor is read as `rhtp://host[:port]/path`:
 
     GET <base>/index.txt              -> one "app <name> <version> <dir>" per line
     GET <base>/<dir>/files.txt        -> one relative path per line
@@ -54,7 +57,7 @@ the kernel through api.sys.ota_apply("image", { base =, progress = }), painting
 `fetching <rel> (i/n)` on the status line. The outcome is `reboot to apply` or
 one readable failure line; the running system is untouched unless every digest
 matched. The base is the first line of /etc/ota.servers, else
-http://pyroet.pyrotechnic.org/upgrade.
+rhtp://pyroet.pyrotechnic.org/upgrade.
 
 No non-ASCII bytes in this file. `_G.PYROET_APPSTORE_TEST` returns the module.
 ]]
@@ -66,7 +69,7 @@ M.VIEW = { cols = 51, rows = 19 }
 M.MIN_COLS = 18
 M.MIN_ROWS = 8
 M.CONF = "/etc/appstore.servers"
-M.DEFAULT_SERVER = "http://store.pyrotechnic.org/"
+M.DEFAULT_SERVER = "rhtp://store.pyrotechnic.org/"
 M.PKGS = "/pkgs"
 M.DISK = "/disk"
 M.DISK_PKGS = "/disk/pkgs"
@@ -93,7 +96,7 @@ M.MAX_RECV = 262144
 M.OTA_MODULE = "/system/kernel/ota.lua"
 M.OTA_TITLE = "System update"
 M.OTA_META = "meta.txt"
-M.OTA_DEFAULT = "http://pyroet.pyrotechnic.org/upgrade"
+M.OTA_DEFAULT = "rhtp://pyroet.pyrotechnic.org/upgrade"
 
 function M.fit(text, cols)
     local value = tostring(text == nil and "" or text)
@@ -118,6 +121,19 @@ function M.trim(text)
     return (tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+-- A readable RHTP reason for the status line: the three named failures get the
+-- exact text the docs promise ("dns unknown host", "rhtp 404", "timeout"), and
+-- anything else is passed through, shortened and CR/LF-free.
+function M.reason(err)
+    local text = tostring(err == nil and "failed" or err)
+    if text == "" or text == "nil" then return "failed" end
+    if text:find("dns", 1, true) then return "dns unknown host" end
+    if text:find("timeout", 1, true) then return "timeout" end
+    if text:find("no rhtp", 1, true) then return "no rhtp" end
+    if text:find("rhtp", 1, true) then return M.oneline(text, 32) end
+    return M.oneline(text, 32)
+end
+
 -- one line, spaces kept: protocol strings (an ack err, a role) stay readable
 function M.oneline(text, max)
     local value = tostring(text == nil and "" or text):gsub("[\r\n\t]+", " ")
@@ -135,6 +151,9 @@ end
 -- configuration: /etc/appstore.servers, one URL per line (the first is the default)
 -- ---------------------------------------------------------------------------
 
+-- Every line is normalized to rhtp://, so a config file written for the old
+-- http store is refused here (an absolute http:// address can never reach an
+-- RHTP client) instead of failing one request later.
 function M.servers(api)
     local fsx = type(api) == "table" and api.fs or nil
     local out = {}
@@ -142,9 +161,10 @@ function M.servers(api)
         local called, text = pcall(fsx.read, M.CONF)
         if called and type(text) == "string" then
             for line in (text .. "\n"):gmatch("([^\n]*)\n") do
-                local url = M.trim((line:gsub("\r", "")))
-                if url ~= "" and url:sub(1, 1) ~= "#" and #url <= M.MAX_URL then
-                    out[#out + 1] = url
+                local raw = M.trim((line:gsub("\r", "")))
+                if raw ~= "" and raw:sub(1, 1) ~= "#" then
+                    local url = M.normalize_server(raw)
+                    if url ~= nil then out[#out + 1] = url end
                 end
             end
         end
@@ -211,39 +231,36 @@ function M.server_of(state)
 end
 
 -- ---------------------------------------------------------------------------
--- http helpers
+-- RHTP helpers (api.net.rhtp_get, granted by the net.rhtp capability)
 -- ---------------------------------------------------------------------------
 
-function M.http_of(api)
-    local http = type(api) == "table" and api.http or nil
-    if type(http) ~= "table" or type(http.get) ~= "function" then return nil end
-    return http
+function M.net_of(api)
+    local net = type(api) == "table" and api.net or nil
+    if type(net) ~= "table" or type(net.rhtp_get) ~= "function" then return nil end
+    return net
 end
 
--- one GET -> body, status (nil, err when the transport failed)
+-- one RHTP GET -> body, nil | nil, reason. There is no status code to inspect
+-- here: the net service already turned a 4xx/5xx into "rhtp <code>".
+function M.raw_get(api, url)
+    local net = M.net_of(api)
+    if net == nil then return nil, "no rhtp" end
+    local called, body, err = pcall(net.rhtp_get, url)
+    if not called then return nil, M.reason(body) end
+    if body == nil then return nil, M.reason(err) end
+    if type(body) ~= "string" then return nil, "bad response" end
+    return body
+end
+
+-- the old 3-return shape the callers use: body, 200, nil | nil, nil, reason
 function M.get(api, url)
-    local http = M.http_of(api)
-    if http == nil then return nil, nil, "no http" end
-    local called, res, extra = pcall(http.get, url)
-    if not called then return nil, nil, tostring(res) end
-    if res == nil then return nil, nil, tostring(extra or "failed") end
-    if type(res) == "string" then return res, 200 end
-    if type(res) ~= "table" then return nil, nil, "bad response" end
-    local status = tonumber(res.status) or (res.ok == false and 0 or 200)
-    if status < 200 or status > 299 then return nil, status, "http " .. tostring(status) end
-    -- both shapes: a {status,body} table (tests, a host that already read it) and
-    -- the ROM response handle, which hands the body out through readAll()
-    local body = type(res.body) == "string" and res.body or nil
-    if body == nil and type(res.readAll) == "function" then
-        local rcalled, read = pcall(res.readAll)
-        if rcalled and type(read) == "string" then body = read end
-    end
-    if body == nil then return nil, status, "no body" end
-    return body, status
+    local body, err = M.raw_get(api, url)
+    if body == nil then return nil, nil, err end
+    return body, 200
 end
 
 -- ---------------------------------------------------------------------------
--- the system update row: remote meta over http, apply through the kernel bridge
+-- the system update row: remote meta over RHTP, apply through the kernel bridge
 -- ---------------------------------------------------------------------------
 
 -- The PYROET-OTA/2 parsers and the built-in base URL live in the image's own OTA
@@ -281,12 +298,11 @@ end
 function M.ota_plan(api)
     local mod = M.ota_of()
     if mod == nil then return nil, "no ota module" end
-    local http = M.http_of(api)
-    if http == nil then return nil, "no http" end
+    if M.net_of(api) == nil then return nil, "no rhtp" end
     local base = M.ota_base(api, mod)
     local body, status, err = M.get(api, M.join(base, M.OTA_META))
     if body == nil then
-        return nil, tostring(err or ("http " .. tostring(status)))
+        return nil, M.reason(err or status)
     end
     local meta, files = mod.parse_manifest(body)
     if meta == nil then return nil, tostring(files or "bad meta") end
@@ -323,11 +339,11 @@ end
 -- The progress callback paints `fetching <rel> (i/n)` from inside the bridge, so
 -- a slow download is visible on the status line.
 function M.ota_enter(state, api)
-    if M.http_of(api) == nil then
-        state.status = "update: no http"
+    if M.net_of(api) == nil then
+        state.status = "update: no rhtp"
         state.progress = nil
-        M.note(api, "APPSTORE_OTA ok=false reason=no_http")
-        return "error", "no http"
+        M.note(api, "APPSTORE_OTA ok=false reason=no_rhtp")
+        return "error", "no rhtp"
     end
     state.progress = "checking update"
     M.ota_paint(state, api)
@@ -510,7 +526,7 @@ function M.load_index(state, api)
     if body == nil then
         state.entries = {}
         state.index = 1
-        state.status = "index " .. tostring(err or status)
+        state.status = "store: " .. tostring(err or status)
         M.note(api, "APPSTORE_INDEX ok=false server=" .. M.plain(base, 60)
             .. " err=" .. tostring(err or status))
         return "error"
@@ -583,11 +599,38 @@ function M.edit_end(state, api, why)
     return "repaint"
 end
 
-function M.valid_url(text)
+-- `rhtp://host[:port][/path]` or a bare `host[:port][/path]`, normalized to the
+-- scheme form. Any other explicit scheme is refused, so an old http:// address
+-- cannot be stored as if it were reachable.
+function M.normalize_server(text)
     local value = M.trim(text or "")
-    if value == "" then return false, "empty address" end
-    if #value > M.MAX_URL then return false, "address too long" end
-    if value:find("%s") then return false, "address has a space" end
+    if value == "" then return nil, "empty address" end
+    if #value > M.MAX_URL then return nil, "address too long" end
+    if value:find("%s") then return nil, "address has a space" end
+    if value:sub(1, 7):lower() ~= "rhtp://" then
+        if value:find("://", 1, true) then return nil, "only rhtp:// addresses" end
+        value = "rhtp://" .. value
+    end
+    local rest = value:sub(8)
+    local host = rest:match("^([^/]*)")
+    if host == nil or host == "" then return nil, "bad address" end
+    local name = host:match("^([^:]+)")
+    if name == nil or name == "" or not name:match("^[%w%._%-]+$") then
+        return nil, "bad address"
+    end
+    local port_text = host:match("^[^:]+:(%d+)$")
+    if port_text ~= nil then
+        local number = tonumber(port_text)
+        if not number or number < 1 or number > 65535 then
+            return nil, "bad port"
+        end
+    end
+    return value
+end
+
+function M.valid_url(text)
+    local value, why = M.normalize_server(text)
+    if value == nil then return false, why end
     return true
 end
 
@@ -597,7 +640,7 @@ function M.edit_submit(state, api)
         state.status = why
         return "denied", why
     end
-    local value = M.trim(state.edit_text)
+    local value = M.normalize_server(state.edit_text)
     state.servers = state.servers or {}
     table.insert(state.servers, 1, value)
     state.server_index = 1
@@ -732,7 +775,7 @@ function M.download(state, api, entry)
     local base = M.join(entry.base or M.server_of(state), entry.dir)
     local files_body, _, ferr = M.get(api, M.join(base, M.FILES))
     if files_body == nil then
-        state.status = "files " .. tostring(ferr)
+        state.status = "store: " .. tostring(ferr)
         return nil, tostring(ferr)
     end
     local files, fwhy = M.parse_files(files_body)
@@ -1420,10 +1463,10 @@ function M.body(manifest, api)
     end
     local input = type(api) == "table" and api.input or nil
     local pull = type(input) == "table" and input.pullEvent or nil
-    if M.http_of(api) == nil then
-        state.status = "appstore unavailable: no http"
+    if M.net_of(api) == nil then
+        state.status = "appstore unavailable: no rhtp"
         M.paint_once(state, api, term)
-        M.note(api, "APPSTORE_UNAVAILABLE reason=no_http")
+        M.note(api, "APPSTORE_UNAVAILABLE reason=no_rhtp")
         if type(pull) ~= "function" then return M.idle(api) end
         while true do
             local event, p1 = pull()

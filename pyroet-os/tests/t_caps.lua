@@ -1,4 +1,4 @@
---[[- pyroet-os/tests/t_caps.lua -- O3: the `input` and `terminal` capabilities.
+--[[- pyroet-os/tests/t_caps.lua -- O3/O4: the `input`, `terminal` and `net.rhtp` capabilities.
 
 What a new capability has to prove, and what this suite pins for these two:
 
@@ -32,6 +32,7 @@ return function(H)
             apps_root = o.apps_root,
             input = o.input,
             terminal = o.terminal,
+            rhtp = o.rhtp,
         })
     end
 
@@ -74,7 +75,7 @@ return function(H)
     H.group("caps.list")
     do
         H.table("caps_list", apps.CAPS)
-        H.eq("caps_count", #apps.CAPS, 9)
+        H.eq("caps_count", #apps.CAPS, 10)
         H.eq("input_known", apps.cap_known("input"), true)
         H.eq("terminal_known", apps.cap_known("terminal"), true)
         -- only the two names are capabilities; their sub-surfaces are not
@@ -245,6 +246,96 @@ end
         H.has(lines, "APP_CAP_UNAVAILABLE app=nohost cap=terminal")
         H.lacks("unavailable_not_denied", lines, "APP_CAP_DENIED app=nohost")
         H.has(lines, "APP_LOG app=nohost msg=types=function/table/table")
+    end
+
+
+    -- -----------------------------------------------------------------
+    H.group("caps.rhtp")
+    -- `net.rhtp` (DECISIONS.md 45) is the service protocol capability: the two
+    -- api entries are gated FUNCTIONS, so a denial is a callable stub and never a
+    -- nil-index; a declared capability with no host client is "unavailable".
+    do
+        local dir = H.case_dir("caps", "rhtp")
+        local log, lines = H.logger()
+        local seen = {}
+        local client = {
+            get = function(url)
+                seen[#seen + 1] = { "get", url }
+                return "body:" .. tostring(url)
+            end,
+            fetch = function(url, size)
+                seen[#seen + 1] = { "fetch", url, size }
+                return "chunked:" .. tostring(size)
+            end,
+        }
+        local rt = new_rt(log, { rhtp = client })
+        H.app_package(dir .. "/apps/denied.app", {
+            manifest = 'return { name = "denied", capabilities = { "fs.read" } }',
+            main = [[
+return function(manifest, api)
+    local body, err = api.net.rhtp_get("rhtp://box/x")
+    api.log("get=" .. tostring(body) .. " err=" .. tostring(err))
+    local data, derr = api.net.rhtp_fetch("rhtp://box/big", 10)
+    api.log("fetch=" .. tostring(data) .. " err=" .. tostring(derr))
+    api.log("types=" .. type(api.net.rhtp_get) .. "/" .. type(api.net.rhtp_fetch))
+    api.yield()
+end
+]],
+        })
+        rt:load(dir .. "/apps/denied.app")
+        rt:start("denied")
+        rt:tick()
+        H.has(lines, "APP_LOG app=denied msg=get=nil err=capability denied: net.rhtp")
+        H.has(lines, "APP_LOG app=denied msg=fetch=nil err=capability denied: net.rhtp")
+        -- both stay functions: the denial keeps the shape of the granted api
+        H.has(lines, "APP_LOG app=denied msg=types=function/function")
+        H.eq("rhtp_denied_log", rt:count("APP_CAP_DENIED app=denied cap=net.rhtp"), 2)
+        H.eq("rhtp_host_untouched", #seen, 0)
+
+        -- declared + host supplied: the real client is reached, arguments pass
+        -- through, and the two names are separate entries
+        H.app_package(dir .. "/apps/net.app", {
+            manifest = 'return { name = "netuser", capabilities = { "net.rhtp" } }',
+            main = [[
+return function(manifest, api)
+    local body = api.net.rhtp_get("rhtp://box/x")
+    api.log("get=" .. tostring(body))
+    local data = api.net.rhtp_fetch("rhtp://box/big", 10)
+    api.log("fetch=" .. tostring(data))
+    api.yield()
+end
+]],
+        })
+        local rt2 = new_rt(log, { rhtp = client })
+        rt2:load(dir .. "/apps/net.app")
+        rt2:start("netuser")
+        rt2:tick()
+        H.has(lines, "APP_LOG app=netuser msg=get=body:rhtp://box/x")
+        H.has(lines, "APP_LOG app=netuser msg=fetch=chunked:10")
+        H.eq("rhtp_host_calls", #seen, 2)
+        H.eq("rhtp_get_url", seen[1] and seen[1][2], "rhtp://box/x")
+        H.eq("rhtp_fetch_size", seen[2] and seen[2][3], 10)
+        H.lacks("rhtp_not_denied", lines, "APP_CAP_DENIED app=netuser cap=net.rhtp")
+
+        -- declared + no host client: "unavailable", which is not a denial
+        H.app_package(dir .. "/apps/nohost.app", {
+            manifest = 'return { name = "nohost", capabilities = { "net.rhtp" } }',
+            main = [[
+return function(manifest, api)
+    local body, err = api.net.rhtp_get("rhtp://box/x")
+    api.log("nohost=" .. tostring(body) .. " err=" .. tostring(err))
+    api.yield()
+end
+]],
+        })
+        local rt3 = new_rt(log, {})
+        rt3:load(dir .. "/apps/nohost.app")
+        rt3:start("nohost")
+        rt3:tick()
+        H.has(lines,
+            "APP_LOG app=nohost msg=nohost=nil err=capability unavailable: net.rhtp")
+        H.has(lines, "APP_CAP_UNAVAILABLE app=nohost cap=net.rhtp")
+        H.lacks("nohost_not_denied", lines, "APP_CAP_DENIED app=nohost cap=net.rhtp")
     end
 
     -- -----------------------------------------------------------------

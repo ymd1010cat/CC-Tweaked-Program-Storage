@@ -62,7 +62,7 @@ EDL 式的恢复工具。发布版本 **1.0.0**，装机内容 **26 个文件 / 
 ```
 pyroet-os/
 ├─ startup.lua              ROM 唯一入口的 starter（1,070 B），只加载 /system/startup.lua
-├─ system/                  镜像 payload（28 文件 / 597,973 B）
+├─ system/                  镜像 payload（29 文件 / 681,455 B）
 │  ├─ startup.lua           启动链：boot → kernel → apps → 权限 → 服务 → 首帧 → commit
 │  ├─ boot.lua              bootloader：单树 + journal 决策表 + 按哈希回滚（45,623 B）
 │  ├─ kernel/
@@ -74,7 +74,8 @@ pyroet-os/
 │  ├─ rpv/                  rpv 子集 10 文件 = 9 模块 + loader.lua（131,590 B）
 │  ├─ net/
 │  │  ├─ hosts.lua          静态 hosts 解析（整文件原子生效）
-│  │  └─ service.lua        kernel 服务 `net`：rpv 节点 + 静态邻居/路由 + hosts + UDP probe
+│  │  ├─ rhtp.lua           RHTP/1.0 客户端（URL 解析 / DNS / off+len 分块 / 206）
+│  │  └─ service.lua        kernel 服务 `net`：rpv 节点 + 静态邻居/路由 + hosts + UDP probe + RHTP
 │  └─ system/               系统应用（同一 `.app` 格式）
 │     ├─ launcher.app/      桌面（扫 /apps 与 /system/system）
 │     ├─ settings.app/      设置（严格只读）
@@ -87,7 +88,7 @@ pyroet-os/
 ├─ ota/                     发行端 OTA 服务（开发/发布工具，不跑在掌机上，不进镜像）
 ├─ tests/                   CraftOS-PC 离线套件（开发材料，不进发布包）
 ├─ tools/                   sizecheck.py / smoke.lua / smoke-run.ps1（开发材料）
-├─ install.set              镜像清单（28 条，`sizecheck.py` 的唯一输入）
+├─ install.set              镜像清单（30 条，`sizecheck.py` 的唯一输入）
 ├─ DECISIONS.md             决策记录（架构与门禁的权威口径）
 └─ P6-design.md             文件集更新模型的设计与崩溃窗口分析
 ```
@@ -197,7 +198,7 @@ pyroet-os/
 
 ## 4. 权限模型
 
-### 4.1 九个 capability（固定集合，无继承）
+### 4.1 十个 capability（固定集合，无继承）
 
 | cap | 授予的能力 |
 | --- | --- |
@@ -207,12 +208,14 @@ pyroet-os/
 | `net.rednet` | 裸 rednet（OTA / 救援工具用，普通 app 一般不需要） |
 | `redstone` | 红石读写 |
 | `peripheral` | peripheral 访问 |
-| `http` | CC 的 http API（掌机上通常不可用） |
+| `http` | CC 的 http API（掌机上通常不可用；项目自己的协议是 `net.rhtp`） |
 | `input` | 键盘/事件：`api.input.pullEvent(...)` + `api.input.keys` |
 | `terminal` | 屏幕：`api.terminal`（term 句柄本身；授予 = 宿主对象） |
+| `net.rhtp` | RHTP/1.0 服务协议：`api.net.rhtp_get(url)` / `api.net.rhtp_fetch(url, opts)`（共用 net 服务的唯一 rpv 节点，见 §6.1） |
 
-后两个是 UI 能力，**互不蕴含**：只要键盘不要屏幕、只要屏幕不要键盘都行；只声明一个时另一个仍是拒绝桩。
-它们与另外七个走**完全同一套**机制（声明 → 首启决策 → 运行时拦截 → `nil, "capability denied: <cap>"`
+后两个 UI 能力**互不蕴含**：只要键盘不要屏幕、只要屏幕不要键盘都行；只声明一个时另一个仍是拒绝桩。
+`net.rhtp` 追加在表尾（同 O3 的追加规矩），既有决策文件按前缀解析不受影响。
+它们与其余八个走**完全同一套**机制（声明 → 首启决策 → 运行时拦截 → `nil, "capability denied: <cap>"`
 + `APP_CAP_DENIED`），没有另一条旁路。宿主由启动链注入：`input` = **输入队列**
 （`host.push(event, ...)` 供派发器投递、`api.input.pullEvent(...)` 弹出一格，空队列返回 `nil`；
 `api.input.keys` 是 ROM 的 keys 表，派发器用它把键码翻成键名），`terminal` = ROM 的 `term`
@@ -346,16 +349,16 @@ compat：manifest **不写** `capabilities` = 声明空列表 = 全部拒绝，*
 | `launcher.app` | 0.2.0 | `fs.read`, `fs.write`（写只用于 `/etc/launcher.recent`，被拒就忽略）, `input`, `terminal`（D1：常驻桌面对话循环） |
 | `settings.app` | 0.2.0 | `fs.read`（**严格只读**，没有写路径） |
 | `installer.app` | 0.2.0 | `fs.read`, `fs.write`（读 `/pkgs` 与两个已装根；写只发生在安装事务里）, `input`, `terminal` |
-| `appstore.app` | 0.1.0 | `http`, `fs.read`, `fs.write`（写 `/pkgs`，有驱动器时可切到 `/disk/pkgs`，见 §5.7）, `input`, `terminal`, `net.rednet`（T20 接收模式） |
+| `appstore.app` | 0.1.0 | `net.rhtp`, `fs.read`, `fs.write`（写 `/pkgs`，有驱动器时可切到 `/disk/pkgs`，见 §5.7）, `input`, `terminal`, `net.rednet`（T20 接收模式） |
 | `net.app` (可选示例，不在镜像) | 0.2.0 | `net.rpv`, `fs.read` |
 
-`appstore.app` 的 cap 表已经是网络升级所需的三项（`http` + `fs.read` + `fs.write`），所以
-2026-11-01 加的 **`System update` 行**不需要新的授权（列表最后一行；包多时需要滚到底）：它自己只用
-`api.http` 读 `<base>/meta.txt`（解析交给 `kernel/ota.lua`），真正的下载+刷写走内核桥
+`appstore.app` 的 cap 表是网络升级所需的三项（`net.rhtp` + `fs.read` + `fs.write`），所以
+**`System update` 行**（列表最后一行；包多时需要滚到底）不需要别的授权：它自己只用
+`api.net.rhtp_get(<base>/meta.txt)`（解析交给 `kernel/ota.lua`），真正的下载+刷写走内核桥
 `api.sys.ota_apply("image", { base =, progress = })`——内核有能 `open`/`move` 的 fs 和 `boot.lua`，
-应用只有受控的 `api.fs`。桥对这种调用额外要求 `http`（`nil, "capability denied: http"`），
-没有 http 宿主时回 `nil, "no http"`（`APP_OTA_IMAGE ok=false reason=no_http`），界面只显示一行
-`update: no http`，不崩、不改盘。
+应用只有受控的 `api.fs`。桥对这种调用额外要求 `net.rhtp`（`nil, "capability denied: net.rhtp"`），
+没有客户端时回 `nil, "no rhtp"`（`APP_OTA_IMAGE ok=false reason=no_rhtp`），界面只显示一行
+`update: no rhtp`，不崩、不改盘。
 
 ### 5.5 安装器 UI（`installer.app`）
 
@@ -407,7 +410,7 @@ p2 i1 s2 sel 1/5
 
 ### 5.6 远程接收：另一台电脑跑 `pushpkg`（T20）
 
-手持机不联网也能装包：另一台电脑（CraftOS / Pyromputer OS）从 http 服务器拉包，再用 rednet 写进手持机的 `/pkgs`。
+手持机不联网也能装包：另一台电脑（CraftOS / Pyromputer OS）从 RHTP 服务器拉包，再用 rednet 写进手持机的 `/pkgs`。
 
 **手持机**：打开 `appstore`，按 `l` 进入接收模式，状态行显示
 `listening ch=4101 id=<本机 id>`；`q` 停止。`/etc/appstore.recv`（可选）可以覆盖 `channel=` /
@@ -420,11 +423,19 @@ p2 i1 s2 sel 1/5
 pushpkg 7            # 把 index.txt 里的全部包推给 id=7 的手持机
 pushpkg broadcast    # 广播给所有在收的手持机
 pushpkg 7 hello      # 只推 hello
+pushpkg --http 7     # 主机侧调试回退（见下）
 ```
 
-`/etc/pushpkg.conf`（可选）：`server=<http base>`、`protocol=`、`channel=`（仅日志）、`timeout=`。
-**默认服务器**（配置文件缺失、或缺 `server=` 时）：`http://store.pyrotechnic.org/`——手持机端
+`/etc/pushpkg.conf`（可选）：`server=<rhtp base>`、`http=1`、`protocol=`、`channel=`（仅日志）、`timeout=`。
+**默认服务器**（配置文件缺失、或缺 `server=` 时）：`rhtp://store.pyrotechnic.org/`——手持机端
 `appstore` 的 `/etc/appstore.servers` 也缺省到同一个地址，所以两边开箱即用；按 `a` 仍可临时改地址。
+
+**传输取舍**：pushpkg 默认走 **RHTP**，但它跑在**另一台电脑**上，不能假设那台机器有本机的 net 服务。
+它复用已安装的 OS 模块——`/system/rpv/loader.lua` + `/system/net/service.lua`（持有唯一 rpv 节点）+
+`/system/net/rhtp.lua`——从 `/etc/network.conf` 启一个服务实例再取它的客户端；这样**只有一份 RHTP
+实现**要维护，pushpkg 跑一遍等于把掌机同一套代码跑了一遍。宿主没有 rpv 栈时**不会静默降级**：
+`PUSHPKG_FAIL err=no_rhtp reason=.. hint=--http`，要么装 OS 模块，要么显式 `--http`（或 `http=1`）
+走 ROM 的 `http` 表——那条路只是**主机侧调试用**，不是给掌机用的协议。
 
 **服务器目录**（和 `appstore` 一样是纯文本）：
 
@@ -459,16 +470,17 @@ index.txt         app <name> <version> <dir>      # 目录包：manifest.lua + m
 
 ## 6. 更新与恢复
 
-### 6.1 文件集 OTA：`PYROET-OTA/2`（rednet 协议名 `pyroet-ota`，或 http）
+### 6.1 文件集 OTA：`PYROET-OTA/2`（rednet 协议名 `pyroet-ota`，或 RHTP/1.0）
 
 两条源、**同一条应用路径**：
 
-- **http（默认，2026-11-01 起的真实升级通道）**：`GET <base>/meta.txt` 返回**同一份描述**的纯文本
+- **RHTP/1.0（默认，2026-11-01 起的真实升级通道）**：`GET <base>/meta.txt` 返回**同一份描述**的纯文本
   （第一行 `PYROET-OTA/2 META version=<t> files=<n> manifest_sha=<64 hex>`，之后每行
-  `<relpath> <size> <sha256>`），每个文件一次 `GET <base>/<relpath>`。`base` 取值顺序：
-  调用方显式 `base=` > `/etc/ota.servers` 第一条有效行 > 内置常量
-  `O.DEFAULT_UPGRADE = "http://pyroet.pyrotechnic.org/upgrade"`。没有配置文件不是错误——
-  那正是新镜像第一次开机的状态。
+  `<relpath> <size> <sha256>`），每个文件用**分块扩展** `GET <base>/<relpath> off=<n> len=<n>` 拉取。
+  `base` 取值顺序：调用方显式 `base=` > `/etc/ota.servers` 第一条有效行 > 内置常量
+  `O.DEFAULT_UPGRADE = "rhtp://pyroet.pyrotechnic.org/upgrade"`。没有配置文件不是错误——
+  那正是新镜像第一次开机的状态。**没有 http 回退**：掌机上 ROM 的 http 表通常不存在，
+  换协议本来就是为了不依赖它。
 - **rednet**：只走**裸 rednet**（不依赖 rpv——网络栈本身可能就是坏的），另用 `/system/rpv/crypto.lua`
   的 SHA-256。一行一包：
 
@@ -482,10 +494,34 @@ index.txt         app <name> <version> <dir>      # 目录包：manifest.lua + m
 | 应答 | `PYROET-OTA/2 DATA <relpath> <offset> <hex>` |
 
 `MAX_DATA = 8,192` B 载荷/包，`F_MAX = 65,536` B/文件，`MAX_FILES = 256`，丢包/坏块各算一次尝试
-（1..3 次，`OTA_RETRY`），不做位图（重连从第 0 块重算并覆盖写）。http 源下一次 `GET` 拿整份文件，
-**收到即校验**：字节数不等于声明 `size` 或正文哈希不等于声明 `sha256` 的文件不会进 `/update.stage`
-（`OTA_NET_FAIL stage=<meta|file|size> url=.. err=..`）；描述本身（`meta.txt`）由同一个
+（1..3 次，`OTA_RETRY`），不做位图（重连从第 0 块重算并覆盖写）。RHTP 源把每个文件按客户端
+`max_bytes`（默认 4096，`/etc/network.conf` 的 `rhtp_chunk=`）**一次 `fetch` 拉完**（内部逐块 `off/len`，
+日志 `OTA_RHTP_CHUNK path=.. off=.. len=..`），**收到即校验**：字节数不等于声明 `size` 或正文哈希不等于
+声明 `sha256` 的文件不会进 `/update.stage`（`OTA_NET_FAIL stage=<meta|file|size> url=.. err=..`，
+客户端另记 `RHTP_GET / RHTP_TIMEOUT / RHTP_DNS_FAIL / RHTP_CHUNK`）；描述本身（`meta.txt`）由同一个
 `O.parse_manifest` 解析，与 rednet 的 `META`/`FILE` 行共用解析器。
+
+**RHTP 语义（`system/net/rhtp.lua`，DECISIONS.md §45）**：
+
+```
+请求  GET <path>                      或  GET <path> off=<n> len=<n>
+应答  RHTP/1.0 <code> <reason>\r\n[<header>\r\n]\r\n<body>
+```
+
+- URL：`rhtp://<host>[:<port>]/<path>`，**默认端口 8080**；裸 `host[:port]/path` 按 `rhtp://` 读，
+  任何其它显式 scheme 直接拒绝（`bad scheme`，不回落 http）。`?query` / `#fragment` 被剥掉（服务端
+  也忽略），路径 ≤96 字节纯 ASCII、禁 `//`、禁 `.`/`..` 段、禁反斜杠——URL 路径从不映射到本地文件系统。
+- **DNS**：点分十进制直接用；否则 `node:lookup(host)`（rpv 的解析入口，先 `node.hosts` 再发 DNS QUERY），
+  之后兜底查 `node.hosts`（`/etc/hosts.conf` 静态表写进去的那张）。失败 → `nil, "dns: unknown host"` +
+  `RHTP_DNS_FAIL host=..`；成功记 `RHTP_RESOLVE host=.. ip=..`（`debug=false` 可关）。
+- **分块**：`off=<n> len=<n>`，服务端回 `206 Partial Content` + **恰好该段** body；客户端把段严格
+  拼起来（长度不符是失败，不是少收一点）。服务端忽略扩展回 `200` + 全量 body 时本次直接用它。
+  `R:fetch(path, size)` 用 `max_bytes` 分块并回调 `progress(done, total)`。
+- **失败**：非 2xx → `nil, "rhtp <code>"`；超时 `nil, "timeout"`（有 `node:pump` 时按截止时间泵，
+  没有也不会空转）；坏状态行 `nil, "bad response"`；单包超过 `MAX_DATAGRAM`（60000）→ `nil, "too large"`。
+- **安全边界**：RHTP 没有 TLS、没有签名。完整性靠 SHA-256（OTA 的 `manifest_sha` + 每文件 `sha256`、
+  appstore 的 `SHA256.txt`），**真实性未签名**——能改写链路的人可以换一份自洽的新镜像，客户端只能证明
+  "拿到的东西和描述一致"。这是已记录风险（DECISIONS.md §45.5），不是待修 bug。
 
 **顺序即安全保证**：
 
@@ -547,8 +583,15 @@ local ota = dofile("/system/kernel/ota.lua").new({ host = 12, log = print })
 ota:update()
 print(ota:status().state, ota:status().bytes)
 
--- 系统 OTA（真实升级服务器；base 缺省取 /etc/ota.servers 首行或内置默认）
-local net_ota = dofile("/system/kernel/ota.lua").new({ http = http, log = print,
+-- 系统 OTA（RHTP 升级服务器；base 缺省取 /etc/ota.servers 首行或内置默认）
+-- 客户端由 net 服务提供（它持有唯一的 rpv 节点）；shell 里手工起一个：
+local rpv = dofile("/system/rpv/loader.lua")
+local svc = dofile("/system/net/service.lua").new({ rpv = rpv, peripheral = peripheral })
+svc:start()
+local net_ota = dofile("/system/kernel/ota.lua").new({
+    rhtp = { get = function(u, o) return svc:rhtp_get(u, o) end,
+             fetch = function(u, s) return svc:rhtp_fetch(u, s) end },
+    log = print,
     progress = function(rel, i, n) print("fetching " .. rel .. " (" .. i .. "/" .. n .. ")") end })
 net_ota:update()
 
@@ -573,7 +616,7 @@ inst:install("hello"); inst:uninstall("hello"); inst:list()
 
 注意：OTA 正常更新与救援刷写是**同一信任模型的两条链路**（SHA-256 + 帧定界，无握手、无加密），
 区别只在入口：`ota.lua` 是镜像内的正常客户端（复用 `boot.lua` 的写入口与 `/update.stage` 单树流程），
-`recovery/` 是系统坏掉时的手工入口。正常更新的下载侧现在有 http（默认）与 rednet 两种，应用侧只有一条；
+`recovery/` 是系统坏掉时的手工入口。正常更新的下载侧现在有 RHTP/1.0（默认）与 rednet 两种，应用侧只有一条；
 桌面上的入口是 `appstore` 的 **System update** 行，它自己不写盘，只把 `base` 与进度回调交给内核桥
 `api.sys.ota_apply("image", { base =, progress = })`（只有内核拿得到能 `open`/`move` 的 fs 和 `boot.lua`）。
 发布端（回答 `GET meta` / `GET <idx>` 的那一端）可以用 `ota/server.lua`：它只跑在带 modem 的普通
@@ -598,19 +641,19 @@ CraftOS 电脑上，不跑在掌机上，也不进镜像。
 > 放宽的**只是构建门禁**（代码体量不再当作构建错误），**真实介质容量另算**：掌机仍是一台 CC 电脑，
 > 盘配额 1,000,000 B，一个 10 MiB 的镜像装不进任何一台机器。能不能装看 `free`，不看 `SIZE_PASS`。
 
-当前实测（2026-11-01，网络 OTA + appstore 更新入口之后）：
+当前实测（2026-11-01，RHTP 服务协议 + DNS 之后）：
 
 ```
-entries    : 29 (29 files, 0 dirs, 0 missing)
-TOTAL      : 650,447 B   (system 28 文件 649,377 + 根 starter 1,070)
-VERDICT    : SIZE_PASS   (total 650,447 <= stretch 7,340,032)
-MARGIN     : 6,689,585 bytes under stretch; 9,835,313 bytes under upper
-WINDOW_OK  : sum=850447 limit=10685760
+entries    : 30 (30 files, 0 dirs, 0 missing)
+TOTAL      : 682,525 B   (system 29 文件 681,455 + 根 starter 1,070)
+VERDICT    : SIZE_PASS   (total 682,525 <= stretch 7,340,032)
+MARGIN     : 6,657,507 bytes under stretch; 9,803,235 bytes under upper
+WINDOW_OK  : sum=882525 limit=10685760
 ```
 
 - **`SIZE_WARN` 不是失败**：超目标线只报差额；硬门禁才是发版阻断线。当前体量在**新目标线以下**，
   所以判 `SIZE_PASS`。
-- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`650,447 + 200,000 = 850,447`，
+- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`682,525 + 200,000 = 882,525`，
   远在 10,685,760 之内；它与机身 1,000,000 B 配额不是一回事（后者是物理事实，工具不替你判断）。
 - **发布包 ≠ 镜像**：发布 zip 是完整源码集（含 `recovery/` 与两份文档），`install.set` 统计的才是镜像；
   不要拿 zip 体积当门禁，也不要因为包里有 `recovery/` 就以为它在镜像里。
@@ -621,7 +664,9 @@ WINDOW_OK  : sum=850447 limit=10685760
 
 | 限制 | 具体表现 / 影响 |
 | --- | --- |
-| **无 DNS 客户端** | `services.lua` 未 vendor，`node:lookup(name)` 返回 `nil`；域名解析只能用 `/etc/hosts.conf` 静态表 |
+| **无完整 DNS 客户端** | `services.lua` 未 vendor，`node:lookup(name)` 返回 `nil`；`net/rhtp.lua` 因此先查 `node.hosts`（`/etc/hosts.conf` 静态表），名字能解析但**没有真正的 DNS QUERY**；要发域名查询得先把 services.lua 的 lookup 补进来 |
+| **RHTP 无 TLS / 无签名** | 完整性靠 SHA-256（OTA manifest_sha + 每文件 sha256、appstore 可选 SHA256.txt），真实性不签名；链路可被替换成自洽的另一份镜像（DECISIONS.md §45.5） |
+| **app 侧 RHTP 等待需要宿主泵节点** | `net/rhtp.lua` 的等待循环用 `node:pump`。`kernel/desktop.lua` 目前**不**把事件喂给 rpv 节点，所以真机上 app 发起的 RHTP 请求可能只等到 `RHTP_TIMEOUT`；内核 OTA 与 appstore 的调用路径因此是“协议正确、宿主待接”（DECISIONS.md §45.6） |
 | **无 ICMP / 无 ping** | `icmp` 模块已裁；`probe()` 用 UDP 一发一收，所以"端口无响应 / 主机不在线 / 被丢弃"对外都只能表现为 timeout |
 | **无 DHCP / NAT / 路由 / WAN ACL / 多跳** | `nat`/`wan`/`wansec`/`fabric`/`topo`/`qos`/`mcast`/`dv` 全部裁掉；掌机只做端点，不转发、不做网关 |
 | **cap 只是 API 收口，不是沙盒** | app 与内核共享一个 Lua VM 与全局表；`fs`/`net`/`term`/`os.pullEvent` 的约束只对"经过 `api` 的调用"成立，绕过 `api` 直接摸全局拦不住（`input`/`terminal` 与另外七个 cap 同一强度） |
@@ -655,10 +700,15 @@ pwsh -NoProfile -File pyroet-os/tests/run-tests.ps1
 脚本把镜像 stage 到 `pyroet-os/.tests/computer/20`（与真机同布局：`/system` + `/system/system/*.app`），
 headless 启动、读取 `/offline-report.txt` 判分，**PASS 后自动删除 staging**（`-Keep` 保留）。
 
-基线（2026-11-01，网络 OTA + appstore `System update` 入口之后）：**OFFLINE_PASS 5,780 / FAIL 0 / GROUPS 290**。
-本轮新增/扩展的套件：`t_sys_ota.ota.image`（http 升级：成功刷写、坏 manifest、坏 sha、错长度、404、
-坏行、无 http、`/etc/ota.servers` 覆盖，全部用假 http + 沙箱 `root`）、`t_appstore.appstore.update`
-（更新行显示版本、Enter 调桥、进度行、失败行、无 http）、`t_budget.budget.gate`（门禁数字 pin）。
+基线（2026-11-01，RHTP 服务协议 + DNS 之后）：**OFFLINE_PASS 5,973 / FAIL 0 / GROUPS 299**。
+本轮新增/扩展的套件：`tests/t_rhtp.lua`（**8 组**：URL 解析与路径穿越拒绝、状态行解析、DNS 三种路径、
+单包 200、206 分块拼接与 200 全量兜底、超时/无泵/坏行/非 2xx/发送失败、max_bytes 限额）、
+`t_net_service.net.rhtp`（配置键、客户端接线、`no network` / `no rhtp module` 两种降级）、
+`t_sys_ota.ota.image`（RHTP 升级：成功刷写、坏 manifest、坏 sha、错长度、404、坏行、无客户端、
+`/etc/ota.servers` 覆盖、**文件只走 `fetch` 分块路径**，全部用假客户端 + 沙箱 `root`）、
+`t_appstore.appstore.update`（更新行显示版本、Enter 调桥、进度行、`dns unknown host` / `timeout` /
+`rhtp 404` / 无客户端四种失败行）、`t_pushpkg.pushpkg.transport`（默认 RHTP、`--http` 回退、
+无 rpv 栈的 `no_rhtp` 与提示、`http=1`、server 行规范化）、`t_budget.budget.gate`（门禁数字 pin）。
 M2 之后新增的是 PC 侧渲染测试：`tests/screen.lua`（屏幕缓冲 harness，替换 `_G.term`）与
 `tests/t_bios_screen.lua`（首帧 / 试启动帧 / 无 `/system` 的 fatal 屏 / 根 starter 失败文案 / 10x4 小屏），
 细节见 `DECISIONS.md` §18；O3 新增 `tests/t_caps.lua`（`input` / `terminal` 的拒绝、放行、unavailable、

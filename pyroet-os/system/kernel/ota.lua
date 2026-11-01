@@ -1,14 +1,14 @@
 --[[- pyroet-os/kernel/ota.lua -- system OTA client: file-set updates.
 
 Two sources, one apply path. The default is the ROM `rednet` API (no rpv, no
-net/service.lua: the network stack is what may be broken); with `http` the same
-description is pulled from the real upgrade server instead:
+net/service.lua: the network stack is what may be broken); with `rhtp` the same
+description is pulled from the real upgrade server over RHTP/1.0 instead:
 
     GET <base>/meta.txt        -> the META line, then one FILE line per file
     GET <base>/<relpath>       -> the file body
 
 The base is `/etc/ota.servers`' first usable line when that file exists, else
-O.DEFAULT_UPGRADE (`http://pyroet.pyrotechnic.org/upgrade`). meta.txt is exactly
+O.DEFAULT_UPGRADE (`rhtp://pyroet.pyrotechnic.org/upgrade`). meta.txt is exactly
 the rednet reply text without the packet framing, so one parser reads both and
 the digest/size/journal logic below is shared by both sources.
 
@@ -69,17 +69,19 @@ because a byte count is the one thing a digest cannot tell you about:
 
 ...or over the network upgrade channel:
 
-    local c = dofile("/system/kernel/ota.lua").new({ fs = fs, http = http,
+    local c = dofile("/system/kernel/ota.lua").new({ fs = fs, rhtp = rhtp,
         base = nil, log = print, progress = function(rel, i, n) end })
     c:update()
 
 new() options: fs, boot, boot_opts, rednet, host, protocol, timeout, max_tries,
-max_data, backup_cap, log, clock, sha, crypto_path, loadfile, boot_path, http,
-base, progress. `http` switches the source; `base` overrides /etc/ota.servers;
+max_data, backup_cap, log, clock, sha, crypto_path, loadfile, boot_path, rhtp,
+base, progress. `rhtp` switches the source; `base` overrides /etc/ota.servers;
 `progress(relpath, index, count)` is called once per file before it is fetched.
-Failure lines: OTA_NET_FAIL stage=<meta|file|size> url=.. err=.. for the http
-transport, OTA_FAIL / OTA_REJECT for the update itself. A http failure clears
-/update.stage before it returns, so a rejected download leaves no residue.
+Failure lines: OTA_NET_FAIL stage=<meta|file|size> url=.. err=.. for the RHTP
+transport (the client adds RHTP_GET / RHTP_TIMEOUT / RHTP_DNS_FAIL lines) and
+OTA_RHTP_CHUNK path=.. off=.. len=.. for every slice of a file, plus OTA_FAIL /
+OTA_REJECT for the update itself. A network failure clears /update.stage before
+it returns, so a rejected download leaves no residue.
 No non-ASCII bytes in this file.
 ]]
 
@@ -96,12 +98,13 @@ local O = {
     CRYPTO = "/system/rpv/crypto.lua",
     BOOT_PATH = "/system/boot.lua",
     -- The real upgrade channel (2026-11-01): the same PYROET-OTA/2 description,
-    -- fetched over http instead of rednet. `GET <base>/meta.txt` returns the META
-    -- line and one FILE line per file as plain text; every file is then one
-    -- `GET <base>/<relpath>`. The base is /etc/ota.servers' first line when that
-    -- file exists, otherwise this constant.
-    DEFAULT_UPGRADE = "http://pyroet.pyrotechnic.org/upgrade",
-    HTTP_CONF = "/etc/ota.servers",
+    -- fetched over RHTP/1.0 instead of rednet. `GET <base>/meta.txt` returns the
+    -- META line and one FILE line per file as plain text; every file is then one
+    -- chunked `GET <base>/<relpath>`. The base is /etc/ota.servers' first line
+    -- when that file exists, otherwise this constant. There is no http fallback:
+    -- the handheld may not have a ROM http table at all.
+    DEFAULT_UPGRADE = "rhtp://pyroet.pyrotechnic.org/upgrade",
+    RHTP_CONF = "/etc/ota.servers",
     META_FILE = "meta.txt",
     MAX_URL = 160,
     EXT = { lua = true, txt = true, conf = true, cfg = true },
@@ -319,12 +322,12 @@ function O.manifest_hash(files, sha)
 end
 
 -- ---------------------------------------------------------------------------
--- meta.txt over http + the upgrade base (the network source, 2026-11-01)
+-- meta.txt over RHTP + the upgrade base (the network source, 2026-11-01)
 -- ---------------------------------------------------------------------------
 
 -- Parse a whole `meta.txt` body: the META line first, then one FILE line per
 -- entry, blank lines ignored (a trailing newline is normal). Pure: no fs and no
--- network, so the kernel's http source and an app that only wants the remote
+-- network, so the kernel's RHTP source and an app that only wants the remote
 -- version parse with the same code.
 function O.parse_manifest(body)
     if type(body) ~= "string" or body == "" then return nil, "empty meta" end
@@ -352,18 +355,35 @@ function O.parse_manifest(body)
     return meta, files
 end
 
--- http(s) base URL, normalized without the trailing slash; the reason strings
--- are short and stable so a status line can show them verbatim
+-- RHTP base URL, normalized without the trailing slash; the reason strings are
+-- short and stable so a status line can show them verbatim. `rhtp://<host>
+-- [:port]/<path>` is the only accepted scheme; a bare `<host>[:port]/<path>` is
+-- read as rhtp:// (the same rule the client's own parser applies), and any other
+-- explicit scheme is refused instead of silently falling back to http.
 function O.valid_base(url)
     local text = tostring(url == nil and "" or url)
     text = text:gsub("^%s+", ""):gsub("%s+$", "")
     if text == "" then return nil, "empty" end
     if #text > O.MAX_URL then return nil, "too long" end
     if text:find("%s") then return nil, "space" end
-    if text:sub(1, 7) ~= "http://" and text:sub(1, 8) ~= "https://" then
+    local rest = text
+    if text:sub(1, 7):lower() == "rhtp://" then
+        rest = text:sub(8)
+    elseif text:find("://", 1, true) then
         return nil, "scheme"
     end
-    return (text:gsub("/+$", ""))
+    local host, path = rest:match("^([^/]*)(.*)$")
+    if host == nil or host == "" then return nil, "host" end
+    local name = host:match("^([^:]+)") or host
+    if name == "" or not name:match("^[%w%._%-]+$") then return nil, "host" end
+    local port_text = host:match("^[^:]+:(%d+)$")
+    if port_text ~= nil then
+        local number = tonumber(port_text)
+        if not number or number < 1 or number > 65535 then return nil, "port" end
+    end
+    if path ~= "" and path:sub(1, 1) ~= "/" then return nil, "path" end
+    local normalized = "rhtp://" .. host:lower() .. path
+    return (normalized:gsub("/+$", ""))
 end
 
 -- Read a whole text file through either fs flavour: the kernel's real fs (open)
@@ -389,14 +409,14 @@ function O.upgrade_base(fsx, override)
     local explicit, why = O.valid_base(override)
     if explicit then return explicit end
     if override ~= nil and tostring(override) ~= "" then return nil, why end
-    local text = O.read_text(fsx, O.HTTP_CONF)
+    local text = O.read_text(fsx, O.RHTP_CONF)
     if type(text) == "string" then
         for line in (text .. "\n"):gmatch("([^\n]*)\n") do
             local clean = line:gsub("\r", ""):gsub("^%s+", ""):gsub("%s+$", "")
             if clean ~= "" and clean:sub(1, 1) ~= "#" then
                 local base, berr = O.valid_base(clean)
                 if base then return base end
-                return nil, "bad " .. O.HTTP_CONF .. " " .. tostring(berr)
+                return nil, "bad " .. O.RHTP_CONF .. " " .. tostring(berr)
             end
         end
     end
@@ -426,26 +446,27 @@ function O.new(opts)
     self.boot_path = o.boot_path or O.BOOT_PATH
     self.sha = load_sha(o, self.loader)
 
-    -- The network source: with `http` the client fetches meta.txt and every file
-    -- over http instead of asking a rednet peer, and the whole apply half of the
-    -- client (journal, backup, staged .part, verify) is unchanged.
-    self.http = o.http
-    self.http_mode = type(o.http) == "table" and type(o.http.get) == "function"
+    -- The network source: with `rhtp` the client fetches meta.txt and every file
+    -- over RHTP/1.0 instead of asking a rednet peer, and the whole apply half of
+    -- the client (journal, backup, staged .part, verify) is unchanged. `rhtp` is
+    -- the net service's client ({ get =, fetch = }), never a host http table.
+    self.rhtp = o.rhtp
+    self.rhtp_mode = type(o.rhtp) == "table" and type(o.rhtp.get) == "function"
     self.progress = o.progress
     self.base, self.base_err, self.source_error = nil, nil, nil
-    if o.http ~= nil and not self.http_mode then
-        -- asked for http but the host has none: that is a readable failure, not a
-        -- reason to quietly go back to rednet
-        self.source_error = "no http"
+    if o.rhtp ~= nil and not self.rhtp_mode then
+        -- asked for the network source but the host has no client: a readable
+        -- failure, never a quiet fall back to rednet or to http
+        self.source_error = "no rhtp"
     end
-    if self.http_mode then
+    if self.rhtp_mode then
         local base, berr = O.upgrade_base(self.fs, o.base)
         self.base, self.base_err = base, berr
         if not base then self.source_error = "base " .. tostring(berr) end
     end
-    self.http_files = nil
-    self.http_gets = 0
-    self.http_cache = nil
+    self.rhtp_files = nil
+    self.gets = 0
+    self.rhtp_cache = nil
 
     -- own copy: the caller's table must not be mutated, but the bootloader needs
     -- the same fs / sha / root / log as this client
@@ -467,7 +488,7 @@ function O:reset()
     self.files = {}
     self.bytes, self.retries, self.backup_bytes = 0, 0, 0
     self.version, self.manifest, self.journal_seq, self.fatal = nil, nil, nil, nil
-    self.http_files, self.http_cache, self.applied = nil, nil, 0
+    self.rhtp_files, self.rhtp_cache, self.applied = nil, nil, 0
 end
 
 function O:log(line)
@@ -493,8 +514,8 @@ function O:status()
         bytes = self.bytes, backup = self.backup_bytes, cap = self.cap,
         retries = self.retries, error = self.err, fatal = self.fatal,
         journal = self.journal_seq, states = states,
-        source = self.http_mode and "http" or "rednet", base = self.base,
-        gets = self.http_gets,
+        source = self.rhtp_mode and "rhtp" or "rednet", base = self.base,
+        gets = self.gets,
     }
 end
 
@@ -505,7 +526,7 @@ function O:fail(stage, err)
     self:log("OTA_FAIL stage=" .. tostring(stage) .. " err=" .. short(self.err, 48))
     -- nothing was applied on this path, so a half-downloaded /update.stage is
     -- residue: clear it and the machine stays exactly as it was
-    if self.http_mode and (self.applied or 0) == 0 then self:drop_stage() end
+    if self.rhtp_mode and (self.applied or 0) == 0 then self:drop_stage() end
     return nil, self.err
 end
 
@@ -517,7 +538,7 @@ function O:reject(stage, reason, detail)
     local line = "OTA_REJECT stage=" .. tostring(stage) .. " reason=" .. tostring(reason)
     if detail then line = line .. " " .. tostring(detail) end
     self:log(line)
-    if self.http_mode and (self.applied or 0) == 0 then self:drop_stage() end
+    if self.rhtp_mode and (self.applied or 0) == 0 then self:drop_stage() end
     return nil, self.err
 end
 
@@ -622,41 +643,50 @@ function O:request(build, accept)
 end
 
 -- ---------------------------------------------------------------------------
--- http source: GET <base>/meta.txt and GET <base>/<relpath> (2026-11-01)
+-- RHTP source: GET <base>/meta.txt and GET <base>/<relpath> (2026-11-01)
+--
+-- The service protocol is the project's own RHTP/1.0 (system/net/rhtp.lua), not
+-- a host http table: a kernel image update must not depend on a ROM API the
+-- handheld may not have. The client handed in through `rhtp` is the net
+-- service's, so there is one rpv node and one resolver for the whole machine.
 -- ---------------------------------------------------------------------------
 
--- one GET -> body, or nil, reason. A 4xx/5xx is a reason ("http 404"), never a
--- body: only bytes that arrived with a 2xx status are ever looked at.
-function O:http_get(url)
-    local http = self.http
-    if type(http) ~= "table" or type(http.get) ~= "function" then
-        return nil, "no http"
+-- one GET -> body, or nil, reason. A 4xx/5xx is a reason ("rhtp 404"), never a
+-- body: only bytes that arrived as a 2xx answer are ever looked at.
+function O:rhtp_get(url)
+    local client = self.rhtp
+    if type(client) ~= "table" or type(client.get) ~= "function" then
+        return nil, "no rhtp"
     end
-    self.http_gets = self.http_gets + 1
-    local called, res, extra = pcall(http.get, url)
-    if not called then return nil, "http fail" end
-    if res == nil then return nil, short(extra or "no reply", 32) end
-    if type(res) == "string" then return res end
-    if type(res) ~= "table" then return nil, "bad response" end
-    local status = tonumber(res.status) or (res.ok == false and 0 or 200)
-    if status < 200 or status > 299 then return nil, "http " .. tostring(status) end
-    -- two shapes reach a client: a plain {status,body} table (tests, a host that
-    -- already read the request) and the ROM's response handle, which carries the
-    -- body behind readAll(). Accept both instead of trusting one spelling.
-    local body = type(res.body) == "string" and res.body or nil
-    if body == nil and type(res.readAll) == "function" then
-        local rcalled, read = pcall(res.readAll)
-        if not rcalled then return nil, "read failed" end
-        body = type(read) == "string" and read or nil
-    end
-    if body == nil then return nil, "no body" end
+    self.gets = self.gets + 1
+    local called, body, extra = pcall(client.get, url)
+    if not called then return nil, "rhtp fail" end
+    if body == nil then return nil, short(extra or "no reply", 32) end
+    if type(body) ~= "string" then return nil, "bad response" end
     if body == "" then return nil, "empty" end
     return body
 end
 
-function O:http_meta()
+-- One whole file, pulled in RHTP chunks (the client sends off=/len= and expects
+-- 206; a server that ignores the extension answers 200 with the whole body and
+-- that is accepted). The byte count is proven here, the digest in download().
+function O:rhtp_fetch(url, size)
+    local client = self.rhtp
+    if type(client) ~= "table" or type(client.fetch) ~= "function" then
+        return nil, "no rhtp"
+    end
+    self.gets = self.gets + 1
+    local called, body, extra = pcall(client.fetch, url, size)
+    if not called then return nil, "rhtp fail" end
+    if body == nil then return nil, short(extra or "no reply", 32) end
+    if type(body) ~= "string" then return nil, "bad response" end
+    if body == "" then return nil, "empty" end
+    return body
+end
+
+function O:rhtp_meta()
     local url = tostring(self.base) .. "/" .. O.META_FILE
-    local body, err = self:http_get(url)
+    local body, err = self:rhtp_get(url)
     if body == nil then
         self:log("OTA_NET_FAIL stage=meta url=" .. short(url, 60)
             .. " err=" .. short(err or "?", 32))
@@ -669,7 +699,7 @@ function O:http_meta()
             .. " err=" .. short(files or "parse", 40))
         return nil, tostring(files or "parse")
     end
-    self.http_files = files
+    self.rhtp_files = files
     self:log("OTA_NET_OK stage=meta url=" .. short(url, 60) .. " files="
         .. tostring(#(files or {})) .. " bytes=" .. tostring(#body))
     return meta
@@ -678,11 +708,11 @@ end
 -- The whole body of one file, fetched once and kept only while this file is the
 -- one being written: a file is at most F_MAX bytes, and a retry of the same file
 -- re-reads the copy instead of the network.
-function O:http_chunk(f, offset, want)
-    local cache = self.http_cache
+function O:rhtp_chunk(f, offset, want)
+    local cache = self.rhtp_cache
     if type(cache) ~= "table" or cache.relpath ~= f.relpath then
         local url = tostring(self.base) .. "/" .. tostring(f.relpath)
-        local body, err = self:http_get(url)
+        local body, err = self:rhtp_fetch(url, f.size)
         if body == nil then
             self:log("OTA_NET_FAIL stage=file url=" .. short(url, 60)
                 .. " err=" .. short(err or "?", 32))
@@ -696,28 +726,30 @@ function O:http_chunk(f, offset, want)
             return nil, "size got=" .. tostring(#body) .. " want=" .. tostring(f.size)
         end
         cache = { relpath = f.relpath, body = body }
-        self.http_cache = cache
+        self.rhtp_cache = cache
         self:log("OTA_NET_OK stage=file url=" .. short(url, 60)
             .. " bytes=" .. tostring(#body))
     end
     if offset >= #cache.body then return nil, "offset past end" end
+    self:log("OTA_RHTP_CHUNK path=" .. f.relpath .. " off=" .. tostring(offset)
+        .. " len=" .. tostring(want))
     return cache.body:sub(offset + 1, offset + want)
 end
 
--- the transport seams: rednet asks for a descriptor packet, http already has the
+-- the transport seams: rednet asks for a descriptor packet, RHTP already has the
 -- whole list from meta.txt, and a chunk comes from a DATA reply or from the
 -- fetched body. Everything above this line (verify, cap, journal, backup) is
 -- shared by the two sources.
 function O:meta_record()
-    if self.http_mode then return self:http_meta() end
+    if self.rhtp_mode then return self:rhtp_meta() end
     return self:request(function()
         return O.PREFIX .. " GET meta"
     end, O.parse_meta)
 end
 
 function O:file_record(idx)
-    if self.http_mode then
-        local rec = (self.http_files or {})[idx + 1]
+    if self.rhtp_mode then
+        local rec = (self.rhtp_files or {})[idx + 1]
         if not rec then return nil, "missing file " .. tostring(idx) end
         return rec
     end
@@ -727,7 +759,7 @@ function O:file_record(idx)
 end
 
 function O:chunk(f, offset, want)
-    if self.http_mode then return self:http_chunk(f, offset, want) end
+    if self.rhtp_mode then return self:rhtp_chunk(f, offset, want) end
     return self:request(function()
         return O.PREFIX .. " GET " .. tostring(f.idx) .. " " .. tostring(offset)
     end, function(msg)
@@ -904,7 +936,7 @@ function O:apply_failure(stage, err)
     end
     -- rollback deletes the stage itself; asking again is cheap and covers the
     -- rollback-failure branch, where an unverified half file must not linger
-    if self.http_mode then self:drop_stage() end
+    if self.rhtp_mode then self:drop_stage() end
     if ok then
         self:set_state("rolled_back", stage)
         self:log("OTA_ROLLED_BACK stage=" .. tostring(stage))
@@ -943,8 +975,8 @@ function O:update()
     if not self.fs.exists(paths.system) then
         return self:fail("prepare", "no_system")
     end
-    if self.http_mode then
-        self:log("OTA_SOURCE kind=http base=" .. short(self.base, 60))
+    if self.rhtp_mode then
+        self:log("OTA_SOURCE kind=rhtp base=" .. short(self.base, 60))
     else
         self:log("OTA_SOURCE kind=rednet host=" .. tostring(self.host))
     end
@@ -1022,7 +1054,7 @@ function O:update()
     local applied = 0
     for i = 1, #files do
         -- the one progress hook: the caller paints `fetching <rel> (i/n)` before
-        -- the file is fetched, so an http download shows what it is doing
+        -- the file is fetched, so a network download shows what it is doing
         if type(self.progress) == "function" then
             pcall(self.progress, files[i].relpath, i, #files)
         end

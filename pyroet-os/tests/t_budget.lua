@@ -2,7 +2,7 @@
 payload; G1 put system/net.app back into the image (it is payload again, there
 is no examples/ copy), and the desktop / boot chain must tolerate a missing Net
 app (P5b property, still asserted). D1 added kernel/desktop.lua (the resident
-event loop), so the exact install-set count is 29. No non-ASCII bytes in this
+event loop), so the exact install-set count is 30. No non-ASCII bytes in this
 file. ]]
 
 local APPS = dofile("/system/kernel/apps.lua")
@@ -38,8 +38,8 @@ return function(H)
         for i = 1, #paths do set[paths[i]] = true end
         -- T1 added the Installer UI as image payload (2 files, DECISIONS.md 17),
         -- so the exact count moved 26 -> 28; D1 added the resident desktop loop
-        -- (kernel/desktop.lua), so it is 29. The strictness is unchanged.
-        H.eq("install_entries", #paths, 29)
+        -- (kernel/desktop.lua), so it is 30. The strictness is unchanged.
+        H.eq("install_entries", #paths, 30)
         H.check("has_installer", set["pyroet-os/system/kernel/installer.lua"] == true,
             "installer is not image payload")
         H.check("has_desktop", set["pyroet-os/system/kernel/desktop.lua"] == true,
@@ -65,7 +65,7 @@ return function(H)
             "recovery tools must not be image payload")
         H.check("no_tests", set["pyroet-os/tests/run.lua"] == nil, "tests are not payload")
                 H.check("no_examples_text", (text or ""):find("pyroet-os/examples/", 1, true) == nil, "install.set still names an examples/ path")
-        H.check("no_duplicates", #paths == 29, "duplicate active entries")
+        H.check("no_duplicates", #paths == 30, "duplicate active entries")
     end
 
     -- ---------------------------------------------------------------------
