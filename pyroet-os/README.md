@@ -137,7 +137,9 @@ pyroet-os/
        ├─ 7. 首帧               "UI 已起来"（DECISIONS 2.7 的 ready 条件之一）
        ├─ 7b. 桌面              读权限表 → 启动 launcher（整段 pcall；缺失只记日志，回退 hello）
        ├─ 8. boot.commit()      写全局 /boot.ok，删 journal 与 /update.backup
-       └─ 9. loop 钩子（可选）  未注入时启动链返回，控制台交回 ROM shell
+       └─ 9. 常驻桌面对话循环    commit 后**不返回**：kernel/desktop.lua 持有一个阻塞
+                                os.pullEvent，把事件规范化后投给前台应用（launcher）；
+                                只有 Esc / `q` / Ctrl+T / 循环自身的正常退出才回 ROM shell
 ```
 
 任何会让机器起不来的错误都走 `os.reboot()`（让 `/boot.tries` 记账生效），而**不** commit；
@@ -195,8 +197,12 @@ pyroet-os/
 
 后两个是 UI 能力，**互不蕴含**：只要键盘不要屏幕、只要屏幕不要键盘都行；只声明一个时另一个仍是拒绝桩。
 它们与另外七个走**完全同一套**机制（声明 → 首启决策 → 运行时拦截 → `nil, "capability denied: <cap>"`
-+ `APP_CAP_DENIED`），没有另一条旁路。宿主由启动链注入：`input` = 包装过的 `os.pullEvent` + `keys` 表，
-`terminal` = ROM 的 `term`（`opts.input` / `opts.terminal` 可覆盖）。详见 DECISIONS §19。
++ `APP_CAP_DENIED`），没有另一条旁路。宿主由启动链注入：`input` = **输入队列**
+（`host.push(event, ...)` 供派发器投递、`api.input.pullEvent(...)` 弹出一格，空队列返回 `nil`；
+`api.input.keys` 是 ROM 的 keys 表，派发器用它把键码翻成键名），`terminal` = ROM 的 `term`
+（`opts.input` / `opts.terminal` 可覆盖）。队列有上限（`INPUT_QUEUE_MAX = 32`，最旧事件先丢，
+计入 `host.dropped`），阻塞的 `os.pullEvent` 只在 `host.pull` 上、由 `kernel/desktop.lua` 独占。
+详见 DECISIONS §19 与 §20。
 
 manifest 的 `capabilities` 只是**声明**：首启时 `PERMS_PROMPT app=.. caps=..` → 逐项决策 →
 写 `/etc/perms/<app>.cfg`。文件存在且合法 = 那就是最终决策，不再询问；坏文件（无法解析、未知 cap、
@@ -229,13 +235,16 @@ fs.read=granted
 `input` / `terminal` 是**新增的 opt-in 能力**（DECISIONS §19）：包不声明就拿不到，且两者互不蕴含。
 "询问"仍然是**注入的回调**（`startup.P.default_ask`）：启动时还没有任何 app、也没有事件派发器，所以
 `/system/` 下的系统镜像包按 manifest 原样授权（`PERMS_PREGRANT`），其它包一律拒绝；要重新询问某包，
-删掉它的决策文件（`permissions.reset(app)`）。launcher 的按键是纯函数 `M.handle_key(state, key)`，
-仍由 `opts.keys` 驱动（它没有声明 `input`）；Net app 的 probe 目标仍从 `/etc/net.target` 读一行。
+删掉它的决策文件（`permissions.reset(app)`）。launcher 现在**两条路都在**：常驻 entry 用
+`api.input.pullEvent()` 拿事件（声明了 `input` + `terminal`），而纯函数 `M.handle_key(state, key)`
+与 `opts.keys` 驱动的 `M.run` 仍是离线套件用的那条路；Net app 的 probe 目标仍从 `/etc/net.target` 读一行。
 
 两条写死的边界：①cap 是 **API 收口**，不是沙盒——app 与内核同一个 Lua VM，绕过 `api` 直接摸
-`term` / `os.pullEvent` 拦不住（与另外七个 cap 同一强度）；②整机**还没有事件循环接管**（启动链
-commit 后不传 `loop` 钩子，ROM shell 接管），所以 `api.input.pullEvent` 目前只在"有人驱动 app 调度"
-的场景可用，首帧与桌面仍是静态渲染。
+`term` / `os.pullEvent` 拦不住（与另外七个 cap 同一强度）；②但**整机现在有事件循环接管了**（D1）：
+`kernel/desktop.lua` 是唯一持有阻塞 `os.pullEvent` 的地方，它把事件投进输入队列并给调度器**一步**，
+app 的 `api.input.pullEvent` 是这个队列的**弹出一格**——没事件时返回 `nil`（app 必须 `yield`），
+所以 app 永远不会把整机阻塞在别人的事件源里。队列有上限（`INPUT_QUEUE_MAX = 32`），不抽的 app
+只丢掉最旧的事件，不会无限增长。
 
 compat：manifest **不写** `capabilities` = 声明空列表 = 全部拒绝，**没有隐式授权**；旧包在 `input` /
 `terminal` 存在之前本来就拿不到这两样，现在只是这两个字段以**桩**的形式出现，包照常加载、启动、退出。
@@ -294,7 +303,7 @@ compat：manifest **不写** `capabilities` = 声明空列表 = 全部拒绝，*
 
 | 包 | version | capabilities |
 | --- | --- | --- |
-| `launcher.app` | 0.1.0 | `fs.read`, `fs.write`（写只用于 `/etc/launcher.recent`，被拒就忽略） |
+| `launcher.app` | 0.2.0 | `fs.read`, `fs.write`（写只用于 `/etc/launcher.recent`，被拒就忽略）, `input`, `terminal`（D1：常驻桌面对话循环） |
 | `settings.app` | 0.1.0 | `fs.read`（**严格只读**，没有写路径） |
 | `installer.app` | 0.1.0 | `fs.read`, `fs.write`（读来源盘与两个已装根；写只发生在安装事务里） |
 | `net.app` | 0.1.0 | `net.rpv`, `fs.read` |
@@ -309,7 +318,7 @@ disk ok 3 installed
 > d box          0.2.0    <- d = 来源盘 /disk/apps 上的包（Enter 安装/覆盖）
   d zeta         1.0.0
   i notes        0.3.0    <- i = 已装在 /apps（Enter 卸载）
-  s launcher     0.1.0    <- s = 镜像自带的系统包（Enter 拒绝）
+  s launcher     0.2.0    <- s = 镜像自带的系统包（Enter 拒绝）
   ...
 enter install              <- 或 enter remove / system app locked / 结果文案
 d2 i1 s2 sel 1/5
@@ -490,7 +499,7 @@ WINDOW_OK  : sum=648380 limit=900000
 | **无 ICMP / 无 ping** | `icmp` 模块已裁；`probe()` 用 UDP 一发一收，所以"端口无响应 / 主机不在线 / 被丢弃"对外都只能表现为 timeout |
 | **无 DHCP / NAT / 路由 / WAN ACL / 多跳** | `nat`/`wan`/`wansec`/`fabric`/`topo`/`qos`/`mcast`/`dv` 全部裁掉；掌机只做端点，不转发、不做网关 |
 | **cap 只是 API 收口，不是沙盒** | app 与内核共享一个 Lua VM 与全局表；`fs`/`net`/`term`/`os.pullEvent` 的约束只对"经过 `api` 的调用"成立，绕过 `api` 直接摸全局拦不住（`input`/`terminal` 与另外七个 cap 同一强度） |
-| **没有事件派发器** | 启动链 commit 后不传 `loop` 钩子，ROM shell 接管；首帧与桌面是**静态渲染**。`input` cap 与 `api.input.pullEvent` 已就位，但要按键真正生效还需要一个驱动 app 调度的派发器 |
+| **桌面只有 launcher 是交互的** | D1 之后整机有事件循环（`kernel/desktop.lua`），但键盘归**前台应用**：镜像里只有 launcher 声明了 `input`；settings / installer / net 是只读或一次性 body，启动后由调度器推进、拿不到按键。要交互，包必须自己声明 `input`（启动时就会**接管键盘**，停掉再把键盘交回 launcher） |
 | **没有 `/etc/network.conf` 就没有网络** | `net` 服务由启动链默认注册（§3.1），但配置是用户数据：文件不存在就跳过（`STARTUP_NET_SKIP reason=no_config`），不猜默认地址、不写默认配置 |
 | **settings 严格只读** | 只声明 `fs.read`，没有任何写路径；看得到配置，改不了配置 |
 | **无中文** | CJK 字库与三件套全部删除（省 1,440,360 B）；界面与日志纯 ASCII，原版 CC 字体即可显示 |
@@ -563,15 +572,15 @@ python tools/build_release.py --project pyroet-os --out dist/release
 | --- | --- |
 | 发布版本 | 1.0.0（`pyroet-os-v1.0.0.zip`） |
 | `/startup.lua` starter | 1,070 B（`DECISIONS.md` §13.11 的 1,071 B 为旧读数） |
-| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，29,188 B（T4：+2,345 B，安装器构造与注入；O3：+821 B，input/terminal 宿主） |
+| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，38,084 B（D1：+8,896 B，输入队列宿主 + 第 9 步常驻循环；T4：+2,345 B；O3：+821 B） |
 | bootloader | `M.VERSION = 2.0`，45,623 B |
-| kernel / apps / permissions | 1.0 / 1.0 / 1.0（13,958 / 37,645 / 18,821 B；O3：apps +2,505、permissions +434，两个 UI cap） |
+| kernel / apps / permissions / desktop | 1.0 / 1.0 / 1.0 / 1.0（13,958 / 38,453 / 18,821 / 14,180 B；D1：apps +808 B 记录 body 返回值，新增 desktop.lua） |
 | installer / ota | 1.0 / 2.0（17,295 / 31,877 B；N1：+3,854 / +3,566 B，size 校验） |
 | rpv 子集 | 10 文件 / 131,590 B（9 模块 + loader） |
-| 系统应用 | launcher / settings / installer / net，均 0.1.0 |
+| 系统应用 | launcher 0.2.0（D1：+5,209 B，常驻桌面循环）/ settings 0.1.0 / installer 0.1.0 / net 0.1.0 |
 | `installer.app`（T1/T4） | 0.1.0，34,853 B（main.lua 33,774 + manifest.lua 1,079） |
 | OTA 服务端（`ota/server.lua`） | 1.0，27,927 B（不进镜像） |
-| 镜像 | 28 条 / 461,860 B / `SIZE_WARN` / `WINDOW_OK` |
+| 镜像 | 29 条 / 491,480 B / `SIZE_WARN` / `WINDOW_OK sum=691480` |
 
 设计口径以 [`DECISIONS.md`](DECISIONS.md)（架构、门禁、发布）与 [`P6-design.md`](P6-design.md)
 （文件集更新、journal、崩溃窗口、bootloader 决策表）为准；本文是面向使用者的入口，

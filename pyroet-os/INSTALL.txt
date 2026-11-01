@@ -55,9 +55,14 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
      Pyroet OS 0.2.0
      kernel ok
      normal journal none
-2. The boot chain then returns to the ROM shell. Normal in 1.0.0: there is no
-   input/event service yet, so the desktop is a static first frame and the
-   shell is where you type commands.
+2. The desktop then takes the screen: a launcher with the version line, the net
+   line, the app list and "<n> apps sel 1/<n>" at the bottom. It stays there and
+   the keyboard works: up/down move, a digit selects, enter starts the selected
+   app, escape (or "q") quits the desktop and hands the console back to the ROM
+   shell.
+   If it DOES return to the shell right away, the image is missing
+   /system/kernel/desktop.lua or the launcher no longer declares the "input"
+   capability: grep /kernel.log for STARTUP_DESKTOP_SKIP.
 3. Check: cat /boot.ok ; tail /kernel.log
    /boot.ok is one line:
      PYROET-BOOT-OK-2 version=0.2.0 manifest_sha=none ts=<ms>

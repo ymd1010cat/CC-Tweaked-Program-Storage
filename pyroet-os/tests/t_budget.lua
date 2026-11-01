@@ -1,7 +1,9 @@
 --[[- pyroet-os/tests/t_budget.lua -- plan D settled: installer + ota are image
 payload; G1 put system/net.app back into the image (it is payload again, there
 is no examples/ copy), and the desktop / boot chain must tolerate a missing Net
-app (P5b property, still asserted). No non-ASCII bytes in this file. ]]
+app (P5b property, still asserted). D1 added kernel/desktop.lua (the resident
+event loop), so the exact install-set count is 29. No non-ASCII bytes in this
+file. ]]
 
 local APPS = dofile("/system/kernel/apps.lua")
 
@@ -35,10 +37,13 @@ return function(H)
         local set = {}
         for i = 1, #paths do set[paths[i]] = true end
         -- T1 added the Installer UI as image payload (2 files, DECISIONS.md 17),
-        -- so the exact count moved 26 -> 28; the strictness is unchanged
-        H.eq("install_entries", #paths, 28)
+        -- so the exact count moved 26 -> 28; D1 added the resident desktop loop
+        -- (kernel/desktop.lua), so it is 29. The strictness is unchanged.
+        H.eq("install_entries", #paths, 29)
         H.check("has_installer", set["pyroet-os/system/kernel/installer.lua"] == true,
             "installer is not image payload")
+        H.check("has_desktop", set["pyroet-os/system/kernel/desktop.lua"] == true,
+            "the resident desktop loop is not image payload")
         H.check("has_ota", set["pyroet-os/system/kernel/ota.lua"] == true,
             "ota is not image payload")
         H.check("has_boot", set["pyroet-os/system/boot.lua"] == true, "boot.lua missing")
@@ -65,7 +70,7 @@ return function(H)
         H.check("no_tests", set["pyroet-os/tests/run.lua"] == nil, "tests are not payload")
         H.check("has_system_net_text", (text or ""):find("pyroet-os/system/system/net.app", 1, true) ~= nil, "install.set does not name system/net.app")
         H.check("no_examples_text", (text or ""):find("pyroet-os/examples/", 1, true) == nil, "install.set still names an examples/ path")
-        H.check("no_duplicates", #paths == 28, "duplicate active entries")
+        H.check("no_duplicates", #paths == 29, "duplicate active entries")
     end
 
     -- ---------------------------------------------------------------------

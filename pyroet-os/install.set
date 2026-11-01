@@ -100,6 +100,11 @@ pyroet-os/system/startup.lua
 pyroet-os/system/boot.lua
 pyroet-os/system/kernel/init.lua
 pyroet-os/system/kernel/apps.lua
+# D1: the resident desktop -- event loop + dispatcher, the module that keeps the
+# machine on the launcher instead of dropping back to the shell after the commit
+# (DECISIONS.md 20). It is kernel code, not an app: it owns the one blocking
+# os.pullEvent, which is never handed to a package.
+pyroet-os/system/kernel/desktop.lua
 # P3: network service layer + static hosts (DECISIONS.md section 9). Tests
 # under pyroet-os/tests are still development material and are not part of the
 # image. P5b had moved the Net app out to examples/net.app as an

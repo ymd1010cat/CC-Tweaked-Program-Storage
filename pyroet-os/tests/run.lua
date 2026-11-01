@@ -29,6 +29,13 @@ local H = dofile("/tests/harness.lua")
 -- that (the apps themselves check it, real boots never set it).
 rawset(_G, "PYROET_APP_NOPAINT", true)
 
+-- D1: the boot chain ends in a resident desktop loop that blocks in
+-- os.pullEvent. Real boots want that; a headless suite would hang on the first
+-- pull. This hook makes the loop opt-in under test: every startup.run() in the
+-- suites below runs headless, and tests/t_desktop_loop.lua is the one suite
+-- that injects an event source (opts.pull_event) and drives the real loop.
+rawset(_G, "PYROET_DESKTOP_TEST", true)
+
 H.root = "/t"
 H.report_path = "/offline-report.txt"
 H.rmrf(H.root)
@@ -37,6 +44,7 @@ H.mkdirp(H.root)
 local FILES = { "t_boot", "t_kernel", "t_apps", "t_caps", "t_startup",
     "t_net_hosts", "t_net_service", "t_net_app",
     "t_permissions", "t_launcher", "t_settings", "t_desktop",
+    "t_desktop_loop",
     "t_installer", "t_installer_app", "t_installer_bridge", "t_ota", "t_ota_server",
     "t_recovery_proto", "t_recovery_flash", "t_recovery_bootstrap",
     "t_layout", "t_budget", "t_bios_screen" }

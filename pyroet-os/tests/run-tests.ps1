@@ -8,7 +8,8 @@
 #     .tests/computer/20/startup.lua             generated shim -> /tests/run.lua
 #     .tests/computer/20/system/startup.lua      pyroet-os/system/startup.lua
 #     .tests/computer/20/system/boot.lua         pyroet-os/system/boot.lua
-#     .tests/computer/20/system/kernel/*.lua     kernel, apps, permissions, installer, ota
+#     .tests/computer/20/system/kernel/*.lua     kernel, apps, desktop, permissions,
+#                                                installer, ota
 #     .tests/computer/20/system/rpv/*.lua        the vendored rpv subset (SHA-256)
 #     .tests/computer/20/system/net/*.lua        network service + static hosts
 #     .tests/computer/20/system/system/*.app     launcher, settings, net (system apps)
@@ -54,6 +55,7 @@ if (-not (Test-Path $Exe)) {
 }
 foreach ($required in @("startup.lua", "system\startup.lua", "system\boot.lua",
         "system\kernel\init.lua", "system\kernel\apps.lua", "system\kernel\permissions.lua",
+        "system\kernel\desktop.lua",
         "system\kernel\installer.lua", "system\kernel\ota.lua",
         "system\rpv\crypto.lua", "system\rpv\loader.lua",
         "system\net\hosts.lua", "system\net\service.lua",

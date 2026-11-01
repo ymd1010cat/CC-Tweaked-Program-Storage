@@ -15,7 +15,8 @@ a thin sequence and pushes every real decision into the modules it loads:
     7. first frame       "UI is up" (DECISIONS.md 2.7 item 3)
     8. permissions       read /etc/perms/, then start the launcher (7b below)
     9. boot.commit()     write the global /boot.ok, drop journal + backup
-   10. loop hook         hand over to whatever runs the machine
+   10. desktop loop      hand the console to the resident desktop
+                         (kernel/desktop.lua) and only come back when it exits
 
 Since P6 there is one /system/ tree and no slot: an update is a file set applied
 in place under a journal (pyroet-os/P6-design.md). The bootloader rolls a failed
@@ -48,6 +49,24 @@ a rollback loop. Declared capabilities are not grants, so the permission table
 (kernel/permissions.lua) is attached before the kernel starts any app, and the
 table is *read* at step 8 -- reading never prompts.
 
+Step 10 is what makes this a desktop and not a slideshow (DECISIONS.md 20). A
+boot that goes `fatal` still reports and returns to the shell (there is nothing
+to interact with); a committed boot enters the resident loop instead of
+returning, so the machine stays on the launcher and answers the keyboard. The
+loop ends on an explicit exit (Esc / a body returning "quit"), on Ctrl+T
+(`terminate`), or when the caller did not want one at all:
+
+  * opts.loop == false                -> headless: `STARTUP_DESKTOP_SKIP reason=disabled`
+  * opts.pull_event supplied          -> injected source (tests drive the real loop)
+  * _G.PYROET_DESKTOP_TEST set        -> the offline suite: blocking would hang
+                                         the emulator (`reason=test`)
+  * no launcher, or a fallback that never declared `input`, or no desktop
+    module                            -> `reason=no_desktop` / `no_input` / `no_module`
+
+A returning loop is a normal result (`ok=true, desktop_reason=...`), never a
+rollback: the commit already happened, and a desktop fault must not reboot a
+machine that boots fine.
+
 Usage (this is what the ROM stub runs):
 
     dofile("/system/startup.lua")
@@ -63,7 +82,13 @@ boot_path, kernel_path, apps_path, apps_root, system_root, log, now, term,
 frame, loop, reboot, version, services, rpv, rednet, redstone, peripheral, http,
 input, terminal, write_limit, permissions, permissions_path, perms_root, ask,
 launcher, net, net_path, net_config, net_hosts, installer, installer_path,
-media_root, packages, sha.
+media_root, packages, sha, desktop, desktop_path, desktop_events, pull_event.
+
+`pull_event` is the desktop loop's one blocking event source (a function, like
+os.pullEvent); supplying it is what turns the resident loop on under test, and
+`desktop_events` caps how many events the injected loop consumes. `loop` keeps
+its old meaning (a one-shot handover hook) and gains `loop = false` for a
+headless boot.
 
 No non-ASCII bytes in this file.
 ]]
@@ -75,6 +100,7 @@ P.BOOT_PATH = "/system/boot.lua"
 P.KERNEL_PATH = "/system/kernel/init.lua"
 P.APPS_PATH = "/system/kernel/apps.lua"
 P.INSTALLER_PATH = "/system/kernel/installer.lua"
+P.DESKTOP_PATH = "/system/kernel/desktop.lua"
 P.PERMISSIONS_PATH = "/system/kernel/permissions.lua"
 P.APPS_ROOT = "/apps"
 -- the whole image lives here: /system/{startup,boot}.lua, kernel/, rpv/, net/,
@@ -152,16 +178,64 @@ function P.default_frame(opts)
 end
 
 -- O3: the production input host. `input` is a capability now, so an app that
--- declares it gets the ROM's blocking event pull (api.input.pullEvent) and the
--- key-name table (api.input.keys). The table is built here instead of handing
--- the runtime `os` itself, so the host is one explicit object and tests can
--- replace it without touching a global.
+-- declares it gets a queue pop plus the key-name table (api.input.keys).
+--
+-- D1 changed the shape of the host, not the capability: the host is a *queue*.
+-- The desktop event loop (kernel/desktop.lua) owns the one blocking pull --
+-- `host.pull`, the ROM's own os.pullEvent -- and pushes every event it receives
+-- into `host.queue`; an app's `api.input.pullEvent(...)` pops one delivered
+-- event and answers nil when nothing is queued, so an app can never block the
+-- machine inside somebody else's event source (it yields and is resumed by the
+-- next scheduler step). `host.push` is the dispatcher's side of that queue.
+--
+-- The queue is bounded: an app that never pulls cannot grow it without limit --
+-- the oldest undelivered event is dropped instead and counted in `host.dropped`.
+P.INPUT_QUEUE_MAX = 32
+
 function P.default_input()
     local osx = rawget(_G, "os")
     local keysx = rawget(_G, "keys")
-    local host = {}
+    local host = { queue = {}, head = 1, tail = 0, max = P.INPUT_QUEUE_MAX }
+
+    -- dispatcher side: one event plus up to three payload arguments
+    function host.push(event, a, b, c)
+        if (host.tail - host.head + 1) >= host.max then
+            -- bounded queue: drop the oldest undelivered event, never grow
+            host.queue[host.head] = nil
+            host.head = host.head + 1
+            host.dropped = (host.dropped or 0) + 1
+        end
+        host.tail = host.tail + 1
+        host.queue[host.tail] = { event, a, b, c }
+        return true
+    end
+
+    function host.pending()
+        return host.tail - host.head + 1
+    end
+
+    -- app side: pop the first event matching the filter (os.pullEvent's own
+    -- vararg filter rule), nil when the queue is empty
+    function host.pullEvent(...)
+        local filter = { ... }
+        local want = select("#", ...)
+        while host.head <= host.tail do
+            local item = host.queue[host.head]
+            host.queue[host.head] = nil
+            host.head = host.head + 1
+            local match = want == 0
+            if not match then
+                for i = 1, want do
+                    if filter[i] == item[1] then match = true break end
+                end
+            end
+            if match then return item[1], item[2], item[3], item[4] end
+        end
+        return nil
+    end
+
     if type(osx) == "table" and type(osx.pullEvent) == "function" then
-        host.pullEvent = function(...) return osx.pullEvent(...) end
+        host.pull = function(...) return osx.pullEvent(...) end
     end
     if type(keysx) == "table" then host.keys = keysx end
     return host
@@ -457,6 +531,103 @@ function P.start_desktop(ctx, o, log)
     return ctx.launcher ~= nil
 end
 
+-- ---------------------------------------------------------------------------
+-- the resident desktop (D1: one event loop instead of returning to the shell)
+-- ---------------------------------------------------------------------------
+
+-- An app owns the keyboard when it declared the `input` capability. Declared is
+-- not granted, and a denied app still receives the events: the dispatcher
+-- decides who is the foreground, the runtime decides what the app may do with
+-- them. A package without the capability (the `hello` placeholder) is not a
+-- desktop, so the boot chain does not block on its behalf.
+function P.takes_input(record)
+    local manifest = type(record) == "table" and record.manifest or nil
+    local caps = type(manifest) == "table" and manifest.capabilities or nil
+    if type(caps) ~= "table" then return false end
+    for i = 1, #caps do
+        if caps[i] == "input" then return true end
+    end
+    return false
+end
+
+-- Should this boot end in a resident desktop? Four answers:
+--   * "disabled" -- the caller asked for a headless boot (opts.loop == false);
+--   * "injected" -- the caller supplied its own event source (opts.pull_event);
+--     that is how the offline suite drives the real loop without a keyboard;
+--   * "test"     -- the suite is running and did not inject one, so a blocking
+--     pull would hang the emulator (tests/run.lua sets _G.PYROET_DESKTOP_TEST);
+--   * "auto"     -- a real machine: hand the console to the desktop.
+function P.desktop_enabled(o)
+    if o.loop == false then return false, "disabled" end
+    if type(o.pull_event) == "function" then return true, "injected" end
+    if rawget(_G, "PYROET_DESKTOP_TEST") then return false, "test" end
+    return true, "auto"
+end
+
+-- Step 9: hand the machine to the desktop. Everything that can fail here is a
+-- log line, never a rollback: the boot has already committed, and a broken
+-- desktop must not turn a good boot into a reboot loop. A normal return from
+-- the loop (Esc, a body returning "quit", terminate) unwinds to the caller,
+-- which is the console shell on a real machine.
+function P.start_desktop_loop(ctx, o, log)
+    local enabled, why = P.desktop_enabled(o)
+    if not enabled then
+        log("STARTUP_DESKTOP_SKIP reason=" .. short(why, 16))
+        return nil, "skip:" .. tostring(why)
+    end
+    if not ctx.rt or not ctx.launcher then
+        log("STARTUP_DESKTOP_SKIP reason=no_desktop")
+        return nil, "skip:no_desktop"
+    end
+    local record = ctx.rt:app(ctx.launcher)
+    if not P.takes_input(record) then
+        log("STARTUP_DESKTOP_SKIP reason=no_input app=" .. short(ctx.launcher, 24))
+        return nil, "skip:no_input"
+    end
+    local module = o.desktop
+    if module == nil then
+        local loaded, load_err = load_module(o.desktop_path or P.DESKTOP_PATH)
+        if type(loaded) ~= "table" then
+            log("STARTUP_DESKTOP_MODULE_FAIL err=" .. short(load_err))
+        end
+        module = loaded
+    end
+    if type(module) ~= "table" or type(module.new) ~= "function" then
+        log("STARTUP_DESKTOP_SKIP reason=no_module")
+        return nil, "skip:no_module"
+    end
+    -- the one blocking pull: injected by a test, otherwise the input host's own
+    -- raw pull (the ROM's os.pullEvent) -- the queue host never hands that out
+    -- to an app
+    local pull = o.pull_event
+    if type(pull) ~= "function" and type(ctx.input) == "table" then
+        pull = ctx.input.pull
+    end
+    local okn, desktop = pcall(module.new, {
+        rt = ctx.rt,
+        kernel = ctx.kernel,
+        input = ctx.input,
+        pullEvent = pull,
+        keys = type(ctx.input) == "table" and ctx.input.keys or nil,
+        name = ctx.launcher,
+        log = log,
+        max_events = o.desktop_events,
+    })
+    if not okn or type(desktop) ~= "table" then
+        log("STARTUP_DESKTOP_FAIL err=" .. short(desktop))
+        return nil, "failed"
+    end
+    log("STARTUP_DESKTOP_ENTER name=" .. short(ctx.launcher, 24)
+        .. " source=" .. short(why, 16))
+    local okr, reason = pcall(desktop.run, desktop)
+    if not okr then
+        log("STARTUP_DESKTOP_FAIL err=" .. short(reason))
+        return desktop, "failed"
+    end
+    log("STARTUP_DESKTOP_EXIT reason=" .. short(reason, 24))
+    return desktop, reason
+end
+
 -- Step 3b (T4): build the one installer object the system surface forwards to.
 -- `api.sys.install / uninstall / list` themselves are the app runtime's own
 -- functions (they have to read the calling record's capabilities), so the host
@@ -545,6 +716,12 @@ function P.run(opts)
         rt = nil,
         perms = nil,
         launcher = nil,
+        kernel = nil,
+        desktop = nil,
+        -- the machine's one input queue: the runtime hands it to an app as the
+        -- `input` capability and the desktop loop fills it with normalized
+        -- events, so both sides have to see the same table
+        input = o.input or P.default_input(),
         -- nothing network-related is required: these are the hooks the tests (and
         -- a future input service) use to point the net service at another config
         rpv = o.rpv,
@@ -571,6 +748,7 @@ function P.run(opts)
 
     -- 2/3. kernel and app runtime -----------------------------------------
     local k = kernel_mod.new({ log = log })
+    ctx.kernel = k
 
     -- The read-only system surface (DECISIONS.md 8.6): kernel health, the app
     -- index and one app's permission decisions, plus the runtime's own start
@@ -618,7 +796,7 @@ function P.run(opts)
             redstone = o.redstone,
             peripheral = o.peripheral,
             http = o.http,
-            input = o.input or P.default_input(),
+            input = ctx.input,
             terminal = o.terminal or rawget(_G, "term"),
             sys = sys_for,
         })
@@ -691,9 +869,23 @@ function P.run(opts)
         .. " manifest_sha=" .. tostring(info.manifest_sha or "none"))
 
     -- 9. hand over ---------------------------------------------------------
-    if o.loop then
+    -- D1: the machine does not return to the shell here. `opts.loop` is the old
+    -- one-shot handover hook (still honoured, tests use it); without it the
+    -- resident desktop takes the console and only an explicit exit (Esc, a body
+    -- returning "quit") or Ctrl+T unwinds back to the caller.
+    local desktop, dreason = nil, nil
+    if type(o.loop) == "function" then
         local okl, lerr = pcall(o.loop, k, ctx.rt, plan)
         if not okl then log("STARTUP_LOOP_FAIL err=" .. short(lerr)) end
+        dreason = "handover"
+    else
+        local okr, dmod, dwhy = pcall(P.start_desktop_loop, ctx, o, log)
+        if not okr then
+            log("STARTUP_DESKTOP_FAIL err=" .. short(dmod))
+            dreason = "failed"
+        else
+            desktop, dreason = dmod, dwhy
+        end
     end
 
     return {
@@ -708,6 +900,10 @@ function P.run(opts)
         installer = ctx.installer,
         launcher = ctx.launcher,
         info = info,
+        -- D1: the desktop the console was handed to and why it came back
+        desktop = desktop,
+        desktop_reason = dreason,
+        input = ctx.input,
         version = P.VERSION,
     }
 end

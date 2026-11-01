@@ -91,6 +91,12 @@ Lifecycle: `on_start` runs on start, `on_pause` / `on_resume` on pause/resume,
 of its hooks). `kill` drops the coroutine: it is never scheduled again, and a
 killed app cannot be started again.
 
+An app body's return value is kept: `status().apps[i].result` and the record's
+`result` field hold what `main.lua` returned when its coroutine finished (the
+`APP_EXIT` line repeats it). The desktop event loop (kernel/desktop.lua) reads
+`"quit"` out of it to hand the machine back to the shell; the runtime itself
+only records the word and never acts on it.
+
 Usage:
 
     local apps = dofile("/system/kernel/apps.lua")
@@ -563,6 +569,9 @@ function A:load(dir)
         denied_caps = {},
         error = nil,
         hook_errors = {},
+        -- what the entry body returned when its coroutine finished (D1: the
+        -- desktop loop reads `"quit"` out of it to leave the desktop)
+        result = nil,
     }
     for i = 1, #manifest.capabilities do
         record.caps[manifest.capabilities[i]] = true
@@ -861,6 +870,7 @@ function A:start(name)
     record.starts = record.starts + 1
     record.state = "running"
     record.error = nil
+    record.result = nil
     record.co = coroutine.create(function()
         -- entry convention: the file returns the body, `return function(m, api)`
         -- (a file that does its work at chunk level and returns nothing is fine
@@ -884,18 +894,22 @@ function A:step(name)
     if not record then return nil, "no such app: " .. tostring(name) end
     if record.state ~= "running" or not record.co then return false end
     if coroutine.status(record.co) ~= "suspended" then return false end
-    local ok, err = coroutine.resume(record.co)
+    local ok, ret = coroutine.resume(record.co)
     if not ok then
         record.state = "crashed"
-        record.error = tostring(err)
+        record.error = tostring(ret)
         record.co = nil
-        self:log("APP_CRASH app=" .. record.name .. " err=" .. short(err))
+        self:log("APP_CRASH app=" .. record.name .. " err=" .. short(ret))
         return false
     end
     if coroutine.status(record.co) == "dead" then
+        -- the body's return value is the app's exit word: the desktop loop
+        -- reads "quit" out of it, everything else is reported verbatim
+        record.result = ret
         record.state = "stopped"
         record.co = nil
-        self:log("APP_EXIT app=" .. record.name .. " tick=" .. tostring(self.ticks))
+        self:log("APP_EXIT app=" .. record.name .. " tick=" .. tostring(self.ticks)
+            .. " result=" .. short(ret, 24))
         self:call_hook(record, "on_stop")
     end
     return true
@@ -965,6 +979,7 @@ function A:status()
             denied_caps = copy_map(record.denied_caps),
             capabilities = copy_list(record.manifest.capabilities),
             grants = copy_map(record.perms),
+            result = record.result,
             error = record.error,
             hook_errors = copy_list(record.hook_errors),
         }

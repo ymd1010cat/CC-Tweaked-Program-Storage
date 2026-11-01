@@ -15,12 +15,18 @@ Responsibilities, and nothing else:
   4. after a successful start, append the name to /etc/launcher.recent.
      fs.write is declared for that one line only, and a refusal is ignored.
 
-Input: the P2 app runtime has seven fixed capabilities and none of them is an
-input capability (DECISIONS.md 1.2(b), 9.7), so keys are a *pure* function of
-the state -- `M.handle_key(state, key)` -- and `M.run` pulls them from
-`opts.keys` (a table or an iterator). A future input service feeds that list;
-until then the desktop is driven by the boot chain and by tests, and the
-keyboard path is fully covered by the offline suite.
+Input (D1): the desktop is resident now. The kernel's event loop
+(kernel/desktop.lua) owns the one blocking `os.pullEvent`, normalizes what it
+gets and pushes it into the machine's input queue, one event per scheduler step;
+this app declares `input` and pulls that queue with `api.input.pullEvent()`,
+which answers `nil` when nothing was delivered (it yields then -- a loop must
+never spin on the keyboard). Keys are still a *pure* function of the state
+(`M.handle_key(state, key)`), so the whole mapping stays testable without a
+terminal, and `M.run` keeps the old keys-driven harness path.
+
+Exit (D1): Esc, or `q` as a character, returns `"quit"` from the body. The app
+runtime records that word and the desktop loop unwinds the boot chain back to
+the console shell. Nothing else leaves the desktop.
 
 Layout (DECISIONS.md 7.2): row 1 version + short hash, row 2 net + free, rows 3..n-2
 the list, row n-1 the hint (or one message), row n the selection counter. Every
@@ -36,7 +42,7 @@ No non-ASCII bytes in this file.
 
 local M = {}
 
-M.VERSION = "0.1.0"
+M.VERSION = "0.2.0"
 M.VIEW = { cols = 26, rows = 20 }
 M.MIN_COLS = 16
 M.MIN_ROWS = 6
@@ -541,6 +547,128 @@ function M.run(manifest, api, opts)
 end
 
 -- ---------------------------------------------------------------------------
+-- the resident desktop (D1): one delivered event at a time
+-- ---------------------------------------------------------------------------
+
+-- one line to the runtime's log, best effort: the harness api has no log
+function M.note(api, text)
+    if type(api) ~= "table" then return false end
+    local log = api.log
+    if type(log) ~= "function" then return false end
+    return pcall(log, text)
+end
+
+-- The desktop owns the whole screen, so the first resident frame erases the
+-- boot log behind it (the 26x20 view would otherwise sit on top of
+-- STARTUP_COMMITTED and friends). A denied terminal answers with its stub.
+function M.clear(term)
+    local t = term or rawget(_G, "term")
+    if type(t) ~= "table" or type(t.clear) ~= "function" then return false end
+    if rawget(_G, "PYROET_APP_NOPAINT") then return false end
+    return (pcall(t.clear))
+end
+
+-- refresh + render + paint in one call. The desktop paints only when something
+-- it shows changed (one event, one frame), never in a timer loop: a 26x20
+-- repaint per tick is exactly the storm the resident loop exists to avoid.
+function M.paint_once(state, api, term)
+    local cols, rows = M.view_size(term)
+    state.cols, state.rows = cols, rows
+    M.refresh(state, api, {})
+    local lines = M.render(state, cols, rows)
+    M.clear(term)
+    M.paint(lines, term)
+    state.painted = (state.painted or 0) + 1
+    return lines
+end
+
+-- one normalized event in, one action out. The dispatcher delivers `key`
+-- events with a key *name* ("up", "enter", "escape"), everything else raw.
+-- Returns "quit" when the desktop has to end, otherwise the handle_key action
+-- ("move" | "select" | "launch" | "error" | "denied" | "repaint" | "none").
+function M.dispatch_event(state, event, p1, p2, api)
+    if event == "key" then
+        local key = tostring(p1 == nil and "" or p1)
+        if key == "escape" then return "quit", "escape" end
+        local action, detail = M.handle_key(state, key, api)
+        M.note_key(api, state, key, action, detail)
+        return action, detail
+    end
+    if event == "char" then
+        local ch = tostring(p1 == nil and "" or p1)
+        if ch == "q" or ch == "Q" then return "quit", "q" end
+        if ch:match("^%d$") then
+            local action, detail = M.handle_key(state, ch, api)
+            M.note_key(api, state, ch, action, detail)
+            return action, detail
+        end
+        return "none"
+    end
+    if event == "term_resize" then return "repaint" end
+    return "none"
+end
+
+function M.note_key(api, state, key, action, detail)
+    local entry = M.selected(state)
+    local text = "key=" .. tostring(key) .. " action=" .. tostring(action)
+        .. " index=" .. tostring(state.index) .. " sel="
+        .. tostring(entry and entry.name or "-")
+    if detail ~= nil then text = text .. " detail=" .. tostring(detail) end
+    M.note(api, text)
+end
+
+-- no keyboard for this app (the capability was denied, or no host was supplied):
+-- keep the painted frame current and stay resident without ever spinning. On a
+-- real machine Ctrl+T still works, because the dispatcher handles `terminate`
+-- itself and never asks an app about it.
+function M.idle(api)
+    while true do
+        if type(api) == "table" and type(api.yield) == "function" then
+            api.yield()
+        else
+            return "idle"
+        end
+    end
+end
+
+-- The resident entry body. It paints the desktop once, then consumes exactly
+-- one delivered event per scheduler step; a scheduler step with nothing queued
+-- costs one yield and no paint (`api.input.pullEvent()` answers nil).
+function M.body(manifest, api)
+    local state = M.build(api)
+    state.manifest = manifest
+    state.painted = 0
+    local term = type(api) == "table" and api.terminal or nil
+    local input = type(api) == "table" and api.input or nil
+    local pull = type(input) == "table" and input.pullEvent or nil
+    M.paint_once(state, api, term)
+    M.note(api, "ready index=" .. tostring(state.index)
+        .. " of=" .. tostring(#(state.entries or {})))
+    if type(pull) ~= "function" then
+        M.note(api, "no_input reason=no_host")
+        return M.idle(api)
+    end
+    while true do
+        local event, p1, p2 = pull()
+        if event == nil then
+            if p1 ~= nil then
+                M.note(api, "no_input reason=" .. tostring(p1))
+                return M.idle(api)
+            end
+            api.yield()
+        else
+            local action, detail = M.dispatch_event(state, event, p1, p2, api)
+            if action == "quit" then
+                M.note(api, "quit key=" .. tostring(detail))
+                return "quit"
+            end
+            if action ~= "none" then M.paint_once(state, api, term) end
+            api.yield()
+        end
+    end
+end
+
+-- ---------------------------------------------------------------------------
 -- DECISIONS.md 7.2 self test: no terminal, no fs, pure layout rules
 -- ---------------------------------------------------------------------------
 
@@ -625,7 +753,7 @@ end
 M.layout_selftest = M.selftest
 
 local function body(manifest, api)
-    return M.run(manifest, api)
+    return M.body(manifest, api)
 end
 
 if rawget(_G, "PYROET_LAUNCHER_TEST") then

@@ -58,7 +58,7 @@ return function(H)
 
         -- the system packages are scanned next to the boot chain
         H.has(lines, "APP_SCAN root=/system/system loaded=3 failed=0")
-        H.has(lines, "APP_LOAD name=launcher version=0.1.0 caps=fs.read,fs.write")
+        H.has(lines, "APP_LOAD name=launcher version=0.2.0 caps=fs.read,fs.write,input,terminal")
         H.has(lines, "APP_LOAD name=net version=0.1.0 caps=net.rpv,fs.read")
         H.has(lines, "APP_LOAD name=settings version=0.1.0 caps=fs.read")
 
@@ -66,12 +66,12 @@ return function(H)
         H.has(lines, "STARTUP_PERMS_READY root=/etc/perms")
         H.has(lines, "STARTUP_PERMS_TABLE apps=3 loaded=0 pending=3 bad=0")
         H.eq("no_prompt_before_launcher", H.count(lines, "PERMS_PROMPT"), 1)
-        H.has(lines, "PERMS_PROMPT app=launcher caps=fs.read,fs.write")
+        H.has(lines, "PERMS_PROMPT app=launcher caps=fs.read,fs.write,input,terminal")
 
         -- a system package is granted what it declares, and the answers persist
         H.has(lines, "PERMS_PREGRANT app=launcher cap=fs.read")
         H.has(lines, "PERMS_DECISION app=launcher cap=fs.write granted=true")
-        H.has(lines, "APP_PERMS_APPLIED app=launcher granted=2 denied=0")
+        H.has(lines, "APP_PERMS_APPLIED app=launcher granted=4 denied=0")
         H.has(lines, "STARTUP_LAUNCHER_STARTED name=launcher")
         H.has(lines, "APP_START name=launcher")
         H.has(lines, "STARTUP_DESKTOP_TICK advanced=true")
@@ -84,6 +84,11 @@ return function(H)
         H.contains("cfg_read", cfg, "fs.read=granted")
         H.contains("cfg_write", cfg, "fs.write=granted")
         H.eq("no_net_decision_yet", H.exists("/etc/perms/net.cfg"), false)
+
+        H.has(lines, "STARTUP_COMMITTED version=")
+        -- D1: the offline suite runs headless, so the resident loop is off and
+        -- says why; tests/t_desktop_loop.lua is the suite that drives it
+        H.has(lines, "STARTUP_DESKTOP_SKIP reason=test")
 
         -- order: frame, then permission table, then launcher, then commit
         local ready = H.index_of(lines, "STARTUP_UI_READY")
@@ -152,13 +157,17 @@ return function(H)
             frame = function() return true end,
         })
         H.check("denied_ok", result.ok == true, "a denial must not block the boot")
-        H.has(lines, "PERMS_PROMPT app=launcher caps=fs.read,fs.write")
+        H.has(lines, "PERMS_PROMPT app=launcher caps=fs.read,fs.write,input,terminal")
         H.has(lines, "PERMS_DECISION app=launcher cap=fs.read granted=false")
-        H.has(lines, "APP_PERMS_APPLIED app=launcher granted=0 denied=2")
+        H.has(lines, "APP_PERMS_APPLIED app=launcher granted=0 denied=4")
         H.has(lines, "STARTUP_LAUNCHER_STARTED name=launcher")
         H.eq("denied_launcher_running", result.apps:app("launcher").state, "running")
         -- the launcher tried to read, got the stub, and kept going
         H.has(lines, "APP_CAP_DENIED app=launcher cap=fs.read")
+        -- and it has no keyboard: the denied capability is a normal result, so
+        -- the desktop keeps its (blank) frame and goes idle instead of crashing
+        H.has(lines, "APP_CAP_DENIED app=launcher cap=input")
+        H.has(lines, "APP_LOG app=launcher msg=no_input reason=capability denied: input")
         H.contains("denied_cfg", H.read("/etc/perms/launcher.cfg") or "",
             "fs.read=denied")
         H.lacks("no_grant_on_deny", lines, "PERMS_PREGRANT app=launcher")
