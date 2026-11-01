@@ -269,6 +269,82 @@ return function(H)
     end
 
     -- -----------------------------------------------------------------
+    H.group("ota.e2e_install")
+    -- T13 regression: pressing Enter in the *installer app* on a /pkgs row must
+    -- really install it. The app is driven through its own dispatch, and the
+    -- bridge it calls is the real kernel/installer.lua (same code the runtime
+    -- uses), so `internal` rows are covered end to end.
+    do
+        H.rmrf("/apps")
+        H.rmrf("/pkgs")
+        H.app_package("/pkgs/xpkg.app", {
+            manifest = 'return { name = "xpkg", version = "0.3.0", entry = "main.lua",'
+                .. ' capabilities = { "fs.read" } }',
+            main = 'return function(manifest, api) return nil end\n',
+        })
+        local log, lines = H.logger()
+        -- the default constructor must find /pkgs on its own: the source roots
+        -- are constants (I.INTERNAL / I.DISK), not something a caller passes
+        H.eq("e2e_internal_const", INSTALLER.INTERNAL, "/pkgs")
+        H.eq("e2e_disk_const", INSTALLER.DISK, "/disk/apps")
+        local inst = INSTALLER.new({
+            fs = F,
+            log = log,
+            apps = APPS,
+            apps_root = "/apps",
+            system_root = "/system/system",
+        })
+        H.eq("e2e_default_source", inst:source_for("xpkg"), "/pkgs/xpkg.app")
+        -- the app talks to the runtime's own bridge (A:sys_install), which is
+        -- what emits APP_INSTALL and what the real api.sys.install calls
+        local rt = runtime({ installer = inst, sys = {}, apps_root = "/system/system" })
+        rt.sink = log
+        local record = { name = "installer", caps = { ["fs.write"] = true,
+            ["fs.read"] = true } }
+        local api = {
+            fs = F,
+            sys = {
+                apps = function() return {} end,
+                install = function(name) return rt:sys_install(record, name) end,
+                uninstall = function(name) return rt:sys_uninstall(record, name) end,
+            },
+            input = { keys = {}, pullEvent = function() return nil end },
+            terminal = nil,
+            yield = function() end,
+            log = log,
+        }
+        _G.PYROET_INSTALLER_TEST = true
+        local APP = assert(loadfile("/tests/installer.app/main.lua"))()
+        _G.PYROET_INSTALLER_TEST = nil
+        local state = APP.build(api, {})
+        H.ge("e2e_entries", #state.entries, 1)
+        H.eq("e2e_first_source", state.entries[1].source, "internal")
+        H.eq("e2e_first_name", state.entries[1].name, "xpkg")
+        H.eq("e2e_action", APP.action_of(state.entries[1]), "install")
+        local saved = rawget(_G, "PYROET_APP_NOPAINT")
+        rawset(_G, "PYROET_APP_NOPAINT", true)
+        local action, detail = APP.dispatch_event(state, "key", "enter", api, {})
+        rawset(_G, "PYROET_APP_NOPAINT", saved)
+        H.eq("e2e_dispatch_action", action, "install")
+        H.eq("e2e_dispatch_detail", detail, "xpkg")
+        H.check("e2e_installed", F.exists("/apps/xpkg.app/manifest.lua"),
+            "package not installed (state message: " .. tostring(state.message) .. ")")
+        H.has(lines, "APP_INSTALL name=xpkg ok=true")
+        H.has(lines, "INSTALL_OK name=xpkg")
+        -- and it is now an installed row: Enter again says nothing to do
+        local state2 = APP.build(api, {})
+        local installed_row = nil
+        for i = 1, #state2.entries do
+            if state2.entries[i].name == "xpkg" then installed_row = state2.entries[i] end
+        end
+        H.check("e2e_installed_row", installed_row ~= nil, "no xpkg row after install")
+        H.eq("e2e_installed_source", installed_row and installed_row.source, "apps")
+        H.eq("e2e_installed_action", installed_row and APP.action_of(installed_row), "remove")
+        H.rmrf("/apps")
+        H.rmrf("/pkgs")
+    end
+
+    -- -----------------------------------------------------------------
     H.group("ota.launcher")
     do
         -- the launcher only renders the kernel's answer; `api.sys` is faked here

@@ -182,6 +182,11 @@ local function parse_sums_line(line)
     return nil
 end
 
+-- T7: the source roots. A pocket computer has no disk drive, so /pkgs (on this
+-- computer's own disk) is the primary source; /disk/apps only when it exists.
+I.INTERNAL = "/pkgs"
+I.DISK = "/disk/apps"
+
 function I.new(opts)
     local o = opts or {}
     local self = setmetatable({}, { __index = I })

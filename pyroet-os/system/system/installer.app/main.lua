@@ -453,7 +453,10 @@ function M.install_selected(state, api, opts)
         state.message = "nothing selected"
         return "none"
     end
-    if entry.source ~= "disk" then
+    -- an installable row is an *uninstalled* package: the source medium (a disk)
+    -- or the internal /pkgs directory (a pocket computer has no disk drive).
+    -- Anything else (already in /apps, or an image package) is not installable.
+    if entry.source ~= "disk" and entry.source ~= "internal" then
         state.message = "already installed"
         return "none"
     end

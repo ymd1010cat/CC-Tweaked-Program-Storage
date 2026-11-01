@@ -1189,6 +1189,29 @@ enter install q=back
 
 33.5 **数字**：离线 **4,896 pass / 0 fail / 248 groups**；`install.set` **27 条**；TOTAL 见 sizecheck（web 移出后显著下降，files.app 不计入镜像）。
 
+34. 可选包装不上：installer 只接受 disk + 源根常量缺失（T13）
+
+34.1 **真机现象**：installer 列表里能看到 `p files 0.1.0` 这类 `/pkgs` 行，按 Enter 没反应、`/apps` 里没有包。
+
+34.2 **根因（两个，都会单独导致装不上）**：
+1. **`install_selected` 只接受 `source == "disk"`**：`M.action_of` 对 `internal` 行已经返回 `install`（T7 改过），但真正执行的 `install_selected` 仍是老判断 —— `if entry.source ~= "disk" then state.message = "already installed" return "none" end`，于是 Enter 落在"看起来能装、实际直接返回 none"的分支（日志 `APP_LOG app=installer msg=key=enter action=none`）。
+2. **`kernel/installer.lua` 的源根常量没声明**：`roots_for` / `source_for` 引用 `I.INTERNAL` / `I.DISK`，但 T7 只加了引用、没加常量 → `roots_for` 返回空表，`source_for` 永远 nil，桥返回 `INSTALL_FAIL name=.. err=no_source`（日志 `APP_INSTALL name=files ok=false`）。e2e 测试当时给构造器显式传了 `media_root="/pkgs"`，把这个洞盖住了。
+
+34.3 **修法**：`install_selected` 接受 `disk` **或** `internal`（其它来源仍是 `already installed`）；`installer.lua` 补上 `I.INTERNAL = "/pkgs"`、`I.DISK = "/disk/apps"` 两个常量（构造函数默认 `media_root = I.INTERNAL`）。
+
+34.4 **日志证据（demo 盘副本，生产模式）**：
+```
+APP_LOG app=installer msg=ready entries=6 source=internal
+INSTALL_OK name=files version=0.1.0 method=move     <- kernel/installer.lua
+APP_INSTALL name=files ok=true                      <- runtime bridge
+APP_LOG app=installer msg=key=enter action=install index=1 detail=files
+```
+`/apps/files.app/` 出现。修复前同一流程是 `INSTALL_FAIL name=files err=no_source` + `APP_INSTALL name=files ok=false` + `action=none`。
+
+34.5 **回归测试**：`t_sys_ota` 新增 `ota.e2e_install` —— 真 `kernel/installer.lua` + 临时 `/pkgs/xpkg.app`，经 **installer 应用的 `dispatch_event("key","enter")`**（不是 `M.scan`）触发 `install_selected` → 走 runtime 的 `A:sys_install` 桥；断言 `/apps/xpkg.app` 真的存在、日志有 `APP_INSTALL name=xpkg ok=true` + `INSTALL_OK name=xpkg`、装完后该行变成 `source=apps`/`action=remove`；并断言默认构造器（不传 media_root）的 `I.INTERNAL="/pkgs"`、`inst:source_for("xpkg") == "/pkgs/xpkg.app"`。
+
+34.6 **数字**：离线 **4,911 pass / 0 fail / 249 groups**；sizecheck 见上（27 条，仍远低于 629,145）。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1226,3 +1249,4 @@ enter install q=back
 - 2026-11-01: **浏览器默认页改内置 `about:home`，新增 `local:` 前缀**（口径见 §31）。`web.app` 默认首页改为内置帮助页（零网络即可显示，含键位与 local: 提示）；新增 `M.scheme` 地址分类（about / local / http(s) / 未知 scheme）、`local:/path` 走 `api.fs.read`（缺文件 → `local: no such file: <path>`）、未知 scheme → `unsupported scheme: <name>`；`now_url` 只在无 scheme 时补 `http://`；`/etc/browser.home` 首行优先、坏地址显示 `failed:` 且可改文件。`tests/t_web.lua` 重写为 7 组（about/local/http/config/keys + manifest/helpers）。离线 **4,808 pass / 0 fail / 242 groups**。未 commit。
 - 2026-11-01: **浏览器可编辑地址栏**（口径见 §32）。阅读模式 `a`/`/` 进入编辑（预填当前地址），编辑模式：可打印字符追加、`backspace` 删一个、`enter` 校验后打开（空行/含空格/超长给可读状态且留在编辑）、`c` 取消；**编辑时 `q` 是普通字符**，只有阅读模式 `q` 才退出。归一化沿用 `M.now_url`（无 scheme 补 `http://`，`local:`/`about:`/`http(s)://` 原样）；日志新增 `BROWSER_EDIT begin|end` 与 `BROWSER_OPEN ... source=typed|home|history`。新增 `t_web.web.edit`（20 组断言）。离线 **4,844 pass / 0 fail / 243 groups**。未 commit。
 - 2026-11-01: **新增可选文件管理器 + web 移出镜像**（口径见 §33）。新 `examples/files.app`（只读文件管理器，caps `fs.read`+`input`+`terminal`，键位 up/down/enter/b·backspace/r/h/q，目录前缀 `/`、文件显示大小、>64 KB 截断、拒绝/空目录有状态行，日志 FILES_OPEN/FILES_VIEW/FILES_DENIED）；`git mv system/system/web.app examples/web.app`，`install.set` 29→27，镜像只剩 launcher+settings（+kernel/服务层/rpv/recovery）；`run-tests.ps1` 把 web/files 作为 examples fixture stage 到 `/tests`；`/system/system` 计数 3→2 全套件同步；新增 `tests/t_files.lua`（5 组 54 断言）。离线 **4,896 pass / 0 fail / 248 groups**。未 commit。
+- 2026-11-01: **修可选包装不上**（口径见 §34）。根因二：`installer.app` 的 `install_selected` 只接受 `source=="disk"`（`internal` 行被当成 `already installed` 直接返回 none）；`kernel/installer.lua` 的 `I.INTERNAL`/`I.DISK` 只被引用未声明，`source_for` 恒 nil → `no_source`。修：`install_selected` 接受 `disk|internal`；补上两个源根常量。新增 `t_sys_ota.ota.e2e_install` 端到端回归（真 kernel/installer + 临时 `/pkgs/xpkg.app` + installer 应用 Enter + runtime 桥 → `/apps/xpkg.app`、`APP_INSTALL name=xpkg ok=true`、`INSTALL_OK name=xpkg`）。真机副本复验：`INSTALL_OK name=files` + `APP_INSTALL name=files ok=true` + `action=install` + `/apps/files.app` 出现。离线 **4,911 pass / 0 fail / 249 groups**。未 commit。
