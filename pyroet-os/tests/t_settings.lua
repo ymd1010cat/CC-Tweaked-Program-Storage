@@ -371,7 +371,7 @@ return function(H)
         -- D1-fix round 3: the manifest declares fs.write now, so the runtime
         -- hands the app a real writer (it still only edits one config line)
         local rt = APPS.new({ fs = H.real_fs(), log = H.logger(), apps_root = "/system/system" })
-        H.eq("runtime_scan", rt:scan(), 3)
+        H.eq("runtime_scan", rt:scan(), 2)
         H.check("start_settings", rt:start("settings") == true, "start refused")
         local api_table = rt:app("settings").api
         local read_value = api_table.fs.read("/system/system/settings.app/manifest.lua")

@@ -88,9 +88,12 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 creates it), q back
      net        up/down scroll the hosts, enter or r refresh (rpv status,
                 hosts, probe target), q back
+     files      (optional example package) a read-only file manager: up/down,
+                enter to open/view, b or backspace up, r refresh, h hidden,
+                q quit. Not in the image: copy examples/files.app to /pkgs/files.app
      net        (optional example package, not in the image) copy examples/net.app
                 to /pkgs/net.app, then install it from the installer or Update
-     web        built-in text browser: the default page is about:home (built in,
+     web        (optional example package) text browser: default page about:home (built in,
                 no network needed), enter opens the address from /etc/browser.home,
                 addresses are http(s)://..., local:/path (a file on this computer)
                 or about:home; a (or /) edits the address, c cancels editing,

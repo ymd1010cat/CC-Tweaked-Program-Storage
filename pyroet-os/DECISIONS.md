@@ -1171,6 +1171,24 @@ enter install q=back
 
 32.5 **数字**：离线 **4,844 pass / 0 fail / 243 groups**；web.app 体积见 sizecheck（仍低于 629,145）。
 
+33. 三个可选包：net / web / files（T12）
+
+33.1 **镜像最终清单**（`install.set` **27 条**）：`launcher.app`、`settings.app` 两个应用包 + kernel（init/apps/permissions/desktop/installer/ota）、`system/net/{hosts,service}.lua` 网络服务层、`rpv/*`、recovery 三件套、镜像/启动脚本。**不再包含** net、web、files。
+
+33.2 **可选包**（都在 `examples/`，装机方式统一：把 `examples/<name>.app` 拷到 `/pkgs/<name>.app/`，再从 installer（`p <name>` 行）或桌面 Update 安装到 `/apps`；桌面机也可放 `/disk/apps`）：
+
+| 包 | caps | 键位 / 能力 |
+| --- | --- | --- |
+| `net.app` | `net.rpv`, `fs.read`, `input`, `terminal` | up/down 滚主机、enter/`r` 刷新、`q` 退出 |
+| `web.app` | `fs.read`, `http`, `input`, `terminal` | `enter` 打开、`a`/`/` 编辑地址（`c` 取消、`backspace` 删字符）、`up/down` 滚动、`b` 返回、`r` 重载、`q` 退出；默认页 `about:home`，地址支持 `http(s)://`、`local:/path`、`about:home` |
+| `files.app` | `fs.read`, `input`, `terminal` | 只读文件管理器：`up/down` 移动、`enter` 进目录或查看文本（前 N 行可滚）、`b`/`backspace` 上级、`r` 刷新、`h` 显示隐藏项、`q` 退出；目录前缀 `/`、文件显示大小，>64 KB 截断，无权限/空目录/缺文件都有状态行 |
+
+33.3 **files.app 的实现**：`examples/files.app/{manifest.lua,main.lua}`（约 14 KB + 0.8 KB，纯 ASCII，**不进镜像**）。`M.read_dir` 用 `fs.list/isDir/getSize`（全部 pcall），点文件默认隐藏；`M.view_file` 走 `fs.read`，>64 KB 截断并记 `truncated`；日志 `FILES_OPEN path=..` / `FILES_VIEW path=.. lines=..` / `FILES_DENIED path=.. reason=..` / `FILES_QUIT key=..`。没有写/删能力（故意），所以误按不会破坏文件。
+
+33.4 **测试**：新增 `tests/t_files.lua`（5 组 54 断言）：manifest 静态（含 `fs.read`/`input`/`terminal`、无 `fs.write`）、列目录（目录先排、隐藏项默认不显示、`h` 切换）、查看文本（行数/首行/滚动/`b` 关闭/上级）、错误（缺目录/无 fs/缺文件/`/system/kernel` 拒绝/大文件截断）、键位（`q`/`r`/根目录 `b`）。web 移出后：`t_web` 改从 `/tests/web.app` 加载；`/system/system` 计数 3→2（launcher、settings），`t_desktop`/`t_desktop_loop`/`t_settings`/`t_apps_ui`/`t_sys_ota`/`t_layout` 同步；`install.set` 29→27、`t_budget` 同步；`run-tests.ps1` 把 `examples/web.app`、`examples/files.app` stage 到 `/tests`。
+
+33.5 **数字**：离线 **4,896 pass / 0 fail / 248 groups**；`install.set` **27 条**；TOTAL 见 sizecheck（web 移出后显著下降，files.app 不计入镜像）。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1207,3 +1225,4 @@ enter install q=back
 - 2026-11-01: **net 改为可选示例包**（口径见 §30）。`git mv system/system/net.app examples/net.app`（内容不变），`install.set` 去掉 net 两行 → 镜像 29 条；`system/net/{hosts,service}.lua` 服务层仍在镜像。测试：`/system/system` 回 3 包（launcher/settings/web），`t_desktop`/`t_desktop_loop` 的启动与日志断言改 settings，`t_net_app`/`t_apps_ui` 改从 `/tests/net.app` fixture 加载，`run-tests.ps1` 改 stage `examples\net.app` → `/tests/net.app`，`t_budget` 29 条且 payload 断言翻转。离线 **4,786 pass / 0 fail / 240 groups**；sizecheck 见上。未 commit。
 - 2026-11-01: **浏览器默认页改内置 `about:home`，新增 `local:` 前缀**（口径见 §31）。`web.app` 默认首页改为内置帮助页（零网络即可显示，含键位与 local: 提示）；新增 `M.scheme` 地址分类（about / local / http(s) / 未知 scheme）、`local:/path` 走 `api.fs.read`（缺文件 → `local: no such file: <path>`）、未知 scheme → `unsupported scheme: <name>`；`now_url` 只在无 scheme 时补 `http://`；`/etc/browser.home` 首行优先、坏地址显示 `failed:` 且可改文件。`tests/t_web.lua` 重写为 7 组（about/local/http/config/keys + manifest/helpers）。离线 **4,808 pass / 0 fail / 242 groups**。未 commit。
 - 2026-11-01: **浏览器可编辑地址栏**（口径见 §32）。阅读模式 `a`/`/` 进入编辑（预填当前地址），编辑模式：可打印字符追加、`backspace` 删一个、`enter` 校验后打开（空行/含空格/超长给可读状态且留在编辑）、`c` 取消；**编辑时 `q` 是普通字符**，只有阅读模式 `q` 才退出。归一化沿用 `M.now_url`（无 scheme 补 `http://`，`local:`/`about:`/`http(s)://` 原样）；日志新增 `BROWSER_EDIT begin|end` 与 `BROWSER_OPEN ... source=typed|home|history`。新增 `t_web.web.edit`（20 组断言）。离线 **4,844 pass / 0 fail / 243 groups**。未 commit。
+- 2026-11-01: **新增可选文件管理器 + web 移出镜像**（口径见 §33）。新 `examples/files.app`（只读文件管理器，caps `fs.read`+`input`+`terminal`，键位 up/down/enter/b·backspace/r/h/q，目录前缀 `/`、文件显示大小、>64 KB 截断、拒绝/空目录有状态行，日志 FILES_OPEN/FILES_VIEW/FILES_DENIED）；`git mv system/system/web.app examples/web.app`，`install.set` 29→27，镜像只剩 launcher+settings（+kernel/服务层/rpv/recovery）；`run-tests.ps1` 把 web/files 作为 examples fixture stage 到 `/tests`；`/system/system` 计数 3→2 全套件同步；新增 `tests/t_files.lua`（5 组 54 断言）。离线 **4,896 pass / 0 fail / 248 groups**。未 commit。

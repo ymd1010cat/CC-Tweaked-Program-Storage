@@ -57,14 +57,14 @@ return function(H)
         H.table("apps", result.apps)
 
         -- the system packages are scanned next to the boot chain
-        H.has(lines, "APP_SCAN root=/system/system loaded=3 failed=0")
+        H.has(lines, "APP_SCAN root=/system/system loaded=2 failed=0")
         H.has(lines, "APP_LOAD name=launcher version=0.2.0 caps=fs.read,fs.write,input,terminal")
-        H.has(lines, "APP_LOAD name=web version=0.1.0 caps=fs.read,http,input,terminal")
+        H.eq("no_web_in_image", H.count(lines, "APP_LOAD name=web"), 0)
         H.has(lines, "APP_LOAD name=settings version=0.2.0 caps=fs.read,fs.write,input,terminal")
 
         -- nothing is decided yet, and reading the table does not prompt
         H.has(lines, "STARTUP_PERMS_READY root=/etc/perms")
-        H.has(lines, "STARTUP_PERMS_TABLE apps=3 loaded=0 pending=3 bad=0")
+        H.has(lines, "STARTUP_PERMS_TABLE apps=2 loaded=0 pending=2 bad=0")
         H.eq("no_prompt_before_launcher", H.count(lines, "PERMS_PROMPT"), 1)
         H.has(lines, "PERMS_PROMPT app=launcher caps=fs.read,fs.write,input,terminal")
 
@@ -76,14 +76,14 @@ return function(H)
         H.has(lines, "APP_START name=launcher")
         H.has(lines, "STARTUP_DESKTOP_TICK advanced=true")
         H.eq("launcher_running", result.apps:app("launcher").state, "running")
-        H.eq("web_loaded_only", result.apps:app("web").state, "loaded")
+        
         H.eq("settings_loaded_only", result.apps:app("settings").state, "loaded")
 
         local cfg = H.read("/etc/perms/launcher.cfg")
         H.contains("cfg_header", cfg, "# PYROET-PERMS-1 app=launcher")
         H.contains("cfg_read", cfg, "fs.read=granted")
         H.contains("cfg_write", cfg, "fs.write=granted")
-        H.eq("no_web_decision_yet", H.exists("/etc/perms/web.cfg"), false)
+        
 
         H.has(lines, "STARTUP_COMMITTED version=")
         -- D1: the offline suite runs headless, so the resident loop is off and
@@ -178,7 +178,7 @@ return function(H)
     do
         local log, lines = H.logger()
         local rt = APPS.new({ fs = F, log = log, apps_root = "/system/system" })
-        H.eq("scan", rt:scan(), 3)
+        H.eq("scan", rt:scan(), 2)
 
         local function read_file(path)
             if not F.exists(path) then return nil end
@@ -214,14 +214,14 @@ return function(H)
         }
 
         local state = LAUNCHER.build(api)
-        H.eq("entries", #state.entries, 3)
+        H.eq("entries", #state.entries, 2)
         H.eq("entry_names", table.concat({
-            state.entries[1].name, state.entries[2].name, state.entries[3].name }, ","),
-            "launcher,settings,web")
+            state.entries[1].name, state.entries[2].name }, ","),
+            "launcher,settings")
         H.eq("settings_version", state.entries[2].version, "0.2.0")
         local lines_first = LAUNCHER.render(state, 26, 20)
         H.eq("render_rows", #lines_first, 20)
-        H.contains("status_first", lines_first[20], "3 apps sel 1/3")
+        H.contains("status_first", lines_first[20], "2 apps sel 1/2")
 
         -- Enter on the second row starts settings.app through the runtime
         H.eq("down", LAUNCHER.handle_key(state, "down", api), "move")

@@ -8,7 +8,7 @@ No non-ASCII bytes in this file.
 ]]
 
 _G.PYROET_BROWSER_TEST = true
-local WEB = assert(loadfile("/system/system/web.app/main.lua"))()
+local WEB = assert(loadfile("/tests/web.app/main.lua"))()
 _G.PYROET_BROWSER_TEST = nil
 
 local KEYS = { up = 10, down = 11, enter = 14, q = 16, b = 18, r = 19 }
@@ -36,7 +36,7 @@ return function(H)
     -- -----------------------------------------------------------------
     H.group("web.manifest")
     do
-        local raw = assert(loadfile("/system/system/web.app/manifest.lua"))()
+        local raw = assert(loadfile("/tests/web.app/manifest.lua"))()
         local caps = {}
         for i = 1, #(raw.capabilities or {}) do caps[raw.capabilities[i]] = true end
         H.eq("web_name", raw.name, "web")

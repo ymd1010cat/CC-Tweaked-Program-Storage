@@ -685,13 +685,13 @@ end
         local back = run1.frames[9]
         H.eq("screen_back_markers", (markers(back)), 1)
         H.eq("screen_back_heads", heads(back), "  |  |> |  ")
-        H.contains("screen_back_status", (back or {})[19] or "", "6 apps sel 3/6")
+        H.contains("screen_back_status", (back or {})[19] or "", "5 apps sel 3/5")
         -- the launcher launched itself: refused, logged, the screen stays
         H.has(run1.lines, "APP_START_DENIED name=launcher reason=already_running")
         H.contains("screen_self_message", (run1.frames[11] or {})[18] or "",
             "cannot start launcher")
         H.contains("screen_self_status", (run1.frames[11] or {})[19] or "",
-            "6 apps sel 4/6")
+            "5 apps sel 4/5")
         H.ascii_check("screen_logs_ascii", H.joined(run1.lines))
 
         -- 2) an app that stops by itself ends the loan without any timer, and the
@@ -719,7 +719,7 @@ end
         H.eq("stop_moved_markers", count, 1)
         H.eq("stop_moved_row", where, 2)
         H.eq("stop_moved_heads", heads(run2.frames[4]), "  |> |  |  ")
-        H.contains("stop_status", (run2.frames[4] or {})[19] or "", "4 apps sel 2/4")
+        H.contains("stop_status", (run2.frames[4] or {})[19] or "", "3 apps sel 2/3")
         H.ascii_check("stop_logs_ascii", H.joined(run2.lines))
         H.rmrf("/apps")
     end
