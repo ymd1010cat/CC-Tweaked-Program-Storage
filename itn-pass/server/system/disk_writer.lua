@@ -1,9 +1,23 @@
 -- disk_writer.lua -- copies the server payload to the one attached disk drive.
 -- Deploy as /system/disk_writer.lua on the card key server.
 --
--- M.write()   -> true, {drive, mount, files, dirs, bytes, free_after}
---             -> false, reason, detail
--- M.status()  -> {state, drives, drive?, mount?, free?}
+-- M.plan([profile[, part]]) -> plan              (no drive touched: the same
+--                                payload / byte budget checks write() runs, so a
+--                                caller can refuse a write before charging a key)
+--                            -> nil, reason, detail
+-- M.write([profile[, part]])
+--                            -> true, {drive, mount, files, dirs, bytes,
+--                                      free_after, profile, part, source}
+--                            -> false, reason, detail
+-- M.status()                 -> {state, drives, drive?, mount?, free?}
+--
+-- A payload profile (see /itnpass_profile.lua) selects which payload tree this
+-- transaction installs: a profile with parts keeps one sub-directory per disk
+-- ("part1" / "part2") and one write transaction per part; a profile without
+-- parts -- and every call that passes no profile at all -- writes the payload
+-- root, which is the pre-profile behaviour. The profile also carries the byte
+-- budget of one disk, so an over-large payload is refused before the disk is
+-- touched instead of being reported as "disk full".
 --
 -- The drive network must hold exactly one drive. Failure messages are the ones
 -- the terminal and the admin console show, so they are spelled out verbatim.
@@ -11,6 +25,17 @@
 local M = {}
 
 local LOG_PATH = "/auth/itnpass_server.log"
+
+-- Same module instance contract as the store: the catalog is loaded once, so a
+-- missing deployment file is reported as an unknown profile rather than being
+-- silently ignored.
+local profiles = nil
+do
+    local ok, mod = pcall(dofile, "/itnpass_profile.lua")
+    if ok and type(mod) == "table" then
+        profiles = mod
+    end
+end
 
 -- Same line format as the service log. This module runs inside the server or
 -- the admin console, neither of which can print while a copy is in progress.
@@ -168,6 +193,148 @@ local function walk(root)
     return entries
 end
 
+-- Part number as an integer, or nil when it is malformed.
+local function partNumber(part)
+    if part == nil then
+        return nil
+    end
+    local value = tonumber(part)
+    if value == nil or value ~= math.floor(value) or value < 1 then
+        return nil, "bad part"
+    end
+    return value
+end
+
+-- Picks the payload tree for one part of a multi-part profile. An explicit part
+-- wins. Without one: exactly one part directory present means "this is the disk
+-- being written"; none present means the operator swapped a half into the
+-- payload root, so part 1 with the root is used; several present is ambiguous
+-- and refused, because guessing would write the wrong half to a disk.
+local function selectPart(base, spec, part)
+    local present = {}
+    for index = 1, #spec.parts do
+        local path = joinPath(base, spec.parts[index])
+        if fs.exists(path) and fs.isDir(path) then
+            present[#present + 1] = index
+        end
+    end
+    local want = nil
+    if part ~= nil then
+        want = part
+    elseif #present == 1 then
+        want = present[1]
+    elseif #present == 0 then
+        want = 1
+    else
+        local names = {}
+        for _, index in ipairs(present) do
+            names[#names + 1] = spec.parts[index]
+        end
+        return nil, "part required", "payload holds " .. tostring(#present) ..
+            " parts (" .. table.concat(names, ", ") .. "); say which disk this is"
+    end
+    if want < 1 or want > #spec.parts then
+        return nil, "bad part", "profile " .. tostring(spec.name) .. " has " ..
+            tostring(#spec.parts) .. " part(s), got " .. tostring(want)
+    end
+    local root = joinPath(base, spec.parts[want])
+    if not (fs.exists(root) and fs.isDir(root)) then
+        -- Flat layout: the part was swapped into the payload root itself.
+        root = base
+    end
+    return {index = want, root = root}
+end
+
+-- Shared by plan() and write(): everything that can refuse a write without
+-- touching the disk (unknown profile, wrong part, missing payload, byte budget)
+-- happens here, so the two paths cannot disagree about it.
+-- Returns (plan, entries) or (nil, reason, detail).
+local function buildPlan(profileName, part)
+    local conf = cfg()
+    local base = tostring(conf.payload_dir or "/payload")
+    local name = nil
+    local spec = nil
+    if profileName ~= nil and profileName ~= "" then
+        if profiles == nil then
+            return nil, "unknown profile", "cannot load /itnpass_profile.lua"
+        end
+        name = profiles.parse(profileName)
+        if name == nil then
+            return nil, "unknown profile", "profile '" .. tostring(profileName) ..
+                "' is not one of: " .. profiles.names_line()
+        end
+        spec = profiles.get(name)
+    end
+
+    local requested, partError = partNumber(part)
+    if part ~= nil and requested == nil then
+        return nil, tostring(partError or "bad part"), "a part must be an integer >= 1"
+    end
+
+    local root = base
+    local index = nil
+    if spec ~= nil and #spec.parts > 0 then
+        local chosen, why, detail = selectPart(base, spec, requested)
+        if not chosen then
+            return nil, why, detail
+        end
+        root = chosen.root
+        index = chosen.index
+    elseif requested ~= nil and requested ~= 1 then
+        return nil, "bad part", "a single-tree write cannot use part " ..
+            tostring(requested)
+    elseif requested ~= nil then
+        index = 1
+    end
+
+    if not fs.exists(root) or not fs.isDir(root) then
+        return nil, "no payload", root .. " is missing on the server"
+    end
+
+    local entries = walk(root)
+    if #entries == 0 then
+        return nil, "empty payload", root .. " contains nothing to write"
+    end
+    local totalBytes = 0
+    local fileCount = 0
+    local dirCount = 0
+    for _, item in ipairs(entries) do
+        if item.kind == "file" then
+            totalBytes = totalBytes + item.size
+            fileCount = fileCount + 1
+        else
+            dirCount = dirCount + 1
+        end
+    end
+
+    local capacity = nil
+    if name ~= nil and profiles ~= nil then
+        capacity = profiles.capacity(name, conf)
+    end
+    if capacity ~= nil and capacity > 0 and totalBytes > capacity then
+        return nil, "payload too large", "need " .. tostring(totalBytes) ..
+            " bytes, profile " .. name .. " allows " .. tostring(capacity)
+    end
+
+    return {
+        profile = name,
+        part = index,
+        source = root,
+        files = fileCount,
+        dirs = dirCount,
+        bytes = totalBytes,
+        capacity = capacity,
+    }, entries
+end
+
+function M.plan(profileName, part)
+    local plan, extra, detail = buildPlan(profileName, part)
+    if not plan then
+        return nil, extra, detail
+    end
+    return plan
+end
+
 function M.status()
     local drives = scanDrives()
     local st = {state = "", drives = drives}
@@ -203,22 +370,12 @@ function M.status()
     return st
 end
 
-function M.write()
-    local conf = cfg()
-    local root = tostring(conf.payload_dir or "/payload")
-    if not fs.exists(root) or not fs.isDir(root) then
-        return false, "no payload", root .. " is missing on the server"
+function M.write(profileName, part)
+    local plan, entries, planDetail = buildPlan(profileName, part)
+    if not plan then
+        return false, entries, planDetail
     end
-    local entries = walk(root)
-    if #entries == 0 then
-        return false, "empty payload", root .. " contains nothing to write"
-    end
-    local totalBytes = 0
-    for _, entry in ipairs(entries) do
-        if entry.kind == "file" then
-            totalBytes = totalBytes + entry.size
-        end
-    end
+    local totalBytes = plan.bytes
 
     local loc, reason, detail = locate()
     if not loc then
@@ -370,6 +527,12 @@ function M.write()
         dirs = dirs,
         bytes = totalBytes,
         free_after = freeAfter,
+        -- Empty on the pre-profile call shape, so an old caller sees the same
+        -- info table it always did.
+        profile = plan.profile,
+        part = plan.part,
+        source = plan.source,
+        capacity = plan.capacity,
     }
 end
 

@@ -29,6 +29,7 @@ M.VERSION = "1.0"
 M.NOTE_TAG = "itnp-batch/1"
 M.STORE_PATH = "/auth/itnpass_store.lua"
 M.CONFIG_PATH = "/auth/itnpass_config.lua"
+M.PROFILE_PATH = "/itnpass_profile.lua"
 M.LOG_PATH = "/auth/itnpass_server.log"
 M.STAGE_DIR_NAME = ".stage"
 M.MAX_USES = 1000
@@ -158,6 +159,19 @@ local function loadStore()
     end
     return store
 end
+
+-- The payload profile catalog. Batches are minted for a profile (the store
+-- binds the new records to it), so an unknown name must be refused instead of
+-- producing keys that no station can ever charge.
+local function loadProfiles()
+    local ok, mod = pcall(dofile, M.PROFILE_PATH)
+    if not ok or type(mod) ~= "table" then
+        return nil, "cannot load " .. M.PROFILE_PATH
+    end
+    return mod
+end
+
+M.loadProfiles = loadProfiles
 
 local function config()
     local ok, value = pcall(dofile, M.CONFIG_PATH)
@@ -421,6 +435,12 @@ function M.parse(argv)
 end
 
 function M.usage()
+    local profiles = loadProfiles()
+    local profileLine = "  profiles come from " .. M.PROFILE_PATH .. ": default"
+    if profiles then
+        profileLine = "  profiles come from " .. M.PROFILE_PATH .. ": " ..
+            profiles.names_line()
+    end
     return table.concat({
         "ITN-Pass batch tool " .. M.VERSION,
         "usage:",
@@ -430,6 +450,7 @@ function M.usage()
         "  itnpass_batch revoke <id-prefix|full key> --yes",
         "  itnpass_batch unrevoke <full key>",
         "  itnpass_batch prune",
+        profileLine,
         "plaintext keys never go to the screen:",
         "  new stages them under " .. M.STAGE_DIR_NAME .. "/, export copies that file to an",
         "  explicit path and removes the staging copy unless --keep is given.",
@@ -454,7 +475,35 @@ local function commandNew(spec)
         return false, 0, "count_too_large",
             "count above max_batch (" .. tostring(maxBatch) .. ")", nil, nil
     end
-    local uses = integerOf(conf.default_uses) or 2
+    local profiles, whyProfiles = loadProfiles()
+    if not profiles then
+        return false, 0, "profile_unavailable", whyProfiles, nil, nil
+    end
+    -- The profile is chosen before the use count: a profile carries its own
+    -- card key budget (one disk per use), so `new --profile pyroet-os` without
+    -- --uses must mint single-write keys, not the station-wide default.
+    local profile = M.DEFAULT_PROFILE
+    if spec.profile ~= nil then
+        profile = safeLabel(spec.profile, M.MAX_PROFILE_LEN)
+        if profile == nil then
+            return false, 0, "bad_profile",
+                "profile must be 1-" .. tostring(M.MAX_PROFILE_LEN) ..
+                " characters of [A-Za-z0-9._-]", nil, nil
+        end
+    elseif type(conf.profile) == "string" and conf.profile ~= "" then
+        -- Site default, resolved by /itnpass_profile.lua when the config loads.
+        profile = conf.profile
+    end
+    if not profiles.is_known(profile) then
+        return false, 0, "bad_profile",
+            "unknown profile " .. tostring(profile) .. " (known: " ..
+            profiles.names_line() .. ")", nil, nil
+    end
+
+    local uses = profiles.default_uses(profile)
+    if uses == nil then
+        uses = integerOf(conf.default_uses) or 2
+    end
     if spec.uses ~= nil then
         uses = integerOf(spec.uses)
         if uses == nil then
@@ -472,15 +521,6 @@ local function commandNew(spec)
             return false, 0, "bad_expires",
                 "expires must be between 1 and " .. tostring(M.MAX_EXPIRES_DAYS) .. " days",
                 nil, nil
-        end
-    end
-    local profile = M.DEFAULT_PROFILE
-    if spec.profile ~= nil then
-        profile = safeLabel(spec.profile, M.MAX_PROFILE_LEN)
-        if profile == nil then
-            return false, 0, "bad_profile",
-                "profile must be 1-" .. tostring(M.MAX_PROFILE_LEN) ..
-                " characters of [A-Za-z0-9._-]", nil, nil
         end
     end
     local prefix = M.DEFAULT_PREFIX
@@ -513,7 +553,7 @@ local function commandNew(spec)
         expires = expires,
     })
 
-    local codes, pending = store.mint(count, uses, note)
+    local codes, pending = store.mint(count, uses, note, profile)
     if not codes then
         return false, 0, "mint_failed", tostring(pending), nil, nil
     end

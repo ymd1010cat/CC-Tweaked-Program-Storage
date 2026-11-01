@@ -63,9 +63,9 @@ itnpass_batch new <count> [--uses N] [--prefix P] [--profile NAME] [--expires DA
 | 参数 | 默认 | 取值 | 说明 |
 | --- | --- | --- | --- |
 | `<count>` | 无（必填） | 1 .. `max_batch`（配置，默认 200） | 本批张数；超过上限**直接报错**，不会被悄悄截断 |
-| `--uses N` | 配置 `default_uses`（默认 2） | 1 .. 1000 | 每张卡密可写盘次数 |
+| `--uses N` | 该 profile 的默认次数（`pyroet-os` = 1、`pyromputer-os` = 2、`default` = 配置 `default_uses`，默认 2） | 1 .. 1000 | 每张卡密可写盘次数；显式给出时永远优先 |
 | `--prefix P` | `batch` | `[A-Za-z0-9._-]`，≤24 字符，首字符必须是字母或数字 | 批次 ID 前缀，同时是 staging 文件名前缀 |
-| `--profile NAME` | `default` | `[A-Za-z0-9._-]`，≤32 字符 | 这批卡密给哪种装机盘用（例如 `pyromputer-os` / `pyroet-os`），只记录不参与判定 |
+| `--profile NAME` | 配置 `profile`（默认 `default`） | `/itnpass_profile.lua` 目录里的名字（`default` / `pyroet-os` / `pyromputer-os`），`[A-Za-z0-9._-]`、≤32 字符 | 这批卡密给哪种装机盘用。**名字必须在目录里**，拼错即 `error=bad_profile`；生成的记录会**绑定**该 profile，次数只能花在对应 payload 的写盘上（见 README 2.6） |
 | `--expires DAYS` | 不设 | 1 .. 3650 | 到期天数。**注意见 6.3：站端不会自己看日期** |
 
 行为：
@@ -93,6 +93,9 @@ ITNP_BATCH new count=20 ok=1 batch=labA-20261101-093000 uses=2 profile=pyroet-os
 - `expires`：绝对毫秒时间戳，`0` 表示这批没有设置到期。
 - 批次元数据写在库记录的 `note` 字段里（`itnp-batch/1 batch=.. profile=.. prefix=.. uses=.. expires=..`），
   所以**不需要改数据库结构**，老版本 store 读到的只是一条普通备注。
+- profile 的**绑定**另有一个追加字段 `profile`（`mint` 的可选第 4 个参数写它），它决定扣次口径，
+  与 `note` 里的元数据分工：`note` 记录"这批是谁发的、什么时候到期"，记录字段决定"能花在哪种
+  payload 上"。管理台手工生成的卡不写这个字段，因此任何 profile 都能用（README 5.5）。
 
 重复同一秒生成会得到 `-2`、`-3` 后缀的批次 ID，staging 文件永远不会被覆盖。
 

@@ -14,8 +14,20 @@ local M = {}
 local LOG_PATH = "/auth/itnpass_server.log"
 local FAULT_PATH = "/auth/itnpass_fault.flag"
 local SERVER_ID_PATH = "/auth/itnpass_station_id"
+local PROFILE_PATH = "/itnpass_profile.lua"
 local ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 local REPLAY_CAP = 2000
+
+-- Payload profile catalog (/itnpass_profile.lua). Loaded once: the profile a
+-- request asks for is validated here, and the same table is what the disk
+-- writer uses to pick the payload tree, so a typo cannot reach the disk.
+local profiles = nil
+do
+    local ok, mod = pcall(dofile, PROFILE_PATH)
+    if ok and type(mod) == "table" then
+        profiles = mod
+    end
+end
 
 local function nowMs()
     return os.epoch("utc")
@@ -267,10 +279,13 @@ local function baseReply(ctx, kind, nonce)
     }
 end
 
-local function verifyReply(ctx, nonce, success, message, rec)
+local function verifyReply(ctx, nonce, success, message, rec, profile)
     local out = baseReply(ctx, "verify_response", nonce)
     out.success = success and true or false
     out.message = message
+    if profile then
+        out.profile = profile
+    end
     if rec then
         out.uses_left = rec.uses_left
         out.uses_total = rec.uses_total
@@ -300,38 +315,101 @@ local function modeOf(ctx)
     return "pass"
 end
 
+-- The payload profile this request installs. A request may name one
+-- explicitly; otherwise the station profile resolved at config load applies,
+-- and "default" is the fallback for a hand-built context. Returns the catalog
+-- name, or nil plus the refusal message -- an unknown name is refused before
+-- the store or the disk is touched.
+local function profileOf(ctx, message)
+    local asked = nil
+    if type(message) == "table" then
+        asked = message.profile
+    end
+    if asked ~= nil then
+        if type(asked) ~= "string" or asked == "" then
+            return nil, "unknown profile"
+        end
+        if profiles == nil then
+            return nil, "profile unavailable"
+        end
+        local name = profiles.parse(asked)
+        if name == nil then
+            return nil, "unknown profile"
+        end
+        return name
+    end
+    local configured = nil
+    if type(ctx.cfg) == "table" then
+        configured = ctx.cfg.profile
+    end
+    if type(configured) == "string" and configured ~= "" then
+        if profiles ~= nil and not profiles.is_known(configured) then
+            return nil, "unknown profile"
+        end
+        return configured
+    end
+    return "default"
+end
+
+-- Runs the writer's payload and byte-budget check before a card key is
+-- charged, so an over-large payload or a missing part costs the terminal
+-- nothing. A writer without plan() (a stub, an older deployment) skips the
+-- check: the transaction below then reports the same problems itself.
+-- Returns (true, plan) or (nil, reason, detail).
+local function planWrite(ctx, profileName, part)
+    if type(ctx.writer) ~= "table" or type(ctx.writer.plan) ~= "function" then
+        return true
+    end
+    local called, plan, reason, detail = pcall(ctx.writer.plan, profileName, part)
+    if not called then
+        return nil, "disk write error", tostring(plan)
+    end
+    if not plan then
+        return nil, tostring(reason or "disk write error"), tostring(detail or "")
+    end
+    return true, plan
+end
+
 -- Free-mode write: no reservation, no charge, no pass database lookup. The
 -- disk transaction is exactly the one the paid path runs (validate the disk,
 -- copy the payload, report files/dirs/bytes, roll back on failure), because a
 -- free station is still allowed to fail a write.
-local function freeWrite(ctx, terminal, nonce, resId)
+local function freeWrite(ctx, terminal, nonce, resId, profileName, part)
     -- pcall keeps the return positions: (ok, first, second, third, ...).
-    local called, wrote, writeResult, writeExtra = pcall(ctx.writer.write)
+    local called, wrote, writeResult, writeExtra = pcall(ctx.writer.write,
+        profileName, part)
     if not called then
         M.log("ITNP_FREE_WRITE ok=0 reason=exception " .. tostring(wrote) ..
-            " terminal=" .. terminal .. " reservation=" .. resId)
+            " terminal=" .. terminal .. " reservation=" .. resId ..
+            " profile=" .. tostring(profileName))
         return writeReply(ctx, nonce, false, "disk write error",
-            {charged = false, free = true, mode = "free", detail = tostring(wrote)})
+            {charged = false, free = true, mode = "free", profile = profileName,
+                detail = tostring(wrote)})
     end
     if not wrote then
         M.log("ITNP_FREE_WRITE ok=0 reason=" .. tostring(writeResult) ..
             " detail=" .. tostring(writeExtra) ..
-            " terminal=" .. terminal .. " reservation=" .. resId)
+            " terminal=" .. terminal .. " reservation=" .. resId ..
+            " profile=" .. tostring(profileName))
         local text = tostring(writeResult or "disk write error")
         if writeExtra ~= nil and tostring(writeExtra) ~= "" then
             text = text .. ": " .. tostring(writeExtra)
         end
         return writeReply(ctx, nonce, false, "disk write error",
-            {charged = false, free = true, mode = "free", detail = text})
+            {charged = false, free = true, mode = "free", profile = profileName,
+                detail = text})
     end
     local info = writeResult or {}
     M.log("ITNP_FREE_WRITE ok=1 files=" .. tostring(info.files) ..
         " dirs=" .. tostring(info.dirs) .. " bytes=" .. tostring(info.bytes) ..
-        " terminal=" .. terminal .. " reservation=" .. resId)
+        " terminal=" .. terminal .. " reservation=" .. resId ..
+        " profile=" .. tostring(profileName) .. " part=" .. tostring(info.part))
     return writeReply(ctx, nonce, true, "OK (free mode, no use charged)", {
         charged = false,
         free = true,
         mode = "free",
+        profile = profileName,
+        part = info.part,
         files = info.files,
         dirs = info.dirs,
         bytes = info.bytes,
@@ -353,12 +431,18 @@ local function handleVerify(ctx, message)
         M.log("ITNP_DENY terminal=" .. terminal .. " reason=duplicate request")
         return verifyReply(ctx, nonce, false, "duplicate request")
     end
+    local profileName, profileError = profileOf(ctx, message)
+    if not profileName then
+        M.log("ITNP_DENY terminal=" .. terminal .. " reason=" .. tostring(profileError))
+        return verifyReply(ctx, nonce, false, tostring(profileError))
+    end
     if modeOf(ctx) == "free" then
         -- Free mode: the pass database is never consulted (no lookup, no
         -- failure counter, no lockout). The reply keeps the paid shape and
         -- simply omits the use counters.
-        M.log("ITNP_FREE_VERIFY terminal=" .. terminal .. " uses=none")
-        local freeReply = verifyReply(ctx, nonce, true, "OK")
+        M.log("ITNP_FREE_VERIFY terminal=" .. terminal .. " uses=none profile=" ..
+            profileName)
+        local freeReply = verifyReply(ctx, nonce, true, "OK", nil, profileName)
         freeReply.free = true
         freeReply.mode = "free"
         return freeReply
@@ -370,18 +454,19 @@ local function handleVerify(ctx, message)
     end
     local code = trim(message.code)
     if code == "" then
-        return verifyReply(ctx, nonce, false, "empty code")
+        return verifyReply(ctx, nonce, false, "empty code", nil, profileName)
     end
-    local rec, reason = ctx.store.lookup(code)
+    local rec, reason = ctx.store.lookup(code, profileName)
     if rec then
         noteSuccess(ctx, terminal)
         M.log("ITNP_CHECK terminal=" .. terminal .. " success=1 uses_left=" ..
-            tostring(rec.uses_left))
-        return verifyReply(ctx, nonce, true, "OK", rec)
+            tostring(rec.uses_left) .. " profile=" .. profileName)
+        return verifyReply(ctx, nonce, true, "OK", rec, profileName)
     end
     noteFailure(ctx, terminal, now)
-    M.log("ITNP_DENY terminal=" .. terminal .. " reason=" .. tostring(reason))
-    return verifyReply(ctx, nonce, false, reason)
+    M.log("ITNP_DENY terminal=" .. terminal .. " reason=" .. tostring(reason) ..
+        " profile=" .. profileName)
+    return verifyReply(ctx, nonce, false, reason, nil, profileName)
 end
 
 local function handleWrite(ctx, message)
@@ -399,8 +484,30 @@ local function handleWrite(ctx, message)
         M.log("ITNP_DENY terminal=" .. terminal .. " reason=duplicate request")
         return writeReply(ctx, nonce, false, "duplicate request", {charged = false})
     end
+    local profileName, profileError = profileOf(ctx, message)
+    if not profileName then
+        M.log("ITNP_DENY terminal=" .. terminal .. " reason=" .. tostring(profileError))
+        return writeReply(ctx, nonce, false, tostring(profileError), {charged = false})
+    end
+    -- Payload and byte-budget check first: a payload that does not fit its
+    -- profile must not burn a reservation or a use.
+    local planned, planOrReason, planDetail = planWrite(ctx, profileName, message.part)
+    if not planned then
+        M.log("ITNP_DENY terminal=" .. terminal .. " reason=" ..
+            tostring(planOrReason) .. " detail=" .. tostring(planDetail) ..
+            " profile=" .. profileName)
+        return writeReply(ctx, nonce, false, tostring(planOrReason), {
+            charged = false,
+            profile = profileName,
+            detail = tostring(planDetail),
+        })
+    end
+    local writePart = message.part
+    if type(planOrReason) == "table" and planOrReason.part ~= nil then
+        writePart = planOrReason.part
+    end
     if modeOf(ctx) == "free" then
-        return freeWrite(ctx, terminal, nonce, resId)
+        return freeWrite(ctx, terminal, nonce, resId, profileName, writePart)
     end
     local wait = lockoutSeconds(ctx, terminal, now)
     if wait then
@@ -410,57 +517,66 @@ local function handleWrite(ctx, message)
     end
     local code = trim(message.code)
     if code == "" then
-        return writeReply(ctx, nonce, false, "empty code", {charged = false})
+        return writeReply(ctx, nonce, false, "empty code",
+            {charged = false, profile = profileName})
     end
 
-    local grant, reserveReason = ctx.store.reserve(code, resId)
+    local grant, reserveReason = ctx.store.reserve(code, resId, profileName)
     if not grant then
         noteFailure(ctx, terminal, now)
-        M.log("ITNP_DENY terminal=" .. terminal .. " reason=" .. tostring(reserveReason))
-        return writeReply(ctx, nonce, false, reserveReason, {charged = false})
+        M.log("ITNP_DENY terminal=" .. terminal .. " reason=" .. tostring(reserveReason) ..
+            " profile=" .. profileName)
+        return writeReply(ctx, nonce, false, reserveReason,
+            {charged = false, profile = profileName})
     end
     M.log("ITNP_GRANT terminal=" .. terminal .. " reservation=" .. resId ..
-        " fp=" .. tostring(grant.fp))
+        " fp=" .. tostring(grant.fp) .. " profile=" .. profileName)
 
     -- pcall keeps the return positions: (ok, first, second, third, ...).
     -- writer.write returns (true, info) or (false, reason, detail).
-    local called, wrote, writeResult, writeExtra = pcall(ctx.writer.write)
+    local called, wrote, writeResult, writeExtra = pcall(ctx.writer.write,
+        profileName, writePart)
     if not called then
         ctx.store.release(resId)
         M.log("ITNP_WRITE_FAIL terminal=" .. terminal .. " reservation=" .. resId ..
-            " reason=exception " .. tostring(wrote))
+            " reason=exception " .. tostring(wrote) .. " profile=" .. profileName)
         return writeReply(ctx, nonce, false, "disk write error",
-            {charged = false, detail = tostring(wrote)})
+            {charged = false, profile = profileName, detail = tostring(wrote)})
     end
     if not wrote then
         ctx.store.release(resId)
         M.log("ITNP_WRITE_FAIL terminal=" .. terminal .. " reservation=" .. resId ..
-            " reason=" .. tostring(writeResult) .. " detail=" .. tostring(writeExtra))
+            " reason=" .. tostring(writeResult) .. " detail=" .. tostring(writeExtra) ..
+            " profile=" .. profileName)
         local text = tostring(writeResult or "disk write error")
         if writeExtra ~= nil and tostring(writeExtra) ~= "" then
             text = text .. ": " .. tostring(writeExtra)
         end
         return writeReply(ctx, nonce, false, "disk write error",
-            {charged = false, detail = text})
+            {charged = false, profile = profileName, detail = text})
     end
     local info = writeResult or {}
 
-    local rec, charged = ctx.store.commit(resId)
+    local rec, charged = ctx.store.commit(resId, profileName)
     if not rec then
         M.log("ITNP_ERROR commit failed reservation=" .. resId ..
-            " reason=" .. tostring(charged))
+            " reason=" .. tostring(charged) .. " profile=" .. profileName)
         return writeReply(ctx, nonce, false, "no such reservation", {charged = false})
     end
     M.log("ITNP_WRITE reservation=" .. resId .. " files=" .. tostring(info.files) ..
-        " dirs=" .. tostring(info.dirs) .. " bytes=" .. tostring(info.bytes))
+        " dirs=" .. tostring(info.dirs) .. " bytes=" .. tostring(info.bytes) ..
+        " profile=" .. profileName .. " part=" .. tostring(info.part))
     M.log("ITNP_COMMIT reservation=" .. resId .. " charged=" ..
-        (charged and "1" or "0") .. " uses_left=" .. tostring(rec.uses_left))
+        (charged and "1" or "0") .. " uses_left=" .. tostring(rec.uses_left) ..
+        " profile=" .. profileName)
     noteSuccess(ctx, terminal)
     return writeReply(ctx, nonce, true,
         charged and "OK" or "written, use not charged", {
             charged = charged,
             uses_left = rec.uses_left,
             uses_total = rec.uses_total,
+            profile = profileName,
+            part = info.part,
             files = info.files,
             dirs = info.dirs,
             bytes = info.bytes,
@@ -503,6 +619,13 @@ function M.start()
         M.fault("cannot load /auth/itnpass_config.lua: " .. tostring(conf))
         return
     end
+    if profiles == nil then
+        -- The profile catalog decides which payload tree a write installs and
+        -- what its byte budget is; without it a profile request cannot be
+        -- honoured, so the station refuses to start instead of writing blind.
+        M.fault("cannot load " .. PROFILE_PATH)
+        return
+    end
 
     local serverId = M.loadServerId()
     local side, modemError = M.pickModem(conf)
@@ -526,9 +649,10 @@ function M.start()
     if conf.mode == "free" then
         startMode = "free"
     end
+    local startProfile = tostring(conf.profile or "default")
     M.log("ITNP_START server_id=" .. serverId .. " channel=" .. tostring(conf.channel) ..
         " keys_usable=" .. tostring(st.alive) .. " keys_total=" .. tostring(st.total) ..
-        " mode=" .. startMode)
+        " mode=" .. startMode .. " profile=" .. startProfile)
 
     local ctx = M.newContext(conf, store, writer, serverId)
     local heartbeatInterval = tonumber(conf.heartbeat_interval) or 2

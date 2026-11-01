@@ -29,6 +29,7 @@ SERVER COMPUTER - deploy plan
   /sha256.lua                   itn-pass/common/sha256.lua
   /itnpass_net.lua              itn-pass/common/itnpass_net.lua
   /itnpass_mode.lua             itn-pass/common/itnpass_mode.lua
+  /itnpass_profile.lua          itn-pass/common/itnpass_profile.lua
   /auth/itnpass_config.lua      itn-pass/server/auth/itnpass_config.lua
   /auth/itnpass_store.lua       itn-pass/server/auth/itnpass_store.lua
   /system/itnpass_server.lua    itn-pass/server/system/itnpass_server.lua
@@ -36,9 +37,12 @@ SERVER COMPUTER - deploy plan
   /system/itnpass_admin.lua     itn-pass/server/system/itnpass_admin.lua
   /payload/...                  your own files (path configurable via payload_dir)
 
-  /sha256.lua and /itnpass_net.lua MUST sit at the ROOT of the server disk:
-  the store does dofile("/sha256.lua"), the config does dofile("/itnpass_net.lua").
-  Missing /sha256.lua prints "[ERROR] cannot load /sha256.lua" in the console.
+  /sha256.lua, /itnpass_net.lua and /itnpass_profile.lua MUST sit at the ROOT of
+  the server disk: the store does dofile("/sha256.lua"), the config does
+  dofile("/itnpass_net.lua"), and the config / writer / service / batch tool do
+  dofile("/itnpass_profile.lua"). Missing /sha256.lua prints
+  "[ERROR] cannot load /sha256.lua" in the console; missing /itnpass_profile.lua
+  raises the service fault flag and batch prints error=profile_unavailable.
 
 TERMINAL COMPUTER - deploy plan
   game path                     package path
@@ -90,6 +94,22 @@ RUN MODES
   The two computers must agree: a terminal in free mode sends an empty
   credential, which a station still in pass mode rejects as "empty code".
 
+PAYLOAD PROFILES
+  A profile names the payload a disk write installs and its byte budget.
+  Catalog: /itnpass_profile.lua. Names: default, pyroet-os, pyromputer-os.
+    default       one tree (/payload), no profile byte budget
+    pyroet-os     one floppy, one write transaction, 1,228,800 B budget
+    pyromputer-os two floppies, two write transactions (one per part),
+                  1,228,800 B per disk, payload under /payload/part1|part2
+  Switch without touching code: put the single name
+      pyroet-os
+  into /auth/itnpass_profile.txt on the station, then reboot. It wins over the
+  profile field in the config; an invalid value is rejected and logged as
+  ITNP_PROFILE_BAD in /auth/itnpass_profile.log. Card keys made by
+  "itnpass_batch new --profile NAME" only pay for that profile.
+  Byte budget override: profile_capacity in /auth/itnpass_config.lua, for
+  example { ["pyroet-os"] = 1000000 }.
+
 EXPECTED LOG LINES (station console)
   ITNP_START ...          service started, channel/protocol reported
   ITNP_CHECK ...          a terminal asked to verify a credential
@@ -107,6 +127,10 @@ COMMON FAILURES
                                    kept for compatibility with the old project)
   "modem_side '<x>' is not ..."    the configured modem side is wrong (server)
   "empty code"                     free-mode terminal talking to a pass station
+  "payload too large"              payload above the profile budget; no use was
+                                   charged, shrink the payload or change profile
+  "unknown profile"                profile name not in /itnpass_profile.lua
+  "profile mismatch"               the key is bound to another payload profile
   write fails with a size error    payload does not fit the floppy; shrink it
 
 BUILD AND TEST (repository side, not needed in game)
@@ -114,7 +138,7 @@ BUILD AND TEST (repository side, not needed in game)
       python tools/build_release.py --project itn-pass --out dist/release
   Run the offline regression suite (needs CraftOS-PC):
       pwsh -NoProfile -File itn-pass/tests/run-tests.ps1
-  Baseline: OFFLINE_PASS 991 / OFFLINE_FAIL 0 / OFFLINE_GROUPS 53.
+  Baseline: OFFLINE_PASS 1177 / OFFLINE_FAIL 0 / OFFLINE_GROUPS 60.
   The suite stages itn-pass/.offline and deletes it when it passes.
 
   The zip is reproducible: same inputs, same bytes. Do not write the zip size or

@@ -53,6 +53,7 @@ $copies = [ordered]@{
     'common\sha256.lua'                = 'sha256.lua'
     'common\itnpass_net.lua'           = 'itnpass_net.lua'
     'common\itnpass_mode.lua'          = 'itnpass_mode.lua'
+    'common\itnpass_profile.lua'       = 'itnpass_profile.lua'
     'server\auth\itnpass_config.lua'   = 'auth\itnpass_config.lua'
     'server\auth\itnpass_store.lua'    = 'auth\itnpass_store.lua'
     'server\system\disk_writer.lua'    = 'system\disk_writer.lua'

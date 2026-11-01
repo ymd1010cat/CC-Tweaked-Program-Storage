@@ -9,11 +9,23 @@
 -- Any other value fails safe to "pass". /auth/itnpass_mode.txt overrides this
 -- field when it holds a valid value, so the disk can be switched without a code
 -- change (reboot the station / terminal to apply).
+--
+-- Payload profile (resolved by /itnpass_profile.lua, see README "payload
+-- profiles"): which deployment payload this station writes -- the payload
+-- sub-directory set and the per-disk byte budget come from that catalog.
+-- /auth/itnpass_profile.txt overrides this field exactly like the mode file.
+--   "default"       -- one tree, no profile specific byte budget (legacy shape)
+--   "pyroet-os"     -- one floppy, single write transaction
+--   "pyromputer-os" -- two floppies, one write transaction per part
+-- profile_capacity overrides the catalog byte budget per profile (empty keeps
+-- the measured catalog numbers).
 
 local net = dofile("/itnpass_net.lua")
 
 local config = {
     mode = "pass",
+    profile = "default",
+    profile_capacity = {},
     channel = net.CHANNEL,
     protocol = net.PROTOCOL,
     modem_side = nil,
@@ -44,6 +56,17 @@ else
         config.mode = "pass"
     end
     config.mode_source = "default"
+end
+
+-- Resolve the effective payload profile once, at load time, with the same
+-- priority every reader uses: profile file, then the field above, then
+-- "default". A missing resolver keeps the legacy shape instead of guessing.
+local okProfile, profileModule = pcall(dofile, "/itnpass_profile.lua")
+if okProfile and type(profileModule) == "table" then
+    config.profile, config.profile_source = profileModule.resolve(config)
+else
+    config.profile = "default"
+    config.profile_source = "default"
 end
 
 return config

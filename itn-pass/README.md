@@ -73,6 +73,10 @@ sha256、没有磁盘代码，被拆掉也只得一个转发壳。协议名 `itn
   `default_uses = 2`；
 - Pyroet OS 的达标线是裁剪后 ≤1,228,800 B ⇒ 单盘、单次写盘。
 
+这些数字已经落到代码里：`itn-pass/common/itnpass_profile.lua`（部署为 `/itnpass_profile.lua`）
+就是 profile 目录，写盘引擎按它选 payload 子树、按它的字节预算做预检（见 2.6）。表格只是默认值，
+可以用配置键 `profile_capacity` 按 profile 覆盖——换介质或裁剪 payload 之后不需要改代码。
+
 `/payload` 位于站端自己的电脑盘上，同样受 1,000,000 B 限制；放不下完整 Pyromputer OS 时，
 按"每次只放一半"操作，这与两次写盘事务天然对齐。
 
@@ -86,6 +90,7 @@ sha256、没有磁盘代码，被拆掉也只得一个转发壳。协议名 `itn
 | `/sha256.lua` | `itn-pass/common/sha256.lua` | 纯 Lua SHA-256；站端**必需** |
 | `/itnpass_net.lua` | `itn-pass/common/itnpass_net.lua` | **协议名与频道的唯一来源**（见 3.1） |
 | `/itnpass_mode.lua` | `itn-pass/common/itnpass_mode.lua` | **运行模式的唯一解析器**（`pass`/`free`，见 2.5） |
+| `/itnpass_profile.lua` | `itn-pass/common/itnpass_profile.lua` | **payload profile 的唯一目录**（见 2.6） |
 | `/auth/itnpass_config.lua` | `itn-pass/server/auth/itnpass_config.lua` | 配置表（见第 9 节） |
 | `/auth/itnpass_store.lua` | `itn-pass/server/auth/itnpass_store.lua` | 数据库、pepper、预留与扣次 |
 | `/system/itnpass_server.lua` | `itn-pass/server/system/itnpass_server.lua` | 协议服务、限流、日志 |
@@ -96,7 +101,9 @@ sha256、没有磁盘代码，被拆掉也只得一个转发壳。协议名 `itn
 `/sha256.lua` 与 `/itnpass_net.lua` 都放在根目录：`itnpass_store.lua` 加载时直接
 `dofile("/sha256.lua")`，`itnpass_config.lua` 与终端两个模块直接 `dofile("/itnpass_net.lua")`。
 缺 `/sha256.lua` 时管理台打印 `[ERROR] cannot load /sha256.lua: ...`；缺 `/itnpass_net.lua` 时
-配置表加载失败，服务写故障旗标。
+配置表加载失败，服务写故障旗标。`/itnpass_profile.lua` 与它们同级：`itnpass_config.lua`、
+`disk_writer.lua`、`itnpass_server.lua` 与 `itnpass_batch.lua` 都直接 `dofile` 它，缺了它服务会在
+启动时写故障旗标（`cannot load /itnpass_profile.lua`），批处理工具直接报 `error=profile_unavailable`。
 
 ### 2.2 终端盘
 
@@ -223,6 +230,50 @@ free
 写盘失败（盘不会被写坏，也没有扣次）；站端 `free` + 终端 `pass` 时终端照旧先要凭证，站端不查库、
 直接放行。**安全边界：`free` 只决定"要不要凭证"——写盘校验、失败回滚、磁盘空间预检、`netcheck`
 与限流全部照旧运行。**
+
+### 2.6 payload profile：这次写的是哪套 payload
+
+运行模式（2.5）决定"要不要凭证"，payload profile 决定"写盘写哪套东西、预算多大"。目录只有一份：
+`itn-pass/common/itnpass_profile.lua`（部署为 `/itnpass_profile.lua`），站端服务、写盘引擎、批处理
+工具都从它读；终端不读它（profile 属于站端在写的那张盘，不属于终端）。
+
+| profile | 介质 | 写盘事务 | 每证默认次数 | 每盘字节预算 | payload 子树 |
+| --- | --- | --- | --- | --- | --- |
+| `default` | 任意 | 1 | 站端 `default_uses`（2） | 无（只看软盘剩余空间） | 直接写 `/payload` |
+| `pyroet-os` | 单张软盘 | 1 | 1 | 1,228,800 B | 直接写 `/payload` |
+| `pyromputer-os` | 两张软盘 | 2 | 2 | 1,228,800 B/盘 | `/payload/part1`、`/payload/part2` |
+
+**解析优先级**（与运行模式完全一致）：`/auth/itnpass_profile.txt`（存在且内容合法）→
+`/auth/itnpass_config.lua` 的 `profile` 字段 → 内置默认 `"default"`。名字**区分大小写**、只有小写；
+非法覆盖文件保持配置值（记 `ITNP_PROFILE_BAD`），非法配置值 fail-safe 到 `default`
+（记 `ITNP_CONFIG_BAD key=profile`）。两者都写 `/auth/itnpass_profile.log`。
+
+**写一张盘时发生什么：**
+
+1. profile 决定 payload 子树。`pyromputer-os` 有两个 part：`/payload/part1` 与 `/payload/part2`，
+   一次写盘事务只写其中一个（"一张盘一次事务"）。请求可以显式带 `part`；不带时按盘上实际存在的
+   子树判断——只存在一个 part 目录就用它（写第二张盘：换 payload、重启即可），一个都不存在就按
+   part1 写 `/payload` 本身（操作员把那一半直接换进 `/payload`），两个都在则拒绝并回
+   `part required`（猜错会把错的半张盘写进去）。
+2. 字节预检：payload 总字节 > 该 profile 的预算就**在碰磁盘之前**拒绝（`payload too large:
+   need B bytes, profile P allows N`）。完整 Pyromputer OS（1,395,385 B）按 `pyroet-os` 写会被这条
+   拦下，正是 1.3 的结论在代码里的落点。
+3. 预检发生在**预留之前**：超预算、part 不合法、profile 未知都不会扣次，终端也拿不到预留。
+
+**卡密按 profile 计额度。** 批处理工具 `new --profile NAME` 生成的记录会绑定该 profile（数据库记录
+新增一个 `profile` 字段，是向后兼容的追加字段），一张卡的次数只能花在它对应的 profile 上：跨
+profile 写盘会得到 `profile mismatch`，且不扣次。没有 `profile` 字段的记录（旧库、管理台手工生成的
+卡）是**不绑定**的，任何 profile 都能用——这就是"未指定 profile 时保持现有行为"的兼容路径。
+
+**切换步骤：**
+
+1. 站端盘上写 `/auth/itnpass_profile.txt`（内容就一行 `pyroet-os` / `pyromputer-os` / `default`；
+   `#` 之后是注释，空行忽略，整个文件只应出现一个名字）；删掉它即回到配置里的值。
+2. 重启站端：profile 在启动时解析一次。日志 `ITNP_START ... profile=<名字>` 是确认点。
+3. 发卡时让批次对上 profile（`new ... --profile pyroet-os`）；管理台手工生成的卡不绑定 profile。
+
+**覆盖字节预算**：配置键 `profile_capacity = { ["pyroet-os"] = 1000000 }` 可以按 profile 改预算
+（换介质、改裁剪目标时用），未列出的 profile 用目录里的默认值（见第 9 节）。
 
 ## 3. 协议与频道
 
@@ -402,9 +453,14 @@ pepper 与 `server_id`。真正的防线是 32 个符号的 16 位空间（约 2
 ```
 [指纹] = {
     uses_total, uses_left, created=<epochMs>, note="", revoked=<bool>,
-    last_used=<epochMs|nil>, reservations = { [reservation_id] = <到期 epochMs> }
+    last_used=<epochMs|nil>, reservations = { [reservation_id] = <到期 epochMs> },
+    profile=<"pyroet-os"|...|nil>   -- 追加字段，见 2.6
 }
 ```
+
+`profile` 是**追加**字段：批处理工具 `new --profile NAME` 会写它，表示这张证的次数只花在该 profile 的
+写盘上；没有这个字段的记录（旧库、管理台手工生成的卡）不绑定 profile，任何 profile 都能用。旧版本
+读到带 `profile` 的记录只会把它当普通备注之外的未知字段忽略，读写都不受影响。
 
 启动时 `itnpass_store.lua` 会先播种 PRNG：`os.epoch("utc") % 2147483647` 与
 `floor(os.clock() * 1000000)`、`os.getComputerID() * 7919` 做 `bit32.bxor` 混合。服务与管理台
@@ -418,6 +474,9 @@ payload 先验（在查看驱动器之前）：
 
 - `payload_dir`（默认 `/payload`）不存在 → 原因 `no payload`，说明 `<dir> is missing on the server`。
 - 目录存在但递归列表为空 → 原因 `empty payload`，说明 `<dir> contains nothing to write`。
+- profile 未知 → `unknown profile`；`pyromputer-os` 的两个 part 同时存在 → `part required`；
+  请求里的 `part` 越界 → `bad part`；超出该 profile 的每盘预算 → `payload too large`，
+  说明 `need B bytes, profile P allows N`（见 2.6）。这四条都在预留之前、碰磁盘之前返回，不扣次。
 
 驱动器：
 
@@ -751,6 +810,12 @@ Card key:
 
 - 生成的明文落在 `/cardkeys/.stage/<批次 ID>.txt`（不是管理台的 `cardkeys_*.txt`），
   `export --out <路径>` 写到显式路径后默认删除 staging；**任何命令都不打印完整卡密**。
+- `--profile NAME` 里 `NAME` 必须是 `/itnpass_profile.lua` 目录里的名字（`default` / `pyroet-os` /
+  `pyromputer-os`，见 2.6）；拼错就是 `ok=0 error=bad_profile detail=unknown profile ...`，库零改动。
+  省略时用站端配置里的 `profile`。**批次的卡会绑定这个 profile**，次数只能花在对应的 payload 上。
+- 省略 `--uses` 时用该 profile 的默认次数（`pyroet-os` = 1，`pyromputer-os` = 2，`default` =
+  站端配置的 `default_uses`）；显式 `--uses` 永远优先。
+
 - 每张打一行 JSON（`id`/`fp6`/`uses_left`/`uses_total`/`status`/`batch`/`profile`/`expires`），
   最后一行是 `ITNP_BATCH <命令> count=.. ok=..` 摘要，便于脚本消费。
 - `revoke` 必须带 `--yes`；`unrevoke` **必须给完整卡密**（库里只有指纹，见 8.5）；
@@ -769,6 +834,8 @@ Card key:
 | 键 | 默认值 | 谁读 | 含义 |
 | --- | --- | --- | --- |
 | `mode` | `"pass"` | 服务 / 终端 / 管理台 | 运行模式：`"pass"` 需凭证，`"free"` 公开免费（见 2.5） |
+| `profile` | `"default"` | 服务 / disk_writer / 批处理 | payload profile（见 2.6）；`/auth/itnpass_profile.txt` 可覆盖 |
+| `profile_capacity` | `{}` | disk_writer | 按 profile 覆盖每盘字节预算：`{ ["pyroet-os"] = 1000000 }`；空表 = 用目录默认值 |
 | `channel` | `itnpass_net.CHANNEL`（= 33） | 服务 | 终端网频道；终端从同一个文件读 |
 | `protocol` | `itnpass_net.PROTOCOL`（= `"itnpass_v1"`） | 服务 | 协议名；终端从同一个文件读 |
 | `modem_side` | `nil` | 服务 | 终端侧 modem 的侧名；`nil` = 自动识别 |
@@ -786,10 +853,12 @@ Card key:
 | `global_lockout_ms` | `30000` | 服务 | 全局锁时长，毫秒 |
 
 生效时机：`channel`、`protocol`、`modem_side`、`heartbeat_interval` 在服务启动时读取一次，改后
-需要重启站端；`mode` 也在启动时解析一次（与 `/auth/itnpass_mode.txt` 一起，见 2.5），改后必须
-重启站端与终端；`reservation_ttl_ms` 在每次 `reserve` 时重读，`export_dir` 在每次生成时重读，
-`payload_dir` 在每次写盘时重读；管理台每次启动（约每秒）重读 `admin_file`、`max_batch`、
-`default_uses`。也就是说，改这些值大多不用重启，但网络相关的四项与运行模式必须重启。
+需要重启站端；`mode` 与 `profile` 也在启动时解析一次（与 `/auth/itnpass_mode.txt`、
+`/auth/itnpass_profile.txt` 一起，见 2.5 / 2.6），改后必须重启站端（终端只有 `mode`）；
+`reservation_ttl_ms` 在每次 `reserve` 时重读，`export_dir` 在每次生成时重读，
+`payload_dir` 与 `profile_capacity` 在每次写盘时重读；管理台每次启动（约每秒）重读 `admin_file`、
+`max_batch`、`default_uses`。也就是说，改这些值大多不用重启，但网络相关的四项、运行模式与
+payload profile 必须重启。
 
 计失败的是 `lookup`/`reserve` 的失败（不存在、格式错、撤销、用完、被预留）；空证、重复
 nonce、限流期间的请求、写盘失败都不计入。任意一次成功（verify 或 write）会清空该终端的计数和
@@ -809,19 +878,20 @@ YYYY-MM-DD HH:MM:SS  <消息>
 
 | tag | 示例 / 含义 |
 | --- | --- |
-| `ITNP_START` | `ITNP_START server_id=... channel=33 keys_usable=N keys_total=N mode=pass`，服务成功启动 |
-| `ITNP_CHECK` | `ITNP_CHECK terminal=7 success=1 uses_left=2`，验证成功（不扣次） |
-| `ITNP_DENY` | `ITNP_DENY terminal=7 reason=unknown code`，验证或预留被拒 |
+| `ITNP_START` | `ITNP_START server_id=... channel=33 keys_usable=N keys_total=N mode=pass profile=default`，服务成功启动 |
+| `ITNP_CHECK` | `ITNP_CHECK terminal=7 success=1 uses_left=2 profile=pyroet-os`，验证成功（不扣次） |
+| `ITNP_DENY` | `ITNP_DENY terminal=7 reason=unknown code profile=default`，验证或预留被拒；profile 未知 / 不匹配 / 超预算也走这一行（带 `reason=`） |
 | `ITNP_LOCKED` | 达到阈值 `ITNP_LOCKED terminal=<id> seconds=60`、全局 `...=global seconds=30`、锁期间 `...=<id> blocked=1` |
-| `ITNP_GRANT` | `ITNP_GRANT terminal=7 reservation=... fp=<64 位指纹>`，预留成功、开始写盘 |
-| `ITNP_WRITE_FAIL` | `ITNP_WRITE_FAIL terminal=7 reservation=... reason=... detail=...`，写盘失败、已释放不扣次 |
-| `ITNP_WRITE` | `ITNP_WRITE reservation=... files=3 dirs=1 bytes=4096`，复制完成 |
-| `ITNP_COMMIT` | `ITNP_COMMIT reservation=... charged=1 uses_left=1`，提交结果 |
-| `ITNP_FREE_VERIFY` | `ITNP_FREE_VERIFY terminal=7 uses=none`，`free` 模式下验证直接放行（不查库） |
-| `ITNP_FREE_WRITE` | `ITNP_FREE_WRITE ok=1 files=3 dirs=1 bytes=4096 terminal=.. reservation=..`，`free` 模式写盘成功且未扣次；失败为 `ok=0 reason=.. detail=..` |
+| `ITNP_GRANT` | `ITNP_GRANT terminal=7 reservation=... fp=<64 位指纹> profile=pyroet-os`，预留成功、开始写盘 |
+| `ITNP_WRITE_FAIL` | `ITNP_WRITE_FAIL terminal=7 reservation=... reason=... detail=... profile=...`，写盘失败、已释放不扣次 |
+| `ITNP_WRITE` | `ITNP_WRITE reservation=... files=3 dirs=1 bytes=4096 profile=pyromputer-os part=2`，复制完成 |
+| `ITNP_COMMIT` | `ITNP_COMMIT reservation=... charged=1 uses_left=1 profile=pyroet-os`，提交结果 |
+| `ITNP_FREE_VERIFY` | `ITNP_FREE_VERIFY terminal=7 uses=none profile=default`，`free` 模式下验证直接放行（不查库） |
+| `ITNP_FREE_WRITE` | `ITNP_FREE_WRITE ok=1 files=3 dirs=1 bytes=4096 terminal=.. reservation=.. profile=.. part=..`，`free` 模式写盘成功且未扣次；失败为 `ok=0 reason=.. detail=..` |
 | `ITNP_FREE_SESSION` | 终端侧写 `/auth/itnpass_mode.log`：`ITNP_FREE_SESSION id=<computerID>`，跳过登录进菜单 |
-| `ITNP_CONFIG_BAD` | `/auth/itnpass_mode.log`：`ITNP_CONFIG_BAD key=mode value=... fallback=pass`，配置里的模式值非法，已按 `pass` 处理 |
+| `ITNP_CONFIG_BAD` | `/auth/itnpass_mode.log`：`ITNP_CONFIG_BAD key=mode value=... fallback=pass`；`/auth/itnpass_profile.log`：`ITNP_CONFIG_BAD key=profile value=... fallback=default` |
 | `ITNP_MODE_BAD` | `/auth/itnpass_mode.log`：`ITNP_MODE_BAD path=/auth/itnpass_mode.txt value=... keep=...`，覆盖文件非法，已忽略 |
+| `ITNP_PROFILE_BAD` | `/auth/itnpass_profile.log`：`ITNP_PROFILE_BAD path=/auth/itnpass_profile.txt value=... keep=...`，profile 覆盖文件非法，已忽略 |
 | `ITNP_ERROR` | 启动故障（`ITNP_ERROR fault: ...`）、心跳/回复发送失败、处理异常、prune 异常、commit 找不到预留 |
 | `ITNP_BATCH` | 批处理工具每次执行一行：`ITNP_BATCH new count=20 ok=1 batch=... uses=2 profile=... expires=... staged=...`、`... export count=.. out=... staging=purged`、`... revoke count=1 ok=1 target=<12 位 ID>`、`... prune count=.. reservations=.. expired=.. staging=..`、`... list count=.. total=.. shown=..`；失败带 `ok=0 error=<原因码>`（见 8.6） |
 
@@ -829,6 +899,8 @@ YYYY-MM-DD HH:MM:SS  <消息>
 - `ITNP_FREE_WRITE` 与 `ITNP_WRITE` 不同前缀，grep `ITNP_WRITE` **不会**命中 free 模式的写盘行。
 - 运行模式的诊断（`ITNP_FREE_SESSION` / `ITNP_CONFIG_BAD` / `ITNP_MODE_BAD`）写在单独一份
   `/auth/itnpass_mode.log`，格式与服务日志相同；不混进 `/auth/itnpass_server.log`（终端也可能写它）。
+  同理 payload profile 的诊断（`ITNP_PROFILE_BAD`、profile 版的 `ITNP_CONFIG_BAD`）写在
+  `/auth/itnpass_profile.log`。
 - 故障码 `STORE_DB_CORRUPT` **不带** `ITNP_` 前缀：它同时是 `store.faults()` 返回给调用方的
   故障码，本身就是稳定的诊断标识，只镜像进同一个日志文件（见 10.4）。
 - 管理台不写日志文件（只打印屏幕），它的输出文案见第 8 节，没有 tag；`itnpass_batch` 则每执行
@@ -917,6 +989,11 @@ modem 选择失败、频道打不开。成功选定 modem 后会被删除；若�
 | 同上 + `no mount: disk in ... has no readable filesystem` / `is not mounted at ...` | 软盘文件系统不可用或挂载失败；换盘 |
 | 同上 + `no payload: /payload is missing on the server` | 站端没有 payload 目录或 `payload_dir` 写错 |
 | 同上 + `empty payload: ... contains nothing to write` | payload 目录是空的 |
+| 同上 + `payload too large: need B bytes, profile P allows N` | payload 超出该 profile 的每盘预算：换 profile、裁剪 payload，或改 `profile_capacity`；**没扣次** |
+| 同上 + `unknown profile` | 请求/配置里的 profile 名不在 `/itnpass_profile.lua` 目录里，或该文件没部署；按 2.6 写对名字 |
+| 同上 + `profile mismatch` | 这张卡绑定的是另一个 profile（批次发卡时定的）；用对应的 profile 或另发一批 |
+| 同上 + `part required` | `pyromputer-os` 的 `/payload` 下同时存在 part1 与 part2；只留这次要写的那个 part，或在请求里带 `part` |
+| 同上 + `bad part: profile pyromputer-os has 2 part(s), got 9` | 请求里的 `part` 越界；按 profile 的事务数发 |
 | 同上 + `disk full: need B bytes, F free` | 软盘空间不够；换盘或减小 payload |
 | 同上 + `cannot create ...` / `write failed: ...` / `write truncated ...` | 软盘写入失败；本次已回滚、没扣次，换盘后重试 |
 | `[OK] Disk written.` 但 `[Warning] Use was NOT charged:` | 写盘成功，但提交时该证已无剩余次数（例如最后一次被别处抢先花掉）；盘已写、没扣到 |
@@ -987,20 +1064,22 @@ pwsh -NoProfile -File itn-pass/tests/run-tests.ps1
 环境变量 `ITNPASS_OFFLINE_DIR`）、`-KeepStaging`（PASS 后仍保留 staging，便于看日志）。
 
 - staging 布局 = 本文档第 2 节的部署布局（`/sha256.lua`、`/itnpass_net.lua`、`/itnpass_mode.lua`、
-  `auth/`、`system/`）加上 `tests/`，落在 `<DataDir>/computer/20`（`terminal/startup.lua` 额外
-  stage 成 `tests/terminal_startup.lua`，供套件驱动真实开机脚本）。
+  `/itnpass_profile.lua`、`auth/`、`system/`）加上 `tests/`，落在 `<DataDir>/computer/20`
+  （`terminal/startup.lua` 额外 stage 成 `tests/terminal_startup.lua`，供套件驱动真实开机脚本）。
 - **PASS 时自动删除 staging**；失败时保留供排查；`-KeepStaging` 让成功的运行也保留。
 - 基线（本仓库当前工作树，实测约 4 秒）：
 
   ```
-  OFFLINE_PASS 991 / OFFLINE_FAIL 0 / OFFLINE_GROUPS 53
+  OFFLINE_PASS 1177 / OFFLINE_FAIL 0 / OFFLINE_GROUPS 60
   ```
 
   `t_mode.lua` 是运行模式的专项套件（配置/覆盖文件优先级、终端 kernel 与界面、站端两条链路、
   管理台 `MODE:` 行、开机仍跑 `netcheck`），占其中的 11 个 group、214 条断言；
   `t_batch.lua` 是批处理工具的专项套件（参数解析、批次元数据、`new`/`list`/`export`/`revoke`/
   `unrevoke`/`prune`、坏库、日志关键字、与 store 的扣次语义一致），占 13 个 group、289 条断言，
-  并断言"完整卡密从不出现在 stdout"。
+  并断言"完整卡密从不出现在 stdout"；`t_profile.lua` 是 payload profile 的专项套件（目录与解析
+  优先级、按 profile 计额度与旧库兼容、part 选择与字节预检、站端 verify/write 的 profile 与 part、
+  批处理 `--profile`/默认次数），占 7 个 group、186 条断言。
 
 - `tests/t_*.lua` 由 `tests/run.lua` 用 `fs.list("/tests")` 自动发现，新增测试文件不需要改
   `run.lua` 或 `run-tests.ps1`。
@@ -1025,20 +1104,22 @@ python tools/build_release.py --project itn-pass --out dist/release
 发布包内容口径：**只放运行时 + 文档 + 许可证，不放 `tests/`。**
 
 ```
-itn-pass/     18 个 lua（common/ server/ terminal/）
+itn-pass/     19 个 lua（common/ server/ terminal/）
 itn-pass/README.md
 itn-pass/DECISIONS.md
 itn-pass/docs/DISTRIBUTION.md
+itn-pass/INSTALL.txt
 LICENSE       （仓库根）
 ```
 
-`tests/` 是开发材料，随发布包分发只会让访客盘多出 14 个文件、5,330 行的测试代码和一个
+`tests/` 是开发材料，随发布包分发只会让访客盘多出 15 个文件、6,150 余行的测试代码和一个
 `run-tests.ps1`（它依赖 Windows + CraftOS-PC 路径，解包后直接跑必然报错）。排除规则写在
 `tools/build_release.py` 的 `EXCLUDE_FROM_RELEASE`，**只对 `itn-pass` 生效**（`sentinel/` 的
-`tests/` 照旧进包，其它项目的产物一个字节都不变）。实测：33 → **22 个成员**（18 lua + README +
-DECISIONS + docs/DISTRIBUTION.md + LICENSE），zip 体积从约 85.5 KB 降到约 60 KB；加入批处理工具
-与 `docs/` 之后当前约 90 KB（精确字节以当次构建输出为准——README、DECISIONS 与 DISTRIBUTION
-自己也在包内，写死字节数会让哈希自指）。
+`tests/` 照旧进包，其它项目的产物一个字节都不变）。实测：33 → 22 个成员（18 lua + README +
+DECISIONS + docs/DISTRIBUTION.md + LICENSE），zip 体积从约 85.5 KB 降到约 60 KB；加入批处理工具、
+`docs/`、`INSTALL.txt` 与 `common/itnpass_profile.lua` 之后当前 **24 个成员（19 lua）**，体积约
+100 KB（精确字节以当次构建输出为准——README、DECISIONS 与 DISTRIBUTION 自己也在包内，写死字节数
+会让哈希自指）。
 
 `docs/` **进包**（与本项目其它 `tests/` 的处理相反）：它是运维文档，README 8.6 直接指向它，
 随包分发才不会出现"文档里说的文件不在包里"。`tools/build_release.py` 只排除 `tests/`，
@@ -1067,6 +1148,7 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
 | `/sha256.lua` | SHA-256 实现，`itnpass_store.lua` 加载时必需 |
 | `/itnpass_net.lua` | 协议名与频道（与终端共用同一个文件） |
 | `/itnpass_mode.lua` | 运行模式解析：`/auth/itnpass_mode.txt` > 配置 `mode` > `pass`（见 2.5） |
+| `/itnpass_profile.lua` | payload profile 目录与解析：`/auth/itnpass_profile.txt` > 配置 `profile` > `default`（见 2.6） |
 | `/auth/itnpass_config.lua` | 配置表（见第 9 节） |
 | `/auth/itnpass_store.lua` | 指纹库、pepper、预留、commit/release、生成与导出、坏库保留 |
 | `/system/itnpass_server.lua` | 协议、心跳、限流、nonce 去重、日志、写盘事务 |
@@ -1086,7 +1168,9 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
 | `/auth/itnpass_admin.db` | 首次设置管理员密码时创建 |
 | `/auth/itnpass_server.log` | 服务、批处理工具与模式诊断共同追加写的日志（`ITNP_*`；批处理见 8.6） |
 | `/auth/itnpass_mode.log` | 运行模式诊断（`ITNP_FREE_SESSION` / `ITNP_CONFIG_BAD` / `ITNP_MODE_BAD`） |
+| `/auth/itnpass_profile.log` | payload profile 诊断（`ITNP_PROFILE_BAD`、profile 版的 `ITNP_CONFIG_BAD`） |
 | `/auth/itnpass_mode.txt` | **可选**覆盖文件：`pass` 或 `free`，存在且合法时优先于配置（见 2.5） |
+| `/auth/itnpass_profile.txt` | **可选**覆盖文件：`default` / `pyroet-os` / `pyromputer-os`，存在且合法时优先于配置（见 2.6） |
 | `/auth/itnpass_fault.flag` | 仅启动失败时出现，一行原因 |
 | `/cardkeys/cardkeys_*.txt`、`/cardkeys/latest.txt` | 管理台生成批次时的明文导出；拷出后手动删除 |
 | `/cardkeys/.stage/<批次 ID>.txt` | 批处理工具 `new` 的明文 staging；`export` 成功后默认删除（见 8.6） |
@@ -1117,9 +1201,9 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
 1. 准备硬件：站端配两个有线 modem（一个给网络 A、一个给网络 B）和网络 B 上**恰好一个**
    disk drive；每台终端一个有线 modem。
 2. 拷贝站端文件：`/startup.lua`、`/sha256.lua`、`/itnpass_net.lua`、`/itnpass_mode.lua`、
-   `/auth/itnpass_config.lua`、`/auth/itnpass_store.lua`、`/system/itnpass_server.lua`、
-   `/system/disk_writer.lua`、`/system/itnpass_admin.lua`、`/system/itnpass_batch.lua`，
-   以及 `/payload/`。只想用管理台发证的话 `itnpass_batch.lua` 可以不放。
+   `/itnpass_profile.lua`、`/auth/itnpass_config.lua`、`/auth/itnpass_store.lua`、
+   `/system/itnpass_server.lua`、`/system/disk_writer.lua`、`/system/itnpass_admin.lua`、
+   `/system/itnpass_batch.lua`，以及 `/payload/`。只想用管理台发证的话 `itnpass_batch.lua` 可以不放。
 3. 接线：网络 A = 站端终端侧 modem + 所有终端；网络 B = 站端驱动器侧 modem + 驱动器。
    **网络 B 不接任何其它电脑。**
 4. 第一次开机站端：看是否出现 `/auth/itnpass_fault.flag`；若 modem 选择报错，按文本设置

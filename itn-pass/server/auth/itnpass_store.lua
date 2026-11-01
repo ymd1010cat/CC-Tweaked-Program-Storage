@@ -216,6 +216,34 @@ local function liveReservations(rec, now)
     return held
 end
 
+-- Payload profiles. A card may be bound to one payload profile: it then only
+-- pays for a disk write that installs that payload, so quotas of different
+-- profiles stay independent (a "pyroet-os" key cannot spend a use on a
+-- "pyromputer-os" disk). Records without the field -- every record written
+-- before profiles existed, plus the ones the admin console mints by hand -- are
+-- unbound and keep accepting any profile, which is the old behaviour.
+local function profileName(profile)
+    if type(profile) ~= "string" then
+        return "default"
+    end
+    local clean = profile:gsub("%s+", "")
+    if clean == "" then
+        return "default"
+    end
+    return clean
+end
+
+local function profileAllows(rec, profile)
+    local bound = nil
+    if type(rec) == "table" then
+        bound = rec.profile
+    end
+    if type(bound) ~= "string" or bound == "" then
+        return true
+    end
+    return bound == profileName(profile)
+end
+
 local function randomString(alphabet, count)
     local out = {}
     for i = 1, count do
@@ -343,7 +371,7 @@ end
 -- lookup / reservations / charging
 ---------------------------------------------------------------------------
 
-function M.lookup(code)
+function M.lookup(code, profile)
     refresh()
     local norm = M.normalize(code)
     if not norm then
@@ -357,6 +385,9 @@ function M.lookup(code)
     if rec.revoked then
         return nil, "revoked"
     end
+    if not profileAllows(rec, profile) then
+        return nil, "profile mismatch"
+    end
     local left = rec.uses_left or 0
     if left <= 0 then
         return nil, "used up"
@@ -368,7 +399,7 @@ function M.lookup(code)
     return rec, nil, fp
 end
 
-function M.reserve(code, resId)
+function M.reserve(code, resId, profile)
     refresh()
     if type(resId) ~= "string" or resId == "" then
         return nil, "missing reservation id"
@@ -384,6 +415,9 @@ function M.reserve(code, resId)
     end
     if rec.revoked then
         return nil, "revoked"
+    end
+    if not profileAllows(rec, profile) then
+        return nil, "profile mismatch"
     end
     if type(rec.reservations) ~= "table" then
         rec.reservations = {}
@@ -423,7 +457,7 @@ function M.reserve(code, resId)
     }
 end
 
-function M.commit(resId)
+function M.commit(resId, profile)
     refresh()
     local fp = resIndex[resId]
     if not fp then
@@ -431,6 +465,11 @@ function M.commit(resId)
     end
     local rec = data[fp]
     local now = nowMs()
+    -- Defence in depth: the profile the write actually served is checked again
+    -- at commit time. A mismatch leaves the hold in place and charges nothing.
+    if not profileAllows(rec, profile) then
+        return nil, "profile mismatch"
+    end
     local expiry = nil
     if type(rec) == "table" and type(rec.reservations) == "table" then
         expiry = rec.reservations[resId]
@@ -507,7 +546,12 @@ end
 -- generation and export
 ---------------------------------------------------------------------------
 
-function M.mint(count, uses, note)
+-- mint(count, uses, note[, profile])
+-- The optional fourth argument binds the new records to one payload profile.
+-- Callers that omit it (the admin console, older scripts) mint unbound keys,
+-- which keep working for every profile -- that is what makes an existing
+-- database readable by this build and a new database readable by an old one.
+function M.mint(count, uses, note, profile)
     refresh()
     if type(count) ~= "number" or count < 1 then
         return nil, "count must be >= 1"
@@ -524,6 +568,17 @@ function M.mint(count, uses, note)
         return nil, "uses must be >= 1"
     end
     note = type(note) == "string" and note or ""
+    local bound = nil
+    if type(profile) == "string" then
+        -- Whitespace is stripped, an empty result means "no binding". The name
+        -- itself is never truncated: a silently shortened name would bind the
+        -- card to a profile that does not exist, and an unbound card would then
+        -- be spendable on any payload.
+        local clean = profile:gsub("%s+", "")
+        if clean ~= "" then
+            bound = clean
+        end
+    end
     local codes, pending = {}, {}
     local taken = {}
     local attempts = count * 50 + 200
@@ -548,6 +603,7 @@ function M.mint(count, uses, note)
                     note = note,
                     revoked = false,
                     reservations = {},
+                    profile = bound,
                 },
             }
         end
@@ -678,7 +734,8 @@ end
 function M.stats()
     refresh()
     local now = nowMs()
-    local st = {total = 0, alive = 0, exhausted = 0, revoked = 0, remaining = 0, held = 0}
+    local st = {total = 0, alive = 0, exhausted = 0, revoked = 0, remaining = 0, held = 0,
+        profiles = {}, unbound = 0}
     for _, rec in pairs(data) do
         if type(rec) == "table" then
             st.total = st.total + 1
@@ -692,6 +749,23 @@ function M.stats()
                 st.exhausted = st.exhausted + 1
             elseif not rec.revoked then
                 st.alive = st.alive + 1
+            end
+            -- Quota per payload profile: the view a station operator needs to
+            -- see how many disks of each payload the card population can still
+            -- install. Unbound keys are counted separately because they can
+            -- pay for any profile.
+            local bound = rec.profile
+            if type(bound) == "string" and bound ~= "" then
+                local slot = st.profiles[bound]
+                if slot == nil then
+                    slot = {total = 0, remaining = 0, held = 0}
+                    st.profiles[bound] = slot
+                end
+                slot.total = slot.total + 1
+                slot.remaining = slot.remaining + left
+                slot.held = slot.held + liveReservations(rec, now)
+            else
+                st.unbound = st.unbound + 1
             end
         end
     end
