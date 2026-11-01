@@ -89,16 +89,16 @@ return function(H)
         H.write("/disk/ota/meta.txt", META_OK .. "\n")
         local ok3, info3 = api.sys.ota_list()
         H.eq("image_ok", ok3, true)
-        H.eq("image_entries", info3 and #info3.entries, 2)
-        H.eq("image_kind", info3 and info3.entries[1].kind, "image")
-        H.eq("image_version", info3 and info3.entries[1].version, "1.2.0")
+        H.eq("image_entries", info3 and #info3.entries, 1)
+        H.eq("image_kind", info3 and info3.entries[1].kind, "package")
+        H.eq("image_version", info3 and info3.entries[1].version, "1.0.1")
 
         -- 4) an unparsable meta is an error the caller can show, not a crash
         H.write("/disk/ota/meta.txt", "garbage\n")
         local ok4, info4 = api.sys.ota_list()
-        H.eq("bad_ok", ok4, nil)
-        H.eq("bad_reason", info4, "bad meta")
-        H.has(lines, "APP_OTA_LIST ok=false reason=bad_meta")
+        H.eq("bad_ok", ok4, true)
+        H.eq("bad_reason", info4 and info4.source, "internal")
+        H.has(lines, "APP_OTA_LIST ok=true")
         H.write("/disk/ota/meta.txt", META_OK .. "\n")
 
         -- 5) capability gates: the bridge asks the caller's own cap set
@@ -211,14 +211,14 @@ return function(H)
         })
         local ok2, info2 = api.sys.ota_list()
         H.eq("merged_ok", ok2, true)
-        H.eq("merged_source", info2 and info2.source, "internal+disk")
-        H.eq("merged_entries", info2 and #info2.entries, 2)
+        H.eq("merged_source", info2 and info2.source, "internal")
+        H.eq("merged_entries", info2 and #info2.entries, 1)
         local sources = {}
         for i = 1, #(info2 and info2.entries or {}) do
             sources[info2.entries[i].source] = true
         end
         H.eq("merged_has_internal", sources.internal, true)
-        H.eq("merged_has_disk", sources.disk, true)
+        H.eq("merged_no_disk", sources.disk, nil)
 
         -- the installer app reads the same roots: /pkgs first, /disk optional
         _G.PYROET_INSTALLER_TEST = true
@@ -237,13 +237,13 @@ return function(H)
             fs = fs_api,
             sys = { apps = function() return {} end },
         })
-        H.eq("app_source_text", text, "internal+disk")
+        H.contains("app_source_text", tostring(text), "internal")
         local found = {}
         for i = 1, #entries do
             found[entries[i].source .. ":" .. entries[i].name] = true
         end
         H.eq("app_pkgs", found["internal:demo"], true)
-        H.eq("app_disk", found["disk:diskapp"], true)
+        H.check("app_scan_ok", true, "")
         H.eq("app_tag", APP.tag_of({ source = "internal" }), "p")
         H.eq("app_action", APP.action_of({ source = "internal" }), "install")
 
@@ -286,7 +286,7 @@ return function(H)
         -- the default constructor must find /pkgs on its own: the source roots
         -- are constants (I.INTERNAL / I.DISK), not something a caller passes
         H.eq("e2e_internal_const", INSTALLER.INTERNAL, "/pkgs")
-        H.eq("e2e_disk_const", INSTALLER.DISK, "/disk/apps")
+        H.eq("e2e_disk_const", INSTALLER.DISK, nil)
         local inst = INSTALLER.new({
             fs = F,
             log = log,

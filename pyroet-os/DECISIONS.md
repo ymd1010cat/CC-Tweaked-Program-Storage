@@ -1284,6 +1284,18 @@ GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校�
 
 38.6 **数字**：离线 **5,026 pass / 0 fail / 257 groups**；sizecheck 见上（仍远低于 629,145）。
 
+39. 只面向手持电脑：删掉方块电脑兼容与 /disk 来源（T19）
+
+39.1 **定位**：pyroet-os 只手面向手持电脑（pocket computer）——**无侧面、无软驱、单盘**，不支持方块电脑。为兼容方块电脑留下的路径本轮收敛。
+
+39.2 **网络**：`net/service.lua` 不再读 `iface_side`；配置里出现该键只记 `NET_CONFIG_IGNORED key=iface_side value=..` 并继续 auto。`S.resolve_side` 现在只做自动发现（`peripheral.find("modem")` → `getNames/getType` 扫描，日志 `NET_IFACE_AUTODETECT name=..`）；没有 modem 且宿主提供 peripheral 表 → degraded + `NET_NO_MODEM`；无 peripheral 表的 headless 调用保留 `auto` 不降级。`settings.app` 的 `iface` 行只剩 `auto`（不再提供侧面循环）。
+
+39.3 **安装源**：`kernel/installer.lua` 只保留 `/pkgs`（删 `I.DISK` 与磁盘查找分支）；`kernel/apps.lua` 的 OTA 只读 `/pkgs`（删 `A.OTA_META`/`A.OTA_DISK` 与 `internal+disk` 摘要）。桌面机插盘不再是考虑项。
+
+39.4 **测试**：`t_net_service.net.iface_auto` 保留 auto 发现/无 modem 降级/headless；显式侧面的旧断言（`full_side`/`bad_side`/`side_preferred`/`fallback`）已按新语义收敛；`t_sys_ota` 的 `/disk` 镜像/合并用例改为只读 `/pkgs`；settings 相关断言改为 `iface auto`。
+
+39.5 **数字**：离线 **5,024 pass / 0 fail / 257 groups**；TOTAL 见 sizecheck（本轮为净减少）。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1326,3 +1338,4 @@ GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校�
 - 2026-11-01: **安装后无需重启（rescan + launch 自动重扫）**（口径见 §36）。`kernel/apps.lua` 新增 `A:rescan()`（同时扫 `/system/system` 与 `/apps`，运行中实例保留，缺失目录的 record 仅非运行时丢弃，日志 `APP_RESCAN count= added= removed=`）与运行时提供的 `api.sys.rescan()`（cap `fs.read`）、`api.sys.launch(name)`（未知名字先自动 rescan，仍无 → `nil, "no such app"`，日志 `APP_LAUNCH_RESCAN`/`APP_LAUNCH_MISS`）。launcher 新增 `M.read_version`：无 runtime record 时直接读包 manifest 的版本（失败才 `?` 并记 `LAUNCHER_MANIFEST_MISS`）。新增 `t_sys_ota.ota.rescan`（自动重扫启动、显式 rescan、运行中保留/停止后清除、未知名字、launcher 版本 1.4.2）。离线 **4,933 pass / 0 fail / 250 groups**。未 commit。
 - 2026-11-01: **新增自带应用 `pkgget`（自选服务器的包下载）**（口径见 §37）。新包 `system/system/pkgget.app/`（caps http/fs.read/fs.write/input/terminal，约 20 KB），纯文本协议：`index.txt`（`app <name> <version> <dir>`）+ `<dir>/files.txt` + 文件 + 可选 `SHA256.txt`；服务器由用户输入（`a` 编辑 `/etc/pkg.servers` 第一行，`s` 轮换多行，默认占位 `http://example.invalid/`）。下载写入 `/pkgs/<name>.app`（`.part` → 回读 → 改名，失败全清），完成后走 `api.sys.install` 桥装到 `/apps`，无桥则 `staged in /pkgs`。`install.set` 27→29、`t_budget` 同步、`/system/system` 计数 2→3 各套件同步；新增 `tests/t_pkgget.lua`（6 组 76 断言）。离线 **5,008 pass / 0 fail / 256 groups**。未 commit。
 - 2026-11-01: **手持机无侧面：modem 自动发现**（口径见 §38）。`net/service.lua` 默认 `iface_side=auto`，新增 `S.find_modem` / `S.resolve_side`：具体侧面是 modem 就用（方块电脑兼容），否则自动发现并记 `NET_IFACE_AUTODETECT name=..`（配置侧面非 modem 时记 `NET_IFACE_FALLBACK configured=.. detected=..`），完全没有 modem 时 degraded + `NET_NO_MODEM`（headless 无 peripheral 表则保留配置值）。`settings.app` 的 iface 循环含 `auto` 且默认 auto。接口在 net 服务启动时解析一次，改配置需重启。新增 `t_net_service.net.iface_auto` 覆盖五种情况。离线 **5,026 pass / 0 fail / 257 groups**。未 commit。
+- 2026-11-01: **只面向手持电脑，收敛方块电脑兼容**（口径见 §39）。`net/service.lua` 不再读 `iface_side`（出现时记 `NET_CONFIG_IGNORED`），modem 一律自动发现；`settings.app` 的 `iface` 行只剩 `auto`；`kernel/installer.lua` 删 `I.DISK`/磁盘查找只留 `/pkgs`，`kernel/apps.lua` 的 OTA 删 `/disk` 来源与 `internal+disk` 摘要。README/DECISIONS 写明"只手面向手持电脑，不支持方块电脑"。离线 **5,024 pass / 0 fail / 257 groups**。未 commit。

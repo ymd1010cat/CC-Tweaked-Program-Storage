@@ -176,16 +176,16 @@ return function(H)
         H.eq("settings_result", result, "quit")
         local frame = snap(buf)
         H.eq("settings_row2", frame[2]:sub(1, 12), "  prefix 24 ")
-        H.eq("settings_row3", frame[3]:sub(1, 14), "> iface top   ")
+        H.eq("settings_row3", frame[3]:sub(1, 12), "> iface auto")
         H.eq("settings_row4", frame[18]:sub(1, 18), "up/dn enter q=back")
         local slog = H.joined(lines)
         H.contains("settings_move", slog, "key=down action=move item=2")
-        H.contains("settings_change", slog, "key=enter action=change item=2 detail=top")
-        H.contains("settings_saved", slog, "saved iface_side=top")
+        H.contains("settings_change", slog, "key=enter action=change item=2 detail=auto")
+        H.contains("settings_saved", slog, "saved iface_side=auto")
         H.contains("settings_quit", slog, "quit key=q")
         -- the file: one line replaced, everything else byte-identical
         local cfg = H.read("/etc/network.conf") or ""
-        H.contains("settings_cfg_side", cfg, "iface_side=top")
+        H.contains("settings_cfg_side", cfg, "iface_side=auto")
         H.contains("settings_cfg_comment", cfg, "# hand written")
         H.contains("settings_cfg_prefix", cfg, "prefix=24")
         H.contains("settings_cfg_keep", cfg, "keep=1")
@@ -241,12 +241,12 @@ return function(H)
         -- the two documented defaults are offered even with no file (the final
         -- frame: the marker moved to the second row, whose value was changed)
         H.eq("fresh_row2", frame[2]:sub(1, 12), "  prefix 24 ")
-        H.eq("fresh_row3", frame[3]:sub(1, 14), "> iface back  ")
+        H.eq("fresh_row3", frame[3]:sub(1, 12), "> iface auto")
         -- down + enter changed the second row and CREATED the file
         H.contains("fresh_moved", H.joined(lines), "key=down action=move item=2")
-        H.contains("fresh_saved", H.joined(lines), "saved iface_side=back")
+        H.contains("fresh_saved", H.joined(lines), "saved iface_side=auto")
         local cfg = H.read("/etc/network.conf") or ""
-        H.contains("fresh_cfg", cfg, "iface_side=back")
+        H.contains("fresh_cfg", cfg, "iface_side=auto")
         H.rmrf("/etc/network.conf")
     end
 

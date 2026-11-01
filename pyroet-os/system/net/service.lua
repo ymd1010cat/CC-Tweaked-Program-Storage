@@ -83,32 +83,18 @@ end
 
 -- configured side -> the side to hand to the node, or nil when there is no modem
 function S.resolve_side(cfg_side, peripheral_api, log)
-    local side = tostring(cfg_side or S.DEFAULT_IFACE_SIDE)
-    local function logf(fmt, ...)
+    local logf = function(fmt, ...)
         if type(log) == "function" then pcall(log, fmt, ...) end
     end
-    local function is_modem(name)
-        local p = peripheral_api
-        if type(p) ~= "table" or type(p.getType) ~= "function" then return false end
-        local called, kind = pcall(p.getType, name)
-        return called and kind == "modem"
+    if cfg_side ~= nil and cfg_side ~= S.DEFAULT_IFACE_SIDE then
+        logf("NET_CONFIG_IGNORED key=iface_side value=%s", tostring(cfg_side))
     end
-    if side ~= "auto" and is_modem(side) then return side end
     local name = S.find_modem(peripheral_api)
     if name ~= nil then
-        if side == "auto" then
-            logf("NET_IFACE_AUTODETECT name=%s", name)
-        else
-            logf("NET_IFACE_FALLBACK configured=%s detected=%s", side, name)
-        end
+        logf("NET_IFACE_AUTODETECT name=%s", name)
         return name
     end
-    if side ~= "auto" then
-        logf("NET_IFACE_FALLBACK configured=%s detected=none", side)
-    end
-    -- no peripheral information at all (headless callers, tests): keep the
-    -- configured side rather than degrading a machine that never had a modem API
-    if type(peripheral_api) ~= "table" then return side end
+    if type(peripheral_api) ~= "table" then return S.DEFAULT_IFACE_SIDE end
     return nil
 end
 S.DEFAULT_PROBE_PORT = 47100
@@ -119,7 +105,7 @@ S.MAX_PROBES = 8
 S.MAX_TIMEOUT = 10
 
 local KNOWN_KEYS = {
-    ip = true, prefix = true, gateway = true, iface_side = true,
+    ip = true, prefix = true, gateway = true, 
     iface_name = true, channel = true, mtu = true, linktype = true,
     role = true, hosts_file = true, probe_port = true,
     hosts_interval = true, neighbor_ttl = true,
@@ -261,7 +247,7 @@ function S.parse_config(text)
         cfg.gateway, cfg.gateway_int = S.int2ip(gw), gw
     end
 
-    cfg.iface_side = raw.iface_side or S.DEFAULT_IFACE_SIDE
+    cfg.iface_side = S.DEFAULT_IFACE_SIDE
     if not cfg.iface_side:match("^[%w_]+$") then
         return nil, "bad iface_side '" .. cfg.iface_side .. "'"
     end

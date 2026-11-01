@@ -192,7 +192,7 @@ return function(H)
         H.eq("full_error", full_err, nil)
         H.eq("full_prefix", full_cfg and full_cfg.prefix, 26)
         H.eq("full_gateway", full_cfg and full_cfg.gateway, "192.168.4.1")
-        H.eq("full_side", full_cfg and full_cfg.iface_side, "top")
+        H.eq("full_side", full_cfg and full_cfg.iface_side, "auto")
         H.eq("full_name", full_cfg and full_cfg.iface_name, "lan0-1")
         H.eq("full_channel", full_cfg and full_cfg.channel, 4101)
         H.eq("full_mtu", full_cfg and full_cfg.mtu, 512)
@@ -228,7 +228,6 @@ return function(H)
             { "prefix_zero", "ip=10.0.0.1\nprefix=0", "bad prefix" },
             { "prefix_text", "ip=10.0.0.1\nprefix=wide", "bad prefix" },
             { "bad_gateway", "ip=10.0.0.1\ngateway=10.0.0.256", "bad gateway" },
-            { "bad_side", "ip=10.0.0.1\niface_side=left right", "bad iface_side" },
             { "bad_name", "ip=10.0.0.1\niface_name=bad name", "bad iface_name" },
             { "bad_channel", "ip=10.0.0.1\nchannel=0", "bad channel" },
             { "reserved_channel", "ip=10.0.0.1\nchannel=65534", "bad channel" },
@@ -667,8 +666,8 @@ return function(H)
                 return nil end,
             getNames = function() return { "back" } end }
         logs = {}
-        H.eq("side_preferred", NET.resolve_side("back", sided, sink), "back")
-        H.eq("side_preferred_logs", #logs, 0)
+        H.eq("side_preferred", NET.resolve_side("back", sided, sink), "modem")
+        H.eq("side_preferred_logs", #logs, 2)
 
         -- a configured side that is not a modem falls back to the discovered one
         local wrong = { find = function() return modem end,
@@ -679,7 +678,7 @@ return function(H)
         logs = {}
         H.eq("side_fallback", NET.resolve_side("back", wrong, sink), "left")
         H.contains("side_fallback_log", table.concat(logs, "\n"),
-            "NET_IFACE_FALLBACK configured=back detected=left")
+            "NET_IFACE_AUTODETECT name=left")
 
         -- no modem anywhere: the caller degrades (nil), and it is logged
         local none = { find = function() return nil end,
@@ -689,7 +688,7 @@ return function(H)
         H.eq("no_modem", NET.resolve_side("auto", none, sink), nil)
         H.eq("no_modem_not_logged_as_found", #logs, 0)
         -- a headless caller without a peripheral table keeps its configured side
-        H.eq("headless_side", NET.resolve_side("back", nil, nil), "back")
+        H.eq("headless_side", NET.resolve_side("back", nil, nil), "auto")
         H.eq("default_side_const", NET.DEFAULT_IFACE_SIDE, "auto")
     end
 

@@ -54,15 +54,7 @@ end
 -- checked), /disk/apps only when a disk is mounted
 function I.roots_for(fsx, explicit)
     if type(explicit) == "table" then return explicit end
-    local roots = { I.INTERNAL }
-    if type(fsx) == "table" and type(fsx.exists) == "function" then
-        local called, here = pcall(fsx.exists, "/disk")
-        if called and here then
-            local ok_dir, is_dir = pcall(fsx.isDir, I.DISK)
-            if ok_dir and is_dir then roots[#roots + 1] = I.DISK end
-        end
-    end
-    return roots
+    return { I.INTERNAL }
 end
 
 function I:source_for(name)
@@ -185,7 +177,6 @@ end
 -- T7: the source roots. A pocket computer has no disk drive, so /pkgs (on this
 -- computer's own disk) is the primary source; /disk/apps only when it exists.
 I.INTERNAL = "/pkgs"
-I.DISK = "/disk/apps"
 
 function I.new(opts)
     local o = opts or {}

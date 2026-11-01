@@ -353,8 +353,6 @@ A.SYS_OTA = {
     ota_list = { cap = "fs.read", method = "sys_ota_list" },
     ota_apply = { cap = "fs.write", method = "sys_ota_apply" },
 }
-A.OTA_META = "/disk/ota/meta.txt"
-A.OTA_DISK = "/disk/apps"
 -- T7: a pocket computer has no disk drive. The internal /pkgs directory is the
 -- primary source; the disk paths are only added when /disk is mounted.
 A.OTA_INTERNAL = "/pkgs"

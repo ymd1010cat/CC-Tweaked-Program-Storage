@@ -14,6 +14,10 @@ EDL 式的恢复工具。发布版本 **1.0.0**，装机内容 **26 个文件 / 
 
 ## 手持机没有侧面：`iface_side` 默认 `auto`，自动发现 modem（`NET_IFACE_AUTODETECT`）；显式侧面仅对方块电脑有意义。
 
+## 本系统只面向手持电脑（无侧面、无软驱、单盘），不支持方块电脑
+
+`iface_side` 配置项已废弃（出现时记 `NET_CONFIG_IGNORED key=iface_side`），modem 一律自动发现（`NET_IFACE_AUTODETECT`）；安装来源只有本机 `/pkgs`。
+
 ## launcher 不在自己的应用列表里（它是桌面本身）
 
 安装后无需重启：`api.sys.launch` 对未知名字会自动 rescan 一次，`api.sys.rescan()` 也可显式触发；运行中的实例不受影响。
