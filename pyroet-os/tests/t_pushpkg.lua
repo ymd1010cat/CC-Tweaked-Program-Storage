@@ -123,6 +123,11 @@ return function(H)
     do
         local conf = P.parse_conf(nil)
         H.eq("conf_default_server", conf.server, P.SERVER)
+        -- the host tool and appstore share the 2026-11-01 default: the project
+        -- store, not a .invalid placeholder
+        H.eq("conf_builtin_server", P.SERVER, "http://store.pyrotechnic.org/")
+        H.check("conf_no_invalid", (P.SERVER or ""):find("invalid", 1, true) == nil,
+            "pushpkg still defaults to a placeholder server")
         H.eq("conf_default_protocol", conf.protocol, "PYROET-PKG/1")
         H.eq("conf_default_timeout", conf.timeout, 5)
         H.eq("conf_path", P.CONF, "/etc/pushpkg.conf")

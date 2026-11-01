@@ -926,6 +926,12 @@ function P.run(opts)
     local o = opts or {}
     local fsx = o.fs or rawget(_G, "fs")
     local log = o.log or P.default_log(fsx, o.log_path)
+    -- The ROM http table is what the network upgrade channel (kernel/ota.lua via
+    -- api.sys.ota_apply "image") and the appstore need on a real machine. It is a
+    -- host fact like fs, so it is read here once; a host or a test can still
+    -- inject its own table with `opts.http`.
+    local http_api = o.http
+    if http_api == nil then http_api = rawget(_G, "http") end
 
     local boot, boot_err = o.boot, nil
     if not boot then boot, boot_err = load_module(o.boot_path or P.BOOT_PATH) end
@@ -1038,7 +1044,7 @@ function P.run(opts)
             rednet = o.rednet or rawget(_G, "rednet"),
             redstone = o.redstone,
             peripheral = o.peripheral,
-            http = o.http,
+            http = http_api,
             input = ctx.input,
             terminal = o.terminal or rawget(_G, "term"),
             sys = sys_for,

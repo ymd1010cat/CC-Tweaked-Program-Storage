@@ -115,9 +115,9 @@ return function(H)
             "/t/x/system/kernel/ota.lua")
 
         H.eq("launcher_roots", table.concat(LAUNCHER.ROOTS, ","), "/apps,/system/system")
-        H.eq("settings_gate", SETTINGS.BUDGET, 629145)
-        H.eq("settings_stretch", SETTINGS.STRETCH, 349525)
-        H.eq("settings_window", SETTINGS.WINDOW, 900000)
+        H.eq("settings_gate", SETTINGS.BUDGET, 10485760)
+        H.eq("settings_stretch", SETTINGS.STRETCH, 7340032)
+        H.eq("settings_window", SETTINGS.WINDOW, 10685760)
         H.eq("settings_backup_cap", SETTINGS.BACKUP_CAP, 200000)
         H.eq("recovery_crypto", P.CRYPTO, "/system/rpv/crypto.lua")
 

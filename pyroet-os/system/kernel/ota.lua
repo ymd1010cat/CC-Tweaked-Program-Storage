@@ -1,8 +1,20 @@
---[[- pyroet-os/kernel/ota.lua -- system OTA client: file-set updates over rednet.
+--[[- pyroet-os/kernel/ota.lua -- system OTA client: file-set updates.
 
-Uses only the ROM `rednet` API (no rpv, no net/service.lua: the network stack is
-what may be broken) plus SHA-256 from /rpv/crypto.lua. An unverified file set is
-never applied; SHA-256 plus framing is the whole trust model (DECISIONS.md 8.3).
+Two sources, one apply path. The default is the ROM `rednet` API (no rpv, no
+net/service.lua: the network stack is what may be broken); with `http` the same
+description is pulled from the real upgrade server instead:
+
+    GET <base>/meta.txt        -> the META line, then one FILE line per file
+    GET <base>/<relpath>       -> the file body
+
+The base is `/etc/ota.servers`' first usable line when that file exists, else
+O.DEFAULT_UPGRADE (`http://pyroet.pyrotechnic.org/upgrade`). meta.txt is exactly
+the rednet reply text without the packet framing, so one parser reads both and
+the digest/size/journal logic below is shared by both sources.
+
+SHA-256 from /system/rpv/crypto.lua is the whole trust model (DECISIONS.md 8.3):
+an unverified file set is never applied, and a file body that does not match its
+declared size and sha256 never reaches /system.
 
 Protocol PYROET-OTA/2 (P6-design section 3), still one bare-rednet request per
 packet:
@@ -55,8 +67,19 @@ because a byte count is the one thing a digest cannot tell you about:
         rednet = rednet, host = 12, log = print })
     c:update(); c:status()   -- idle/fetching/.../ready/rejected/failed + bytes
 
+...or over the network upgrade channel:
+
+    local c = dofile("/system/kernel/ota.lua").new({ fs = fs, http = http,
+        base = nil, log = print, progress = function(rel, i, n) end })
+    c:update()
+
 new() options: fs, boot, boot_opts, rednet, host, protocol, timeout, max_tries,
-max_data, backup_cap, log, clock, sha, crypto_path, loadfile, boot_path.
+max_data, backup_cap, log, clock, sha, crypto_path, loadfile, boot_path, http,
+base, progress. `http` switches the source; `base` overrides /etc/ota.servers;
+`progress(relpath, index, count)` is called once per file before it is fetched.
+Failure lines: OTA_NET_FAIL stage=<meta|file|size> url=.. err=.. for the http
+transport, OTA_FAIL / OTA_REJECT for the update itself. A http failure clears
+/update.stage before it returns, so a rejected download leaves no residue.
 No non-ASCII bytes in this file.
 ]]
 
@@ -72,6 +95,15 @@ local O = {
     BACKUP_CAP = 200000,
     CRYPTO = "/system/rpv/crypto.lua",
     BOOT_PATH = "/system/boot.lua",
+    -- The real upgrade channel (2026-11-01): the same PYROET-OTA/2 description,
+    -- fetched over http instead of rednet. `GET <base>/meta.txt` returns the META
+    -- line and one FILE line per file as plain text; every file is then one
+    -- `GET <base>/<relpath>`. The base is /etc/ota.servers' first line when that
+    -- file exists, otherwise this constant.
+    DEFAULT_UPGRADE = "http://pyroet.pyrotechnic.org/upgrade",
+    HTTP_CONF = "/etc/ota.servers",
+    META_FILE = "meta.txt",
+    MAX_URL = 160,
     EXT = { lua = true, txt = true, conf = true, cfg = true },
     RESERVED = {
         ["update.journal"] = true, ["update.backup"] = true, ["boot.ok"] = true,
@@ -287,6 +319,91 @@ function O.manifest_hash(files, sha)
 end
 
 -- ---------------------------------------------------------------------------
+-- meta.txt over http + the upgrade base (the network source, 2026-11-01)
+-- ---------------------------------------------------------------------------
+
+-- Parse a whole `meta.txt` body: the META line first, then one FILE line per
+-- entry, blank lines ignored (a trailing newline is normal). Pure: no fs and no
+-- network, so the kernel's http source and an app that only wants the remote
+-- version parse with the same code.
+function O.parse_manifest(body)
+    if type(body) ~= "string" or body == "" then return nil, "empty meta" end
+    local meta, files
+    for line in (body .. "\n"):gmatch("([^\n]*)\n") do
+        local clean = line:gsub("\r", ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if clean ~= "" then
+            if meta == nil then
+                local m, why = O.parse_meta(clean)
+                if not m then return nil, "meta " .. tostring(why) end
+                meta = m
+            else
+                local rec, why = O.parse_file(O.PREFIX .. " FILE " .. clean)
+                if not rec then return nil, "file " .. tostring(why) end
+                files = files or {}
+                files[#files + 1] = rec
+            end
+        end
+    end
+    if meta == nil then return nil, "meta missing" end
+    files = files or {}
+    if #files ~= meta.files then
+        return nil, "file count " .. tostring(#files) .. "/" .. tostring(meta.files)
+    end
+    return meta, files
+end
+
+-- http(s) base URL, normalized without the trailing slash; the reason strings
+-- are short and stable so a status line can show them verbatim
+function O.valid_base(url)
+    local text = tostring(url == nil and "" or url)
+    text = text:gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then return nil, "empty" end
+    if #text > O.MAX_URL then return nil, "too long" end
+    if text:find("%s") then return nil, "space" end
+    if text:sub(1, 7) ~= "http://" and text:sub(1, 8) ~= "https://" then
+        return nil, "scheme"
+    end
+    return (text:gsub("/+$", ""))
+end
+
+-- Read a whole text file through either fs flavour: the kernel's real fs (open)
+-- or an app's capability-gated api.fs (read). nil means "cannot tell".
+function O.read_text(fsx, path)
+    if type(fsx) ~= "table" then return nil end
+    if type(fsx.exists) == "function" then
+        local called, has = pcall(fsx.exists, path)
+        if not called or has ~= true then return nil end
+    end
+    if type(fsx.read) == "function" then
+        local called, text = pcall(fsx.read, path)
+        if called and type(text) == "string" then return text end
+        return nil
+    end
+    return read_all(fsx, path)
+end
+
+-- The upgrade base: an explicit override wins, then the first usable line of
+-- /etc/ota.servers, then the built-in default. A missing config file is not an
+-- error - that is exactly the machine a fresh image ships to.
+function O.upgrade_base(fsx, override)
+    local explicit, why = O.valid_base(override)
+    if explicit then return explicit end
+    if override ~= nil and tostring(override) ~= "" then return nil, why end
+    local text = O.read_text(fsx, O.HTTP_CONF)
+    if type(text) == "string" then
+        for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+            local clean = line:gsub("\r", ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if clean ~= "" and clean:sub(1, 1) ~= "#" then
+                local base, berr = O.valid_base(clean)
+                if base then return base end
+                return nil, "bad " .. O.HTTP_CONF .. " " .. tostring(berr)
+            end
+        end
+    end
+    return O.DEFAULT_UPGRADE
+end
+
+-- ---------------------------------------------------------------------------
 -- client
 -- ---------------------------------------------------------------------------
 
@@ -309,6 +426,27 @@ function O.new(opts)
     self.boot_path = o.boot_path or O.BOOT_PATH
     self.sha = load_sha(o, self.loader)
 
+    -- The network source: with `http` the client fetches meta.txt and every file
+    -- over http instead of asking a rednet peer, and the whole apply half of the
+    -- client (journal, backup, staged .part, verify) is unchanged.
+    self.http = o.http
+    self.http_mode = type(o.http) == "table" and type(o.http.get) == "function"
+    self.progress = o.progress
+    self.base, self.base_err, self.source_error = nil, nil, nil
+    if o.http ~= nil and not self.http_mode then
+        -- asked for http but the host has none: that is a readable failure, not a
+        -- reason to quietly go back to rednet
+        self.source_error = "no http"
+    end
+    if self.http_mode then
+        local base, berr = O.upgrade_base(self.fs, o.base)
+        self.base, self.base_err = base, berr
+        if not base then self.source_error = "base " .. tostring(berr) end
+    end
+    self.http_files = nil
+    self.http_gets = 0
+    self.http_cache = nil
+
     -- own copy: the caller's table must not be mutated, but the bootloader needs
     -- the same fs / sha / root / log as this client
     local bo = {}
@@ -329,6 +467,7 @@ function O:reset()
     self.files = {}
     self.bytes, self.retries, self.backup_bytes = 0, 0, 0
     self.version, self.manifest, self.journal_seq, self.fatal = nil, nil, nil, nil
+    self.http_files, self.http_cache, self.applied = nil, nil, 0
 end
 
 function O:log(line)
@@ -354,6 +493,8 @@ function O:status()
         bytes = self.bytes, backup = self.backup_bytes, cap = self.cap,
         retries = self.retries, error = self.err, fatal = self.fatal,
         journal = self.journal_seq, states = states,
+        source = self.http_mode and "http" or "rednet", base = self.base,
+        gets = self.http_gets,
     }
 end
 
@@ -362,6 +503,9 @@ function O:fail(stage, err)
     self.stage, self.err = stage, tostring(err)
     self:set_state("failed", stage)
     self:log("OTA_FAIL stage=" .. tostring(stage) .. " err=" .. short(self.err, 48))
+    -- nothing was applied on this path, so a half-downloaded /update.stage is
+    -- residue: clear it and the machine stays exactly as it was
+    if self.http_mode and (self.applied or 0) == 0 then self:drop_stage() end
     return nil, self.err
 end
 
@@ -373,6 +517,7 @@ function O:reject(stage, reason, detail)
     local line = "OTA_REJECT stage=" .. tostring(stage) .. " reason=" .. tostring(reason)
     if detail then line = line .. " " .. tostring(detail) end
     self:log(line)
+    if self.http_mode and (self.applied or 0) == 0 then self:drop_stage() end
     return nil, self.err
 end
 
@@ -476,6 +621,153 @@ function O:request(build, accept)
     return nil, err
 end
 
+-- ---------------------------------------------------------------------------
+-- http source: GET <base>/meta.txt and GET <base>/<relpath> (2026-11-01)
+-- ---------------------------------------------------------------------------
+
+-- one GET -> body, or nil, reason. A 4xx/5xx is a reason ("http 404"), never a
+-- body: only bytes that arrived with a 2xx status are ever looked at.
+function O:http_get(url)
+    local http = self.http
+    if type(http) ~= "table" or type(http.get) ~= "function" then
+        return nil, "no http"
+    end
+    self.http_gets = self.http_gets + 1
+    local called, res, extra = pcall(http.get, url)
+    if not called then return nil, "http fail" end
+    if res == nil then return nil, short(extra or "no reply", 32) end
+    if type(res) == "string" then return res end
+    if type(res) ~= "table" then return nil, "bad response" end
+    local status = tonumber(res.status) or (res.ok == false and 0 or 200)
+    if status < 200 or status > 299 then return nil, "http " .. tostring(status) end
+    -- two shapes reach a client: a plain {status,body} table (tests, a host that
+    -- already read the request) and the ROM's response handle, which carries the
+    -- body behind readAll(). Accept both instead of trusting one spelling.
+    local body = type(res.body) == "string" and res.body or nil
+    if body == nil and type(res.readAll) == "function" then
+        local rcalled, read = pcall(res.readAll)
+        if not rcalled then return nil, "read failed" end
+        body = type(read) == "string" and read or nil
+    end
+    if body == nil then return nil, "no body" end
+    if body == "" then return nil, "empty" end
+    return body
+end
+
+function O:http_meta()
+    local url = tostring(self.base) .. "/" .. O.META_FILE
+    local body, err = self:http_get(url)
+    if body == nil then
+        self:log("OTA_NET_FAIL stage=meta url=" .. short(url, 60)
+            .. " err=" .. short(err or "?", 32))
+        return nil, tostring(err or "no body")
+    end
+    local called, meta, files = pcall(O.parse_manifest, body)
+    if not called then return nil, "bad meta" end
+    if not meta then
+        self:log("OTA_NET_FAIL stage=meta url=" .. short(url, 60)
+            .. " err=" .. short(files or "parse", 40))
+        return nil, tostring(files or "parse")
+    end
+    self.http_files = files
+    self:log("OTA_NET_OK stage=meta url=" .. short(url, 60) .. " files="
+        .. tostring(#(files or {})) .. " bytes=" .. tostring(#body))
+    return meta
+end
+
+-- The whole body of one file, fetched once and kept only while this file is the
+-- one being written: a file is at most F_MAX bytes, and a retry of the same file
+-- re-reads the copy instead of the network.
+function O:http_chunk(f, offset, want)
+    local cache = self.http_cache
+    if type(cache) ~= "table" or cache.relpath ~= f.relpath then
+        local url = tostring(self.base) .. "/" .. tostring(f.relpath)
+        local body, err = self:http_get(url)
+        if body == nil then
+            self:log("OTA_NET_FAIL stage=file url=" .. short(url, 60)
+                .. " err=" .. short(err or "?", 32))
+            return nil, tostring(err or "no body")
+        end
+        -- the declared size is part of the description: a body of another length
+        -- can never be the file the manifest_sha was computed over
+        if #body ~= f.size then
+            self:log("OTA_NET_FAIL stage=size url=" .. short(url, 60)
+                .. " got=" .. tostring(#body) .. " want=" .. tostring(f.size))
+            return nil, "size got=" .. tostring(#body) .. " want=" .. tostring(f.size)
+        end
+        cache = { relpath = f.relpath, body = body }
+        self.http_cache = cache
+        self:log("OTA_NET_OK stage=file url=" .. short(url, 60)
+            .. " bytes=" .. tostring(#body))
+    end
+    if offset >= #cache.body then return nil, "offset past end" end
+    return cache.body:sub(offset + 1, offset + want)
+end
+
+-- the transport seams: rednet asks for a descriptor packet, http already has the
+-- whole list from meta.txt, and a chunk comes from a DATA reply or from the
+-- fetched body. Everything above this line (verify, cap, journal, backup) is
+-- shared by the two sources.
+function O:meta_record()
+    if self.http_mode then return self:http_meta() end
+    return self:request(function()
+        return O.PREFIX .. " GET meta"
+    end, O.parse_meta)
+end
+
+function O:file_record(idx)
+    if self.http_mode then
+        local rec = (self.http_files or {})[idx + 1]
+        if not rec then return nil, "missing file " .. tostring(idx) end
+        return rec
+    end
+    return self:request(function()
+        return O.PREFIX .. " GET " .. tostring(idx)
+    end, O.parse_file)
+end
+
+function O:chunk(f, offset, want)
+    if self.http_mode then return self:http_chunk(f, offset, want) end
+    return self:request(function()
+        return O.PREFIX .. " GET " .. tostring(f.idx) .. " " .. tostring(offset)
+    end, function(msg)
+        local d, why = O.parse_data(msg, {
+            relpath = f.relpath, offset = offset, size = f.size,
+        })
+        if not d then return nil, why end
+        if #d.data ~= want then return nil, "chunk " .. #d.data .. "/" .. want end
+        return d.data
+    end)
+end
+
+-- Remove the staging tree without touching the journal or the backup tree: the
+-- stage only holds a download in progress, so dropping it can never make the
+-- machine unbootable (boot.cleanup, which also drops journal and backup, is a
+-- different decision and not taken here).
+function O:drop_stage()
+    local paths = self:paths()
+    if type(paths) ~= "table" or type(paths.stage) ~= "string" then return false end
+    if not self.fs.exists(paths.stage) then return true end
+    local function rm(path)
+        local called, names = pcall(self.fs.list, path)
+        if called and type(names) == "table" then
+            for i = 1, #names do
+                local child = path .. "/" .. tostring(names[i])
+                local is_dir = false
+                if type(self.fs.isDir) == "function" then
+                    local dcalled, value = pcall(self.fs.isDir, child)
+                    is_dir = (dcalled and value) == true
+                end
+                if is_dir then rm(child) else pcall(self.fs.delete, child) end
+            end
+        end
+        pcall(self.fs.delete, path)
+    end
+    rm(paths.stage)
+    self:log("OTA_STAGE_DROP path=" .. short(paths.stage, 40))
+    return true
+end
+
 -- step a/b for one file: fetch every chunk of <relpath> into <path>.part and
 -- prove the assembled bytes; a mismatch retries the whole file (no bitmap)
 function O:download(f, part)
@@ -487,25 +779,16 @@ function O:download(f, part)
         while at < f.size do
             local offset = at
             local want = math.min(self.max_data, f.size - at)
-            local data, derr = self:request(function()
-                return O.PREFIX .. " GET " .. tostring(f.idx) .. " " .. tostring(offset)
-            end, function(msg)
-                local d, why = O.parse_data(msg, {
-                    relpath = f.relpath, offset = offset, size = f.size,
-                })
-                if not d then return nil, why end
-                if #d.data ~= want then return nil, "chunk " .. #d.data .. "/" .. want end
-                return d
-            end)
+            local data, derr = self:chunk(f, offset, want)
             if not data then
                 err = derr
                 break
             end
-            if not pcall(handle.write, data.data) then
+            if not pcall(handle.write, data) then
                 err = "write_failed"
                 break
             end
-            at = at + #data.data
+            at = at + #data
         end
         pcall(handle.close)
         -- the byte count before the digest: a short or padded write has to be
@@ -619,6 +902,9 @@ function O:apply_failure(stage, err)
     if type(boot) == "table" and type(boot.rollback) == "function" then
         ok = boot.rollback(self.boot_opts) and true or false
     end
+    -- rollback deletes the stage itself; asking again is cheap and covers the
+    -- rollback-failure branch, where an unverified half file must not linger
+    if self.http_mode then self:drop_stage() end
     if ok then
         self:set_state("rolled_back", stage)
         self:log("OTA_ROLLED_BACK stage=" .. tostring(stage))
@@ -646,6 +932,7 @@ end
 function O:update()
     self:reset()
     self:set_state("fetching", "meta")
+    if self.source_error then return self:fail("prepare", self.source_error) end
     if type(self.sha) ~= "function" then return self:fail("prepare", "no_sha256") end
     local boot = self:boot_module()
     if type(boot) ~= "table" or type(boot.write_journal) ~= "function"
@@ -656,10 +943,13 @@ function O:update()
     if not self.fs.exists(paths.system) then
         return self:fail("prepare", "no_system")
     end
+    if self.http_mode then
+        self:log("OTA_SOURCE kind=http base=" .. short(self.base, 60))
+    else
+        self:log("OTA_SOURCE kind=rednet host=" .. tostring(self.host))
+    end
 
-    local meta, merr = self:request(function()
-        return O.PREFIX .. " GET meta"
-    end, O.parse_meta)
+    local meta, merr = self:meta_record()
     if not meta then return self:fail("meta", merr) end
     self.version, self.manifest = meta.version, meta.manifest_sha
     self:log("OTA_META version=" .. meta.version .. " files=" .. tostring(meta.files)
@@ -671,9 +961,7 @@ function O:update()
     self:set_state("listing", "files")
     local files, backup, seen = {}, 0, {}
     for idx = 0, meta.files - 1 do
-        local rec, ferr = self:request(function()
-            return O.PREFIX .. " GET " .. tostring(idx)
-        end, O.parse_file)
+        local rec, ferr = self:file_record(idx)
         if not rec then return self:fail("file", ferr) end
         if seen[rec.relpath] then return self:fail("file", "duplicate " .. rec.relpath) end
         seen[rec.relpath] = true
@@ -733,8 +1021,14 @@ function O:update()
 
     local applied = 0
     for i = 1, #files do
+        -- the one progress hook: the caller paints `fetching <rel> (i/n)` before
+        -- the file is fetched, so an http download shows what it is doing
+        if type(self.progress) == "function" then
+            pcall(self.progress, files[i].relpath, i, #files)
+        end
         local ok, stage, detail = self:apply_one(files[i])
         if not ok then
+            self.applied = applied
             -- A size refusal before anything was applied leaves the disk exactly
             -- as it was, so it is the same retryable reject as a bad
             -- manifest_sha; once a file has landed the only honest answer is the
@@ -746,6 +1040,7 @@ function O:update()
             return self:apply_failure(stage, detail)
         end
         applied = applied + 1
+        self.applied = applied
     end
 
     local seq3, jerr3 = boot.write_journal({

@@ -69,6 +69,40 @@ return function(H)
     end
 
     -- ---------------------------------------------------------------------
+    H.group("budget.gate")
+    do
+        -- 2026-11-01: the owner widened the BUILD gate to 7 MiB / 10 MiB. The
+        -- numbers are pinned here so a quiet edit of sizecheck.py fails the
+        -- suite, and the tool has to keep saying that the medium did not grow.
+        local text = H.read("/tests/sizecheck.py") or ""
+        H.check("sizecheck_present", #text > 0, "sizecheck.py was not staged")
+        H.check("gate_upper_10mib",
+            text:find("DEFAULT_BUDGET = 10485760", 1, true) ~= nil,
+            "the 10 MiB upper tier is not pinned in sizecheck.py")
+        H.check("gate_stretch_7mib",
+            text:find("DEFAULT_STRETCH = 7340032", 1, true) ~= nil,
+            "the 7 MiB target line is not pinned in sizecheck.py")
+        H.check("gate_backup_cap",
+            text:find("DEFAULT_BACKUP_CAP = 200000", 1, true) ~= nil,
+            "the backup cap is not 200,000 B any more")
+        H.check("gate_window_derived",
+            text:find("WINDOW_LIMIT = DEFAULT_BUDGET + DEFAULT_BACKUP_CAP", 1, true) ~= nil,
+            "the update window is no longer derived from the upper tier")
+        H.check("gate_no_old_upper", text:find("629145", 1, true) == nil,
+            "sizecheck.py still carries the old 3/5 MiB hard gate")
+        H.check("gate_no_old_stretch", text:find("349525", 1, true) == nil,
+            "sizecheck.py still carries the old 1/3 MiB target line")
+        H.check("gate_no_old_window", text:find("900000", 1, true) == nil,
+            "sizecheck.py still carries the old 900,000 B window")
+        H.check("gate_medium_unchanged",
+            text:find("1,000,000 B", 1, true) ~= nil,
+            "the gate must still say the medium is 1,000,000 B")
+        H.check("gate_is_build_only",
+            text:find("build", 1, true) ~= nil,
+            "sizecheck.py no longer describes itself as the build gate")
+    end
+
+    -- ---------------------------------------------------------------------
     H.group("budget.net_app_payload")
     do
         -- G1: the package lives in /system (image payload); there is no

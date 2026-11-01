@@ -12,7 +12,7 @@ status row shows `listening ch=<n> id=<computer id>`), then run:
 
 /etc/pushpkg.conf (optional, one key=value per line, '#' starts a comment):
 
-    server=<http base>    default http://example.invalid/
+    server=<http base>    default http://store.pyrotechnic.org/
     protocol=<name>       default PYROET-PKG/1 (appstore may override its side)
     channel=<n>           informational; rednet has no numeric channel here
     timeout=<seconds>     ack timeout, default 5
@@ -41,7 +41,7 @@ local M = {}
 M.VERSION = "0.1.0"
 M.PROTOCOL = "PYROET-PKG/1"
 M.CONF = "/etc/pushpkg.conf"
-M.SERVER = "http://example.invalid/"
+M.SERVER = "http://store.pyrotechnic.org/"
 M.TIMEOUT = 5
 M.RETRIES = 2          -- two retries after the first attempt = three sends
 M.CHUNK = 8192

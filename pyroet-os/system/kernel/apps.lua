@@ -362,10 +362,15 @@ A.SYS_INSTALLER = {
 -- the desktop OTA surface (T5): the launcher never touches a source file
 -- itself -- the kernel reads the medium, parses the meta with kernel/ota.lua and
 -- applies a package through the same installer object as api.sys.install
+-- (2026-11-01) `ota_apply("image")` is no longer refused: it runs the real
+-- network image update (kernel/ota.lua over http, the same single-tree journal
+-- flow recovery/flash.lua drives) because only the kernel has the fs the updater
+-- needs. The app that asks for it must declare http as well as fs.read/fs.write.
 A.SYS_OTA = {
     ota_list = { cap = "fs.read", method = "sys_ota_list" },
     ota_apply = { cap = "fs.write", method = "sys_ota_apply" },
 }
+A.OTA_MODULE = "/system/kernel/ota.lua"
 -- T7: a pocket computer has no disk drive. The internal /pkgs directory is the
 -- only package source: nothing else is ever mounted.
 A.OTA_INTERNAL = "/pkgs"
@@ -629,12 +634,67 @@ function A:sys_ota_list(record)
     return true, { source = "internal", entries = entries }
 end
 
-function A:sys_ota_apply(record, name)
-    if not record.caps["fs.write"] then return self:denied(record, "fs.write") end
-    if name == "image" then
-        self:log("APP_OTA_APPLY name=image ok=false reason=recovery_only")
-        return nil, "image ota needs recovery"
+-- The image update lives in the kernel because the app only ever sees a
+-- capability-gated fs (read/write/delete/makeDir/list), while kernel/ota.lua
+-- needs open/move/getSize and the boot module for the journal. The caller can
+-- pass { base = <url>, progress = function(relpath, i, n) end }: `base` overrides
+-- /etc/ota.servers, and `progress` is called before each file is fetched so the
+-- desktop can paint `fetching <rel> (i/n)`. Everything that touches the disk is
+-- the same apply path recovery/flash.lua uses: /update.stage, verify, backup,
+-- apply, journal.
+function A:ota_module_for()
+    local module = self.opts.ota_module
+    if type(module) == "table" then return module end
+    local called, chunk = pcall(self.loadfile, A.OTA_MODULE)
+    if not called or type(chunk) ~= "function" then
+        return nil, "ota module unavailable"
     end
+    local loaded, mod = pcall(chunk)
+    if not loaded or type(mod) ~= "table" or type(mod.new) ~= "function" then
+        return nil, "ota module unavailable"
+    end
+    self.ota_module = mod
+    return mod
+end
+
+function A:sys_ota_image(record, extra)
+    local o = type(extra) == "table" and extra or {}
+    if not record.caps["fs.read"] then return self:denied(record, "fs.read") end
+    if not record.caps["http"] then return self:denied(record, "http") end
+    local http = type(self.hosts) == "table" and self.hosts.http or nil
+    if type(http) ~= "table" or type(http.get) ~= "function" then
+        self:log("APP_OTA_IMAGE ok=false reason=no_http")
+        return nil, "no http"
+    end
+    local module, merr = self:ota_module_for()
+    if not module then
+        self:log("APP_OTA_IMAGE ok=false reason=" .. short(merr, 32))
+        return nil, merr
+    end
+    local function sink(line) self:log(line) end
+    local client = module.new({
+        fs = self.fs,
+        http = http,
+        base = o.base,
+        boot = self.opts.boot,
+        boot_opts = { fs = self.fs, root = self.opts.root, log = sink },
+        sha = self.opts.sha,
+        progress = o.progress,
+        log = sink,
+    })
+    local ok, status = client:update()
+    local info = client:status() or {}
+    self:log("APP_OTA_IMAGE ok=" .. tostring(ok == true)
+        .. " state=" .. tostring(info.state) .. " version=" .. short(info.version or "?", 24)
+        .. " files=" .. tostring(info.count or 0)
+        .. " manifest_sha=" .. short(info.manifest_sha or "?", 12))
+    if ok then return true, info end
+    return nil, tostring(info.error or status or "update failed"), info
+end
+
+function A:sys_ota_apply(record, name, extra)
+    if not record.caps["fs.write"] then return self:denied(record, "fs.write") end
+    if name == "image" then return self:sys_ota_image(record, extra) end
     -- a package entry is an ordinary install of the source package: same object,
     -- same validation, same error text as api.sys.install
     local ok, info = self:sys_install(record, name)

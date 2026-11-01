@@ -101,7 +101,12 @@ return function(H)
         local http = http_from(server())
         local api = api_with(http)
         local state = P.new_state(api)
-        H.eq("index_default_server", state.server, P.PLACEHOLDER)
+        -- 2026-11-01: the built-in default is the project store, not a .invalid
+        -- placeholder, so a fresh machine needs no `a` press before it can install
+        H.eq("index_default_server", state.server, "http://store.pyrotechnic.org/")
+        H.eq("index_default_constant", P.DEFAULT_SERVER, "http://store.pyrotechnic.org/")
+        H.check("index_no_invalid", (P.DEFAULT_SERVER or ""):find("invalid", 1, true) == nil,
+            "the default server is still a placeholder")
         local entries, bad = P.parse_index("app a 1.0.0 da\nnonsense\napp b 2.0 d2\n", BASE)
         H.eq("index_entries", #entries, 2)
         H.eq("index_bad", bad, 1)
@@ -779,5 +784,151 @@ return function(H)
         H.eq("target_gone_self", P.target_of(state2), "self")
         H.eq("target_gone_status", state2.status, "no disk drive")
         H.rmrf("/pkgs")
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("appstore.update")
+    -- 2026-11-01: the row under the package list is the system update entry. The
+    -- app reads meta.txt and paints; the kernel bridge (api.sys.ota_apply
+    -- "image") is stubbed here, its real behaviour is t_sys_ota.ota.image.
+    do
+        local CR = {}
+        assert(loadfile("/system/rpv/crypto.lua"))(CR)
+        local OTA = assert(loadfile("/system/kernel/ota.lua"))()
+        local function sha(text) return CR.hex(CR.sha256(text)) end
+        local UP = "http://up.example/upgrade"
+        local body = "-- kernel v2\n"
+        local rec = { relpath = "kernel/a.lua", size = #body, sha256 = sha(body) }
+        local manifest = OTA.manifest_hash({ rec }, CR.sha256)
+        local meta = "PYROET-OTA/2 META version=0.4.0 files=1 manifest_sha=" .. manifest
+            .. "\nkernel/a.lua " .. tostring(#body) .. " " .. sha(body) .. "\n"
+        local INDEX = BASE .. "index.txt"
+
+        -- the OTA base is /etc/ota.servers' first line (not the package server)
+        H.mkdirp("/etc")
+        H.write("/etc/ota.servers", "# upgrade\n" .. UP .. "\nhttp://other/\n")
+
+        -- the row is the last item, and it shows the remote version after a load
+        local http = http_from({
+            [INDEX] = "app demo 1.0.0 demo\n",
+            [UP .. "/meta.txt"] = meta,
+        })
+        local api = api_with(http)
+        local state = P.new_state(api)
+        state.servers = { BASE }
+        state.server_index = 1
+        H.eq("update_load", P.load_index(state, api), "open")
+        H.eq("update_index", P.ota_index(state), #state.entries + 2)
+        H.eq("update_version", state.ota_version, "0.4.0")
+        H.eq("update_files", state.ota_files, 1)
+        local text = table.concat(P.render(state, 51, 19), "\n")
+        H.contains("update_row", text, "System update 0.4.0")
+        H.contains("update_row_hint", text, "up/dn enter r reload a url q quit")
+
+        -- no remote meta: the row is still there, just without a version
+        local http_plain = http_from({ [INDEX] = "app demo 1.0.0 demo\n" })
+        local api_plain = api_with(http_plain)
+        local plain = P.new_state(api_plain)
+        plain.servers = { BASE }
+        P.load_index(plain, api_plain)
+        H.eq("update_no_version", plain.ota_version, nil)
+        H.contains("update_plain_row", table.concat(P.render(plain, 51, 19), "\n"),
+            "System update")
+
+        -- the ROM http table answers with a response handle (readAll), not with
+        -- {status,body}: the meta check has to read both shapes
+        local http_handle = {
+            get = function(url)
+                if url == UP .. "/meta.txt" then
+                    return { status = 200, readAll = function() return meta end }
+                end
+                if url == INDEX then
+                    return { status = 200,
+                        readAll = function() return "app demo 1.0.0 demo\n" end }
+                end
+                return nil, "not found"
+            end,
+        }
+        local api_h = api_with(http_handle)
+        local st_h = P.new_state(api_h)
+        st_h.servers = { BASE }
+        P.load_index(st_h, api_h)
+        H.eq("update_handle_version", st_h.ota_version, "0.4.0")
+
+        -- Enter on the row: the bridge is called with the base and a progress
+        -- callback, the callback line is painted, and the status says reboot
+        local progress = {}
+        local st
+        local sysx = {
+            ota_apply = function(name, opts)
+                H.eq("update_bridge_name", name, "image")
+                H.eq("update_bridge_base", opts and opts.base, UP)
+                if type(opts) == "table" and type(opts.progress) == "function" then
+                    opts.progress("kernel/a.lua", 1, 2)
+                    progress[#progress + 1] = (st and st.progress) or ""
+                end
+                return true, { state = "ready", version = "0.4.1" }
+            end,
+        }
+        local api2 = api_with(http, sysx)
+        st = P.new_state(api2)
+        st.servers = { BASE }
+        P.load_index(st, api2)
+        st.index = P.ota_index(st)
+        H.eq("update_enter", P.enter(st, api2), "repaint")
+        H.eq("update_progress_line", progress[1], "fetching kernel/a.lua (1/2)")
+        H.eq("update_progress_cleared", st.progress, nil)
+        H.eq("update_status", st.status, "reboot to apply")
+        H.eq("update_version_after", st.ota_version, "0.4.1")
+
+        -- a failing bridge: one readable status line, no version change
+        local sys_bad = { ota_apply = function() return nil, "digest 0123" end }
+        local api3 = api_with(http, sys_bad)
+        local st3 = P.new_state(api3)
+        st3.servers = { BASE }
+        P.load_index(st3, api3)
+        st3.index = P.ota_index(st3)
+        H.eq("update_fail_action", P.enter(st3, api3), "error")
+        H.eq("update_fail_status", st3.status, "update failed: digest 0123")
+
+        -- no http at all: a readable line and no bridge call
+        local api4 = api_with(nil)
+        local st4 = P.new_state(api4)
+        H.eq("update_nohttp_action", P.ota_enter(st4, api4), "error")
+        H.eq("update_nohttp_status", st4.status, "update: no http")
+
+        -- a transport failure (no reply) and a 404 are both readable lines
+        local api5 = api_with(http_from({}))
+        local st5 = P.new_state(api5)
+        H.eq("update_404_action", P.ota_enter(st5, api5), "error")
+        H.eq("update_transport_status", st5.status, "update: not found")
+        local api5b = api_with({ get = function()
+            return { ok = true, status = 404, body = "gone" }
+        end })
+        local st5b = P.new_state(api5b)
+        H.eq("update_404b_action", P.ota_enter(st5b, api5b), "error")
+        H.eq("update_404b_status", st5b.status, "update: http 404")
+
+        -- a bad meta body is a readable line too
+        local api5c = api_with({ get = function()
+            return { ok = true, status = 200, body = "garbage\n" }
+        end })
+        local st5c = P.new_state(api5c)
+        H.eq("update_badmeta_action", P.ota_enter(st5c, api5c), "error")
+        H.contains("update_badmeta_status", st5c.status, "update: meta")
+
+        -- the row moves like any item and cannot be walked past
+        local st6 = P.new_state(api2)
+        st6.entries = { { name = "demo", version = "1.0.0" } }
+        st6.index = 1
+        P.move(st6, 1)
+        P.move(st6, 1)
+        P.move(st6, 1)
+        H.eq("update_move_max", st6.index, 3)
+
+        -- with no config file the built-in default is the project store
+        H.rmrf("/etc/ota.servers")
+        H.eq("update_default_base", P.OTA_DEFAULT, "http://pyroet.pyrotechnic.org/upgrade")
+        H.eq("update_default_used", P.ota_base(api), P.OTA_DEFAULT)
     end
 end

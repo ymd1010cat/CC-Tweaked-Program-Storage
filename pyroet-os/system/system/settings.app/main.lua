@@ -12,10 +12,14 @@ surface (never written back):
     conf     the key items of /etc/network.conf: one `key value` line per entry,
              with anything named like a secret (psk, pass, secret, key, token)
              replaced by *** before it ever reaches the screen
-    storage  free space, the three size gates of DECISIONS.md 8.4 (hard gate
-             629,145 B = 3/5 MiB, target line 349,525 B = 1/3 MiB, update
-             window 900,000 B = image + backup cap), and how many entries
+    storage  free space, the three size gates of DECISIONS.md 8.4 (build hard
+             gate 10,485,760 B = 10 MiB, target line 7,340,032 B = 7 MiB, update
+             window 10,685,760 B = image + backup cap), and how many entries
              /etc/install.set lists when the image ships that file
+
+The gate numbers are the BUILD gate widened by the project owner; they say
+nothing about the medium. A CraftOS computer and a floppy still hold 1,000,000 B
+each, so `free` is the number that decides whether an image fits here.
 
 Strictly read only: the module has no write path at all, the manifest declares
 only `fs.read`, and the offline suite drives it with an instrumented file system
@@ -44,12 +48,12 @@ M.BOOT_OK = "/boot.ok"
 M.CONF_PATH = "/etc/network.conf"
 M.INSTALL_SET = "/etc/install.set"
 M.CONF_LINES = 6
--- DECISIONS.md 8.4, three tiers: hard gate (3/5 MiB), target line (1/3 MiB),
--- and the update window (image + BACKUP_CAP 200,000). The gate tool
+-- DECISIONS.md 8.4, three tiers: hard build gate (10 MiB), target line (7 MiB),
+-- and the update window (upper + BACKUP_CAP 200,000). The gate tool
 -- pyroet-os/tools/sizecheck.py is the only authority for the first two.
-M.BUDGET = 629145
-M.STRETCH = 349525
-M.WINDOW = 900000
+M.BUDGET = 10485760
+M.STRETCH = 7340032
+M.WINDOW = 10685760
 M.BACKUP_CAP = 200000
 M.SECRET_KEYS = { "psk", "pass", "secret", "key", "token" }
 

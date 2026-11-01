@@ -1,7 +1,10 @@
 --[[- pyroet-os/system/system/appstore.app/main.lua -- download a package over http.
 
 The server is chosen by the user: `a` edits the address line (the first line of
-/etc/appstore.servers is the default). Any static file server works -- the layout is
+/etc/appstore.servers is the default). With no config file at all the built-in
+default `http://store.pyrotechnic.org/` is used, so a fresh machine can install
+without pressing `a` first; `a` still overrides it for this session and puts the
+new address at the top of the list. Any static file server works -- the layout is
 plain text, there is no zip and no JSON:
 
     GET <base>/index.txt              -> one "app <name> <version> <dir>" per line
@@ -43,6 +46,16 @@ after every file read back and the end digest (if sent) matched; any failure
 deletes the .part tree, so a half package never becomes visible. A published
 package is installed through the kernel bridge when the host has one.
 
+System update: the row under the package list is the image update entry. Enter
+reads `<base>/meta.txt` (PYROET-OTA/2: the `META version=.. files=..
+manifest_sha=..` line, then one `<relpath> <size> <sha256>` line per file),
+shows the remote version on the row, then hands the download and the apply to
+the kernel through api.sys.ota_apply("image", { base =, progress = }), painting
+`fetching <rel> (i/n)` on the status line. The outcome is `reboot to apply` or
+one readable failure line; the running system is untouched unless every digest
+matched. The base is the first line of /etc/ota.servers, else
+http://pyroet.pyrotechnic.org/upgrade.
+
 No non-ASCII bytes in this file. `_G.PYROET_APPSTORE_TEST` returns the module.
 ]]
 
@@ -53,7 +66,7 @@ M.VIEW = { cols = 51, rows = 19 }
 M.MIN_COLS = 18
 M.MIN_ROWS = 8
 M.CONF = "/etc/appstore.servers"
-M.PLACEHOLDER = "http://example.invalid/"
+M.DEFAULT_SERVER = "http://store.pyrotechnic.org/"
 M.PKGS = "/pkgs"
 M.DISK = "/disk"
 M.DISK_PKGS = "/disk/pkgs"
@@ -73,6 +86,14 @@ M.MAX_CHUNK = 8192
 M.MAX_CHUNKS = 256
 M.MAX_REL = 96
 M.MAX_RECV = 262144
+-- The image update row (2026-11-01): the app paints, the kernel applies. The row
+-- sits under the package list, always visible, and is entered like any other
+-- item; the protocol and the base URL come from kernel/ota.lua so there is one
+-- definition of PYROET-OTA/2 and one default upgrade server.
+M.OTA_MODULE = "/system/kernel/ota.lua"
+M.OTA_TITLE = "System update"
+M.OTA_META = "meta.txt"
+M.OTA_DEFAULT = "http://pyroet.pyrotechnic.org/upgrade"
 
 function M.fit(text, cols)
     local value = tostring(text == nil and "" or text)
@@ -128,7 +149,7 @@ function M.servers(api)
             end
         end
     end
-    if #out == 0 then out[1] = M.PLACEHOLDER end
+    if #out == 0 then out[1] = M.DEFAULT_SERVER end
     return out
 end
 
@@ -174,6 +195,11 @@ function M.new_state(api)
         disk = M.probe_disk(api),
         cols = M.VIEW.cols,
         rows = M.VIEW.rows,
+        -- the system update row: version/files are filled in when the remote meta
+        -- could be read; nil simply means the row has no version to show
+        ota_version = nil,
+        ota_files = nil,
+        ota_base = nil,
     }
     state.server = state.servers[1]
     return state
@@ -181,7 +207,7 @@ end
 
 function M.server_of(state)
     local list = state.servers or {}
-    return list[state.server_index or 1] or list[1] or M.PLACEHOLDER
+    return list[state.server_index or 1] or list[1] or M.DEFAULT_SERVER
 end
 
 -- ---------------------------------------------------------------------------
@@ -204,9 +230,144 @@ function M.get(api, url)
     if type(res) == "string" then return res, 200 end
     if type(res) ~= "table" then return nil, nil, "bad response" end
     local status = tonumber(res.status) or (res.ok == false and 0 or 200)
-    local body = type(res.body) == "string" and res.body or ""
     if status < 200 or status > 299 then return nil, status, "http " .. tostring(status) end
+    -- both shapes: a {status,body} table (tests, a host that already read it) and
+    -- the ROM response handle, which hands the body out through readAll()
+    local body = type(res.body) == "string" and res.body or nil
+    if body == nil and type(res.readAll) == "function" then
+        local rcalled, read = pcall(res.readAll)
+        if rcalled and type(read) == "string" then body = read end
+    end
+    if body == nil then return nil, status, "no body" end
     return body, status
+end
+
+-- ---------------------------------------------------------------------------
+-- the system update row: remote meta over http, apply through the kernel bridge
+-- ---------------------------------------------------------------------------
+
+-- The PYROET-OTA/2 parsers and the built-in base URL live in the image's own OTA
+-- module, so this app never invents a second protocol or a second default
+-- server. nil means "no module": Enter then reports that instead of guessing.
+function M.ota_of()
+    if M._ota ~= nil then return M._ota or nil end
+    local ok, chunk = pcall(loadfile, M.OTA_MODULE)
+    if not ok or type(chunk) ~= "function" then
+        M._ota = false
+        return nil
+    end
+    local called, mod = pcall(chunk)
+    if not called or type(mod) ~= "table" or type(mod.parse_manifest) ~= "function" then
+        M._ota = false
+        return nil
+    end
+    M._ota = mod
+    return mod
+end
+
+-- /etc/ota.servers (first line) > O.DEFAULT_UPGRADE; api.fs is enough for the
+-- read because upgrade_base accepts either fs flavour
+function M.ota_base(api, mod)
+    if mod and type(mod.upgrade_base) == "function" then
+        local fsapi = type(api) == "table" and api.fs or nil
+        local ok, base = pcall(mod.upgrade_base, fsapi, nil)
+        if ok and type(base) == "string" and base ~= "" then return base end
+    end
+    return M.OTA_DEFAULT
+end
+
+-- GET <base>/meta.txt and parse it with the kernel's parser. Returns
+-- {version, files, manifest_sha, base} or nil, reason.
+function M.ota_plan(api)
+    local mod = M.ota_of()
+    if mod == nil then return nil, "no ota module" end
+    local http = M.http_of(api)
+    if http == nil then return nil, "no http" end
+    local base = M.ota_base(api, mod)
+    local body, status, err = M.get(api, M.join(base, M.OTA_META))
+    if body == nil then
+        return nil, tostring(err or ("http " .. tostring(status)))
+    end
+    local meta, files = mod.parse_manifest(body)
+    if meta == nil then return nil, tostring(files or "bad meta") end
+    return {
+        version = meta.version, files = meta.files,
+        manifest_sha = meta.manifest_sha, base = base, count = #(files or {}),
+    }
+end
+
+-- Best effort: called after the index loads so the row can show a version when
+-- the upgrade server answers. A failure stays silent - the row is still
+-- `System update` and Enter is what reports a real reason.
+function M.ota_refresh(state, api)
+    local plan = M.ota_plan(api)
+    if plan then
+        state.ota_version = plan.version
+        state.ota_files = plan.files
+        state.ota_base = plan.base
+    end
+    return state.ota_version
+end
+
+-- The update row is the last list item (a long list has to be scrolled to it).
+function M.ota_index(state)
+    return #(state.entries or {}) + 2
+end
+
+function M.ota_paint(state, api)
+    if type(state.term_paint) == "function" then return state.term_paint() end
+    return false
+end
+
+-- Enter on the update row: check the remote meta, then let the kernel apply it.
+-- The progress callback paints `fetching <rel> (i/n)` from inside the bridge, so
+-- a slow download is visible on the status line.
+function M.ota_enter(state, api)
+    if M.http_of(api) == nil then
+        state.status = "update: no http"
+        state.progress = nil
+        M.note(api, "APPSTORE_OTA ok=false reason=no_http")
+        return "error", "no http"
+    end
+    state.progress = "checking update"
+    M.ota_paint(state, api)
+    local plan, why = M.ota_plan(api)
+    if plan == nil then
+        state.progress = nil
+        state.status = "update: " .. tostring(why)
+        M.note(api, "APPSTORE_OTA ok=false reason=meta err=" .. M.plain(why, 40))
+        return "error", why
+    end
+    state.ota_version, state.ota_files, state.ota_base = plan.version, plan.files, plan.base
+    local sysx = type(api) == "table" and api.sys or nil
+    if type(sysx) ~= "table" or type(sysx.ota_apply) ~= "function" then
+        state.progress = nil
+        state.status = "update: no kernel bridge"
+        M.note(api, "APPSTORE_OTA ok=false reason=no_bridge")
+        return "error", "no bridge"
+    end
+    local function progress(rel, i, n)
+        state.progress = "fetching " .. tostring(rel) .. " ("
+            .. tostring(i) .. "/" .. tostring(n) .. ")"
+        M.ota_paint(state, api)
+    end
+    local called, ok, info = pcall(sysx.ota_apply, "image",
+        { base = plan.base, progress = progress })
+    state.progress = nil
+    if not called then
+        state.status = "update failed: " .. M.oneline(ok, 40)
+        M.note(api, "APPSTORE_OTA ok=false reason=crash")
+        return "error", "crash"
+    end
+    if ok then
+        state.status = "reboot to apply"
+        if type(info) == "table" and info.version then state.ota_version = info.version end
+        M.note(api, "APPSTORE_OTA ok=true version=" .. M.plain(plan.version, 24))
+        return "repaint"
+    end
+    state.status = "update failed: " .. M.oneline(info, 40)
+    M.note(api, "APPSTORE_OTA ok=false reason=apply err=" .. M.plain(info, 40))
+    return "error", info
 end
 
 -- ---------------------------------------------------------------------------
@@ -266,8 +427,10 @@ end
 -- rendering helpers
 -- ---------------------------------------------------------------------------
 
+-- Rows the list area can show: the row above it is the server line, the row
+-- under it is the update entry, then the status and hint rows.
 function M.rows_for_list(state)
-    return math.max(1, (state.rows or M.VIEW.rows) - 5)
+    return math.max(1, (state.rows or M.VIEW.rows) - 6)
 end
 
 function M.render(state, cols, rows)
@@ -291,24 +454,35 @@ function M.render(state, cols, rows)
         add("server: " .. M.server_of(state))
     end
     local area = rows - 4
+    -- the list window: server row, every package, then the update row (which
+    -- scrolls with the list like any last item); rows past the end stay blank
+    local list_rows = math.max(1, area)
     local entries = state.entries or {}
-    local count = #entries + 1 -- row 1 is the server line
+    local count = #entries + 2 -- server row, every package, then the update row
     local first = 1
-    if count > area then
-        first = math.max(1, (state.index or 1) - area + 1)
-        if first + area - 1 > count then first = math.max(1, count - area + 1) end
+    if count > list_rows then
+        first = math.max(1, (state.index or 1) - list_rows + 1)
+        if first + list_rows - 1 > count then
+            first = math.max(1, count - list_rows + 1)
+        end
     end
-    for i = 0, area - 1 do
+    for i = 0, list_rows - 1 do
         local position = first + i
-        if position == 1 then
+        if position < 1 or position > count then
+            add("")
+        elseif position == 1 then
             local marker = (state.index or 1) == 1 and ">" or " "
             add(marker .. " [server] " .. M.server_of(state))
-        elseif position - 1 <= #entries then
+        elseif position <= #entries + 1 then
             local entry = entries[position - 1]
             local marker = (state.index or 1) == position and ">" or " "
             add(marker .. " " .. tostring(entry.name) .. " " .. tostring(entry.version))
         else
-            add("")
+            -- the update row: the version appears once a remote meta was read
+            local label = M.OTA_TITLE
+            if state.ota_version then label = label .. " " .. tostring(state.ota_version) end
+            local marker = (state.index or 1) == position and ">" or " "
+            add(marker .. " " .. label)
         end
     end
     local status = state.status ~= "" and state.status or state.message
@@ -343,22 +517,24 @@ function M.load_index(state, api)
     end
     local entries, bad = M.parse_index(body, base)
     state.entries = entries
-    if state.index > #entries + 1 then state.index = 1 end
+    if state.index > #entries + 2 then state.index = 1 end
     state.status = #entries .. " apps"
     if bad > 0 then state.status = state.status .. " bad lines: " .. tostring(bad) end
     M.note(api, "APPSTORE_INDEX ok=true entries=" .. tostring(#entries)
         .. " bad=" .. tostring(bad))
+    -- the update row shows the remote version when the upgrade server answers
+    M.ota_refresh(state, api)
     return #entries > 0 and "open" or "none"
 end
 
 function M.selected_entry(state)
     local index = state.index or 1
-    if index <= 1 then return nil end
+    if index <= 1 or index > #(state.entries or {}) + 1 then return nil end
     return (state.entries or {})[index - 1]
 end
 
 function M.move(state, delta)
-    local count = #(state.entries or {}) + 1
+    local count = #(state.entries or {}) + 2 -- the update row is the last item
     local index = (state.index or 1) + delta
     if index < 1 then index = 1 end
     if index > count then index = count end
@@ -1060,6 +1236,7 @@ end
 
 function M.enter(state, api)
     if (state.index or 1) == 1 then return M.edit_begin(state, api) end
+    if (state.index or 1) == M.ota_index(state) then return M.ota_enter(state, api) end
     local entry = M.selected_entry(state)
     if entry == nil then
         state.status = "nothing selected"
@@ -1235,6 +1412,12 @@ function M.body(manifest, api)
     local state = M.new_state(api)
     state.manifest = manifest
     local term = type(api) == "table" and api.terminal or nil
+    -- the update flow paints from inside the kernel bridge (progress lines), so
+    -- the terminal it paints on is captured here once
+    state.term_paint = function()
+        if type(term) ~= "table" then return false end
+        return M.paint_once(state, api, term)
+    end
     local input = type(api) == "table" and api.input or nil
     local pull = type(input) == "table" and input.pullEvent or nil
     if M.http_of(api) == nil then

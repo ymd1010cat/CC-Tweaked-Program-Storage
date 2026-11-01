@@ -19,6 +19,7 @@
 #     .tests/computer/20/recovery/*.lua          pyroet-os/recovery/*.lua (dev tools)
 #     .tests/computer/20/ota/*.lua               pyroet-os/ota/*.lua (distribution side, not image)
 #     .tests/computer/20/install.set             pyroet-os/install.set (budget assertions)
+#     .tests/computer/20/tests/sizecheck.py      pyroet-os/tools/sizecheck.py (gate pins)
 #     .tests/computer/20/tests/*.lua             this directory's runner + suites
 #     .tests/computer/20/tests/root-startup.lua  the ROM stub pyroet-os/startup.lua
 #
@@ -64,7 +65,7 @@ foreach ($required in @("startup.lua", "system\startup.lua", "system\boot.lua",
     "system\system\appstore.app\manifest.lua", "system\system\appstore.app\main.lua",
             "system\system\installer.app\manifest.lua", "system\system\installer.app\main.lua",
         "recovery\proto.lua", "recovery\flash.lua", "recovery\bootstrap.lua",
-        "ota\server.lua", "install.set", "tools\pushpkg.lua")) {
+        "ota\server.lua", "install.set", "tools\pushpkg.lua", "tools\sizecheck.py")) {
     if (-not (Test-Path (Join-Path $osRoot $required))) {
         Write-Output "OFFLINE_ERROR missing source: pyroet-os/$required"
         exit 2
@@ -127,6 +128,10 @@ Copy-Item (Join-Path $osRoot "examples\files.app\*") (Join-Path $comp "tests\fil
     # tools/ is development material, not image payload: t_pushpkg drives a
     # copy of the pusher that the OTHER computer would run
     Copy-Item (Join-Path $osRoot "tools\pushpkg.lua")   (Join-Path $comp "tests\pushpkg.lua") -Force
+    # the size gate itself is staged too: t_budget pins its three constants (the
+    # build gate is 10 MiB / 7 MiB since 2026-11-01), so a silent widening or
+    # tightening of sizecheck.py fails the suite instead of only the build
+    Copy-Item (Join-Path $osRoot "tools\sizecheck.py")  (Join-Path $comp "tests\sizecheck.py") -Force
     Copy-Item (Join-Path $osRoot "system\system\installer.app\*") (Join-Path $comp "tests\installer.app") -Force
     # the ROM stub is not staged as /startup.lua (that is the shim); the layout
     # suite loads this copy and drives it with a stubbed loadfile/print

@@ -6,24 +6,32 @@ path per line ('#' starts a comment, blank lines ignored), walks every entry
 (file, or directory recursively), sums file count and bytes, prints a table
 grouped by component, then applies the three-tier budget gate.
 
-Gate (defaults, three tiers - DECISIONS.md 0.4 / 7.1 / 8.4):
-    total >  629145            -> SIZE_FAIL    exit 1   (hard gate, 3/5 MiB)
-    total >  349525            -> SIZE_WARN    exit 0   (over the target line)
-    total <= 349525            -> SIZE_PASS    exit 0   (target line, 1/3 MiB)
+Gate (defaults, three tiers - DECISIONS.md 0.4 / 7.1 / 8.4; the two upper
+tiers were widened by the project owner on 2026-11-01 from 349,525 / 629,145 B
+to 7 MiB / 10 MiB - the build gate, not the medium):
+    total >  10485760          -> SIZE_FAIL    exit 1   (hard build gate, 10 MiB)
+    total >  7340032           -> SIZE_WARN    exit 0   (over the target line)
+    total <= 7340032           -> SIZE_PASS    exit 0   (target line, 7 MiB)
     missing install set / any
     listed path missing        -> SIZE_ERROR   exit 2
 
-Hard gate  = 629,145 B = floor(1,048,576 * 3 / 5) = 3/5 MiB. Release blocker.
-Target line = 349,525 B = floor(1,048,576 / 3) = 1/3 MiB. WARN only, never fails.
+Hard gate  = 10,485,760 B = 10 MiB. Release blocker (build side only).
+Target line = 7,340,032 B = 7 MiB. WARN only, never fails.
+
+The real storage limits did NOT grow with these numbers: CraftOS gives every
+computer and every floppy 1,000,000 B, so a 10 MiB image cannot be installed on
+one machine. The gate answers "how big may the built image get", the medium
+answers "does it fit" (DECISIONS.md 7.1 / 7.2). This is the owner's call: keep
+the build gate generous so code size is a design question, not a build error.
 
 Update window (checked independently of the size verdict, so a SIZE_FAIL run
 still prints its WINDOW line):
-    total + backup_cap <= 900,000 B     -> WINDOW_OK   sum=<total+cap>
-    total + backup_cap >  900,000 B     -> WINDOW_FAIL ... exit 1
-backup_cap defaults to 200,000 B (the copy an OTA keeps while swapping slots),
-so the widest image the gate can ever bless (629,145) plus that copy (200,000)
-sums to 829,145: 70,855 B of headroom under the 900,000 window and 170,855 B
-under the 1,000,000 B device quota (/boot.ok, logs, app data).
+    total + backup_cap <= 10685760 B    -> WINDOW_OK   sum=<total+cap>
+    total + backup_cap >  10685760 B    -> WINDOW_FAIL ... exit 1
+backup_cap defaults to 200,000 B (the copy an OTA keeps while swapping slots)
+and the window limit is derived from the upper tier (10485760 + 200000), so it
+can only fail when the size gate has already failed. Both are build-side
+arithmetic; the 1,000,000 B device quota is tracked in DECISIONS.md 7.2.
 
 Component naming: by default the leading container segment ("pyroet-os", i.e.
 the directory that holds the install set) is stripped, then the first remaining
@@ -41,10 +49,10 @@ import argparse
 import os
 import sys
 
-DEFAULT_BUDGET = 629145           # 3/5 MiB, hard gate
-DEFAULT_STRETCH = 349525          # 1/3 MiB, target line (WARN only)
+DEFAULT_BUDGET = 10485760         # 10 MiB, hard build gate
+DEFAULT_STRETCH = 7340032         # 7 MiB, target line (WARN only)
 DEFAULT_BACKUP_CAP = 200000       # bytes the updater keeps while swapping slots
-WINDOW_LIMIT = 900000             # image + backup must fit under this
+WINDOW_LIMIT = DEFAULT_BUDGET + DEFAULT_BACKUP_CAP   # derived from the upper tier
 DEFAULT_INSTALL_SET = os.path.join("pyroet-os", "install.set")
 
 
@@ -148,8 +156,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="install set file, repo-root-relative (default: " + DEFAULT_INSTALL_SET + ")",
     )
-    parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET, help="hard gate in bytes (default: 629145 = 3/5 MiB)")
-    parser.add_argument("--stretch", type=int, default=DEFAULT_STRETCH, help="target line in bytes, WARN only (default: 349525 = 1/3 MiB)")
+    parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET, help="hard gate in bytes (default: 10485760 = 10 MiB)")
+    parser.add_argument("--stretch", type=int, default=DEFAULT_STRETCH, help="target line in bytes, WARN only (default: 7340032 = 7 MiB)")
     parser.add_argument(
         "--backup-cap",
         type=int,

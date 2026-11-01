@@ -114,6 +114,16 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 hosts, probe target), q back
      appstore   built-in package downloader: a edits the server line, enter
                 downloads the selected package into /pkgs and installs it.
+                With no /etc/appstore.servers the default server is
+                http://store.pyrotechnic.org/ , so a fresh machine can install
+                without pressing a first; a still overrides it for this session.
+                The last row of the list, "System update", is the image update:
+                enter reads <base>/meta.txt (base = first line of
+                /etc/ota.servers, else http://pyroet.pyrotechnic.org/upgrade),
+                shows the remote version, then downloads and applies every file
+                with a "fetching <rel> (i/n)" progress row; the result is
+                "reboot to apply", and any failure is one readable line with the
+                running system untouched.
                 Server layout (plain text, any static file server):
                   index.txt           "app <name> <version> <dir>" per line
                   <dir>/files.txt     one relative path per line
@@ -140,6 +150,8 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 package files over http, then streams them to the handheld
                 (PYROET-PKG/1, channel 4101 by default). /etc/pushpkg.conf:
                 server=<http base>, protocol=, channel= (logged), timeout=.
+                The default server (no config file, or no server= line) is
+                http://store.pyrotechnic.org/ .
                 index.txt takes "app <name> <version> <dir>" and
                 "lua <name> <version> <file.lua>"; a lua entry is wrapped
                 into manifest.lua + main.lua (capabilities
@@ -190,12 +202,21 @@ The net service ships but is not registered by the default boot chain in
   -- pass { services = { spec } } to /system/startup.lua run(opts)
 
 5. UPDATE AND RECOVERY
-System OTA over rednet (protocol pyroet-ota, publisher rednet id 12):
+System OTA over the network (the normal path), base = first line of
+/etc/ota.servers or http://pyroet.pyrotechnic.org/upgrade:
+  local ota = dofile("/system/kernel/ota.lua").new({ http = http, log = print })
+  ota:update() ; print(ota:status().state)
+The desktop entry is appstore's "System update" row (enter, then wait for
+"reboot to apply"). The server serves the same description as the rednet peer:
+  GET <base>/meta.txt   -> PYROET-OTA/2 META version=.. files=.. manifest_sha=..
+                           then one "<relpath> <size> <sha256>" line per file
+  GET <base>/<relpath>  -> the file body
+System OTA over rednet (no http host, publisher rednet id 12):
   local ota = dofile("/system/kernel/ota.lua").new({ host = 12, log = print })
   ota:update() ; print(ota:status().state)
-It verifies the manifest hash and the backup cap BEFORE touching /system,
-stages every file, keeps the old bytes in /update.backup until commit, and
-rolls itself back on failure. Rescue reflash:
+Either source verifies the manifest hash and the backup cap BEFORE touching
+/system, stages every file, keeps the old bytes in /update.backup until commit,
+and rolls itself back on failure. Rescue reflash:
   recovery/flash.lua --disk=/disk/firmware   (from a disk drive)
   recovery/flash.lua --host=12               (from rednet)
   recovery/bootstrap.lua                     (push receiver)
@@ -231,9 +252,12 @@ delivered -- a launcher without "input"/"terminal" granted cannot draw it.
 /system are pre-granted, so a package in /apps always gets the dialog once.
 "No such program": run recovery programs by path, e.g.
 "recovery/flash.lua --host=12".
-Storage: "df" shows free space; keep >= 601,778 B free before an update
-(401,778 image + 200,000 cap). A too-large update is refused before any byte
-is written. Keep /recovery on the machine: it is the only rescue path.
+Storage: "df" shows free space; keep >= free-space-for-image + 200,000 B free
+before an update (the current image is 650,447 B, so about 850,000 B). The
+build gate is 10 MiB (2026-11-01), but the medium did not grow: a computer and a
+floppy still hold 1,000,000 B each, so the gate can bless an image that will not
+fit here. A too-large update is refused before any byte is written. Keep
+/recovery on the machine: it is the only rescue path.
 
 Keys note
 ---------

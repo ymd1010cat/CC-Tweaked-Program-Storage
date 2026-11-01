@@ -349,6 +349,14 @@ compat：manifest **不写** `capabilities` = 声明空列表 = 全部拒绝，*
 | `appstore.app` | 0.1.0 | `http`, `fs.read`, `fs.write`（写 `/pkgs`，有驱动器时可切到 `/disk/pkgs`，见 §5.7）, `input`, `terminal`, `net.rednet`（T20 接收模式） |
 | `net.app` (可选示例，不在镜像) | 0.2.0 | `net.rpv`, `fs.read` |
 
+`appstore.app` 的 cap 表已经是网络升级所需的三项（`http` + `fs.read` + `fs.write`），所以
+2026-11-01 加的 **`System update` 行**不需要新的授权（列表最后一行；包多时需要滚到底）：它自己只用
+`api.http` 读 `<base>/meta.txt`（解析交给 `kernel/ota.lua`），真正的下载+刷写走内核桥
+`api.sys.ota_apply("image", { base =, progress = })`——内核有能 `open`/`move` 的 fs 和 `boot.lua`，
+应用只有受控的 `api.fs`。桥对这种调用额外要求 `http`（`nil, "capability denied: http"`），
+没有 http 宿主时回 `nil, "no http"`（`APP_OTA_IMAGE ok=false reason=no_http`），界面只显示一行
+`update: no http`，不崩、不改盘。
+
 ### 5.5 安装器 UI（`installer.app`）
 
 图形入口，26x20，与桌面/设置共用同一套布局自检（`layout_selftest()`）。
@@ -415,6 +423,8 @@ pushpkg 7 hello      # 只推 hello
 ```
 
 `/etc/pushpkg.conf`（可选）：`server=<http base>`、`protocol=`、`channel=`（仅日志）、`timeout=`。
+**默认服务器**（配置文件缺失、或缺 `server=` 时）：`http://store.pyrotechnic.org/`——手持机端
+`appstore` 的 `/etc/appstore.servers` 也缺省到同一个地址，所以两边开箱即用；按 `a` 仍可临时改地址。
 
 **服务器目录**（和 `appstore` 一样是纯文本）：
 
@@ -449,10 +459,18 @@ index.txt         app <name> <version> <dir>      # 目录包：manifest.lua + m
 
 ## 6. 更新与恢复
 
-### 6.1 文件集 OTA：`PYROET-OTA/2`（rednet 协议名 `pyroet-ota`）
+### 6.1 文件集 OTA：`PYROET-OTA/2`（rednet 协议名 `pyroet-ota`，或 http）
 
-只走**裸 rednet**（不依赖 rpv——网络栈本身可能就是坏的），另用 `/system/rpv/crypto.lua` 的 SHA-256。
-一行一包：
+两条源、**同一条应用路径**：
+
+- **http（默认，2026-11-01 起的真实升级通道）**：`GET <base>/meta.txt` 返回**同一份描述**的纯文本
+  （第一行 `PYROET-OTA/2 META version=<t> files=<n> manifest_sha=<64 hex>`，之后每行
+  `<relpath> <size> <sha256>`），每个文件一次 `GET <base>/<relpath>`。`base` 取值顺序：
+  调用方显式 `base=` > `/etc/ota.servers` 第一条有效行 > 内置常量
+  `O.DEFAULT_UPGRADE = "http://pyroet.pyrotechnic.org/upgrade"`。没有配置文件不是错误——
+  那正是新镜像第一次开机的状态。
+- **rednet**：只走**裸 rednet**（不依赖 rpv——网络栈本身可能就是坏的），另用 `/system/rpv/crypto.lua`
+  的 SHA-256。一行一包：
 
 | 方向 | 报文 |
 | --- | --- |
@@ -464,7 +482,10 @@ index.txt         app <name> <version> <dir>      # 目录包：manifest.lua + m
 | 应答 | `PYROET-OTA/2 DATA <relpath> <offset> <hex>` |
 
 `MAX_DATA = 8,192` B 载荷/包，`F_MAX = 65,536` B/文件，`MAX_FILES = 256`，丢包/坏块各算一次尝试
-（1..3 次，`OTA_RETRY`），不做位图（重连从第 0 块重算并覆盖写）。
+（1..3 次，`OTA_RETRY`），不做位图（重连从第 0 块重算并覆盖写）。http 源下一次 `GET` 拿整份文件，
+**收到即校验**：字节数不等于声明 `size` 或正文哈希不等于声明 `sha256` 的文件不会进 `/update.stage`
+（`OTA_NET_FAIL stage=<meta|file|size> url=.. err=..`）；描述本身（`meta.txt`）由同一个
+`O.parse_manifest` 解析，与 rednet 的 `META`/`FILE` 行共用解析器。
 
 **顺序即安全保证**：
 
@@ -526,6 +547,14 @@ local ota = dofile("/system/kernel/ota.lua").new({ host = 12, log = print })
 ota:update()
 print(ota:status().state, ota:status().bytes)
 
+-- 系统 OTA（真实升级服务器；base 缺省取 /etc/ota.servers 首行或内置默认）
+local net_ota = dofile("/system/kernel/ota.lua").new({ http = http, log = print,
+    progress = function(rel, i, n) print("fetching " .. rel .. " (" .. i .. "/" .. n .. ")") end })
+net_ota:update()
+
+-- 桌面入口：appstore 列表最下面一行 System update（Enter 检查+下载+刷写，
+-- 状态行 fetching <rel> (i/n) → 成功 `reboot to apply`）
+
 -- 从驱动器刷写 /system
 recovery/flash.lua --disk=/disk/firmware
 -- 从 rednet 刷写 /system
@@ -542,10 +571,13 @@ inst:install("hello"); inst:uninstall("hello"); inst:list()
 -- 安装器；桥的接法与降级见 §5.5。
 ```
 
-注意：OTA 正常更新与救援刷写是**同一信任模型的两条链路**（裸 rednet + SHA-256 + 帧定界，
-无握手、无加密），区别只在入口：`ota.lua` 是镜像内的正常客户端（复用 `boot.lua` 的写入口），
-`recovery/` 是系统坏掉时的手工入口。发布端（回答 `GET meta` / `GET <idx>` 的那一端）可以用
-`ota/server.lua`：它只跑在带 modem 的普通 CraftOS 电脑上，不跑在掌机上，也不进镜像。
+注意：OTA 正常更新与救援刷写是**同一信任模型的两条链路**（SHA-256 + 帧定界，无握手、无加密），
+区别只在入口：`ota.lua` 是镜像内的正常客户端（复用 `boot.lua` 的写入口与 `/update.stage` 单树流程），
+`recovery/` 是系统坏掉时的手工入口。正常更新的下载侧现在有 http（默认）与 rednet 两种，应用侧只有一条；
+桌面上的入口是 `appstore` 的 **System update** 行，它自己不写盘，只把 `base` 与进度回调交给内核桥
+`api.sys.ota_apply("image", { base =, progress = })`（只有内核拿得到能 `open`/`move` 的 fs 和 `boot.lua`）。
+发布端（回答 `GET meta` / `GET <idx>` 的那一端）可以用 `ota/server.lua`：它只跑在带 modem 的普通
+CraftOS 电脑上，不跑在掌机上，也不进镜像。
 `recovery/` 失败**不破坏旧系统**：暂存期失败只花一次下载。
 
 ---
@@ -556,25 +588,30 @@ inst:install("hello"); inst:uninstall("hello"); inst:list()
 
 | 口径 | 数值 | 语义 |
 | --- | --- | --- |
-| 硬门禁（upper） | **629,145 B**（3/5 MiB） | `> 629,145` = `SIZE_FAIL`，exit 1，发版阻断 |
-| 目标线（stretch） | **349,525 B**（1/3 MiB） | `349,525 < total ≤ 629,145` = `SIZE_WARN`，**只 WARN、不判死** |
+| 硬门禁（upper） | **10,485,760 B**（10 MiB） | `> 10,485,760` = `SIZE_FAIL`，exit 1，发版阻断 |
+| 目标线（stretch） | **7,340,032 B**（7 MiB） | `7,340,032 < total ≤ 10,485,760` = `SIZE_WARN`，**只 WARN、不判死** |
 | 备份上限（BACKUP_CAP） | **200,000 B** | OTA 换文件期间保留的旧字节上限 |
-| 更新窗口 | **900,000 B** | `total + BACKUP_CAP ≤ 900,000` = `WINDOW_OK`，超出 exit 1 |
-| 机身配额 | **1,000,000 B** | CC 电脑默认存储配额（含用户数据、日志、已装 app） |
+| 更新窗口 | **10,685,760 B** | `total + BACKUP_CAP ≤ 10,685,760` = `WINDOW_OK`（= upper + cap，随 upper 推导） |
+| 机身配额 | **1,000,000 B** | CC 电脑/软盘默认存储配额（含用户数据、日志、已装 app）——**没有随门禁变** |
 
-当前实测（v1.0.0 + N1 修正 + T1 安装器 UI）：
+> **2026-11-01 用户拍板放宽**：旧档位是 upper 629,145 B（3/5 MiB）、stretch 349,525 B（1/3 MiB）。
+> 放宽的**只是构建门禁**（代码体量不再当作构建错误），**真实介质容量另算**：掌机仍是一台 CC 电脑，
+> 盘配额 1,000,000 B，一个 10 MiB 的镜像装不进任何一台机器。能不能装看 `free`，不看 `SIZE_PASS`。
+
+当前实测（2026-11-01，网络 OTA + appstore 更新入口之后）：
 
 ```
 entries    : 29 (29 files, 0 dirs, 0 missing)
-TOTAL      : 599,043 B   (system 28 文件 597,973 + 根 starter 1,070)
-VERDICT    : SIZE_WARN   (stretch 349,525 < total 599,043 <= upper 629,145)
-MARGIN     : 249,518 bytes over stretch; 30,102 bytes under upper
-WINDOW_OK  : sum=799043 limit=900000
+TOTAL      : 650,447 B   (system 28 文件 649,377 + 根 starter 1,070)
+VERDICT    : SIZE_PASS   (total 650,447 <= stretch 7,340,032)
+MARGIN     : 6,689,585 bytes under stretch; 9,835,313 bytes under upper
+WINDOW_OK  : sum=850447 limit=10685760
 ```
 
-- **`SIZE_WARN` 不是失败**：超目标线只报差额；硬门禁才是发版阻断线。
-- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`599,043 + 200,000 = 799,043`，
-  距 900,000 还有 100,957 B，距机身 1,000,000 B 还有 200,957 B。
+- **`SIZE_WARN` 不是失败**：超目标线只报差额；硬门禁才是发版阻断线。当前体量在**新目标线以下**，
+  所以判 `SIZE_PASS`。
+- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`650,447 + 200,000 = 850,447`，
+  远在 10,685,760 之内；它与机身 1,000,000 B 配额不是一回事（后者是物理事实，工具不替你判断）。
 - **发布包 ≠ 镜像**：发布 zip 是完整源码集（含 `recovery/` 与两份文档），`install.set` 统计的才是镜像；
   不要拿 zip 体积当门禁，也不要因为包里有 `recovery/` 就以为它在镜像里。
 
@@ -618,7 +655,10 @@ pwsh -NoProfile -File pyroet-os/tests/run-tests.ps1
 脚本把镜像 stage 到 `pyroet-os/.tests/computer/20`（与真机同布局：`/system` + `/system/system/*.app`），
 headless 启动、读取 `/offline-report.txt` 判分，**PASS 后自动删除 staging**（`-Keep` 保留）。
 
-基线（v1.0.0 + N1 修正 + T1 安装器 UI + T4 + M2 画面测试 + O3 能力）：**OFFLINE_PASS 4239 / FAIL 0 / GROUPS 210**。
+基线（2026-11-01，网络 OTA + appstore `System update` 入口之后）：**OFFLINE_PASS 5,780 / FAIL 0 / GROUPS 290**。
+本轮新增/扩展的套件：`t_sys_ota.ota.image`（http 升级：成功刷写、坏 manifest、坏 sha、错长度、404、
+坏行、无 http、`/etc/ota.servers` 覆盖，全部用假 http + 沙箱 `root`）、`t_appstore.appstore.update`
+（更新行显示版本、Enter 调桥、进度行、失败行、无 http）、`t_budget.budget.gate`（门禁数字 pin）。
 M2 之后新增的是 PC 侧渲染测试：`tests/screen.lua`（屏幕缓冲 harness，替换 `_G.term`）与
 `tests/t_bios_screen.lua`（首帧 / 试启动帧 / 无 `/system` 的 fatal 屏 / 根 starter 失败文案 / 10x4 小屏），
 细节见 `DECISIONS.md` §18；O3 新增 `tests/t_caps.lua`（`input` / `terminal` 的拒绝、放行、unavailable、
