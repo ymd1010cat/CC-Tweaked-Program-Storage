@@ -654,6 +654,8 @@ function P.start_desktop_loop(ctx, o, log)
         loan_abort_events = o.loan_abort_events,
         loan_abort_seconds = o.loan_abort_seconds,
         clock = o.clock,
+        -- the desktop clears the screen around a screen loan (T6)
+        term = o.terminal or o.term,
     })
     if not okn or type(desktop) ~= "table" then
         log("STARTUP_DESKTOP_FAIL err=" .. short(desktop))

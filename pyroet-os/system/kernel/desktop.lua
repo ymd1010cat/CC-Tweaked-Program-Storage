@@ -369,6 +369,33 @@ function D:park_one(name, reason)
     return true
 end
 
+-- Clear the screen before a loan starts and again before the desktop takes it
+-- back (T6): a loaned app may paint one row and leave every other row of the old
+-- frame intact, which is the "mixed screens" the user reported. The terminal is
+-- injected by startup (or the ROM global), and everything is pcall'd: a terminal
+-- without clear/colours must never break the loop.
+D.COLOUR_BG = 32768
+D.COLOUR_FG = 1
+
+function D:clear_screen(name, stage)
+    local t = self.term
+    if type(t) ~= "table" then t = rawget(_G, "term") end
+    local ok = false
+    if type(t) == "table" and type(t.clear) == "function" then
+        if type(t.setBackgroundColour) == "function" then
+            pcall(t.setBackgroundColour, D.COLOUR_BG)
+        end
+        if type(t.setTextColour) == "function" then
+            pcall(t.setTextColour, D.COLOUR_FG)
+        end
+        ok = (pcall(t.clear) == true)
+        if type(t.setCursorPos) == "function" then pcall(t.setCursorPos, 1, 1) end
+    end
+    self:log("DESKTOP_LOAN_CLEAR app=" .. short(name, 24) .. " stage="
+        .. tostring(stage) .. " ok=" .. tostring(ok))
+    return ok
+end
+
 function D:loan_start(name)
     if name == nil then return false end
     if self.loan ~= nil then self:loan_end("replaced") end
@@ -378,6 +405,8 @@ function D:loan_start(name)
     self.loans = self.loans + 1
     self:log("DESKTOP_LOAN app=" .. short(name, 24) .. " reason=no_input"
         .. " caps=" .. tostring(#((entry and entry.capabilities) or {})))
+    -- T6: the loaned app starts on a clean screen (no leftovers of the desktop)
+    self:clear_screen(name, "start")
     -- bound the loan: without a keyboard the app can never hand the screen back,
     -- so a timer (and, as a fallback, an event count) guarantees the machine is
     -- not stuck on a frame nobody can leave
@@ -421,6 +450,9 @@ function D:loan_end(reason)
     self.loan_ends = self.loan_ends + 1
     -- parked *after* the loan, never during it: frozen, so it cannot paint again
     self:park_one(name, "loan_over")
+    -- T6: the desktop repaints on a clean screen, so the app's last frame cannot
+    -- bleed through the launcher
+    self:clear_screen(name, "end")
     self:log("DESKTOP_LOAN_END app=" .. short(name, 24) .. " reason=" .. short(reason, 16))
     self.foreground = self.name
     self.handovers = self.handovers + 1

@@ -1114,6 +1114,113 @@ end
     end
 
     -- -----------------------------------------------------------------
+    H.group("desktop_loop.loan_clear")
+    -- T6: a loan starts on a cleared screen and the desktop takes the screen back
+    -- on a cleared screen too. The fixture paints exactly ONE row, so any
+    -- leftover from the previous frame stays visible unless the clear worked.
+    do
+        local function one_row(name, text)
+            return {
+                manifest = 'return { name = "' .. name .. '", version = "0.1.0",'
+                    .. ' capabilities = { "fs.read" } }',
+                main = string.format([[
+return function(manifest, api)
+    local t = rawget(_G, "term")
+    t.setCursorPos(1, 1)
+    t.write(%q .. string.rep(" ", 40))
+    while true do api.yield() end
+end
+]], text),
+            }
+        end
+
+        H.rmrf("/apps")
+        H.app_package("/apps/aeloan.app", one_row("aeloan", "aeloan ui"))
+        H.rmrf("/etc/perms")
+        local dir = H.case_dir("loop", "loan_clear")
+        bootable(dir)
+        local host = new_host()
+        host.keys = KEYS
+        local log, lines = H.logger()
+        local buf = S.buffer(51, 19)
+        local events = {
+            { "key", 14 },   -- launch aeloan (index 1) -> screen loan
+            { "timer", 7 },  -- the loan timer ends it (timeout)
+        }
+        local frames, pulls = {}, 0
+        local function snap()
+            local out = {}
+            for y = 1, 19 do out[y] = buf.row(y) end
+            return out
+        end
+        local pull = function()
+            frames[pulls + 1] = snap()
+            pulls = pulls + 1
+            local event = events[pulls]
+            if event == nil then return nil end
+            return event[1], event[2]
+        end
+        local result = nil
+        local saved = rawget(_G, "PYROET_APP_NOPAINT")
+        rawset(_G, "PYROET_APP_NOPAINT", nil)
+        local okrun, why = pcall(function()
+            local okw, value = S.with_term(buf, function()
+                return startup.run({
+                    fs = F,
+                    root = dir,
+                    log = log,
+                    apps_root = "/apps",
+                    input = host,
+                    pull_event = pull,
+                    terminal = buf,
+                    desktop_events = 3,
+                    start_timer = function() return 7 end,
+                    loan_seconds = 15,
+                    power_menu = false,
+                    reboot = function() error("rebooted unexpectedly") end,
+                    frame = function() return true end,
+                })
+            end)
+            result = value
+            return okw
+        end)
+        rawset(_G, "PYROET_APP_NOPAINT", saved)
+        H.check("clear_run_ok", okrun and why == true, tostring(result))
+
+        -- before the loan: the desktop frame with its list and status row
+        local before = table.concat(frames[1] or {}, "\n")
+        H.contains("clear_before_list", before, "apps sel")
+        H.contains("clear_before_row", before, "aeloan")
+
+        -- the loan starts on a cleared screen: only the fixture's own row 1
+        -- remains, rows 2..18 are blank and no desktop text survives
+        H.eq("clear_start_log", H.count(lines,
+            "DESKTOP_LOAN_CLEAR app=aeloan stage=start ok=true"), 1)
+        local during = frames[2] or {}
+        H.contains("clear_during_row1", during[1] or "", "aeloan ui")
+        local leftovers = 0
+        for y = 2, 18 do
+            if ((during[y] or ""):gsub("%s", "")) ~= "" then leftovers = leftovers + 1 end
+        end
+        H.eq("clear_during_blank", leftovers, 0)
+        H.absent("clear_during_no_status",
+            table.concat(during, "\n"), "apps sel")
+
+        -- back on the desktop: the app's row is gone, the launcher is complete
+        H.eq("clear_end_log", H.count(lines,
+            "DESKTOP_LOAN_CLEAR app=aeloan stage=end ok=true"), 1)
+        local after = frames[3] or {}
+        local joined = table.concat(after, "\n")
+        H.absent("clear_after_no_app_text", joined, "aeloan ui")
+        H.contains("clear_after_row", (after[3] or ""):sub(1, 2), "> ")
+        H.contains("clear_after_hint", after[18] or "", "display only: aeloan")
+        H.contains("clear_after_hint2", after[18] or "", "aeloan")
+        H.contains("clear_after_status", after[19] or "", "apps sel 1/")
+        H.has(lines, "DESKTOP_LOAN_END app=aeloan reason=timeout")
+        H.rmrf("/apps")
+    end
+
+    -- -----------------------------------------------------------------
     H.group("desktop_loop.leave")
     -- Exit semantics of round 6: on the desktop q/Q/escape are only a hint -- the
     -- machine stays; Ctrl+T is the way out, and it is scoped: while an app owns

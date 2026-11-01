@@ -90,8 +90,10 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 removes / reports "locked" via the host bridge, c cancels,
                 q back. No source medium shows "disk none", no bridge
                 shows "unavailable" -- it never pretends to install.
-   A third-party package that declares no "input" still gets the screen
-   loan (visible frame, DESKTOP_LOAN, ends on its own stop, the loan timer, or
+   A third-party package that declares no "input" gets a screen that is cleared
+   before it is shown (and cleared again before the desktop comes back), so the
+   old frame can never mix with the new one.
+   loan as usual (visible frame, DESKTOP_LOAN, ends on its own stop, the timer, or
    a hard cap logged as DESKTOP_LOAN_ABORT -- a loan always ends). The desktop owns the console, so from STARTUP_DESKTOP_QUIET on
    the boot log only goes to /kernel.log -- that is normal, not a hang.
 3. Check: cat /boot.ok ; tail /kernel.log

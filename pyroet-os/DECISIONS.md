@@ -1079,6 +1079,18 @@ enter install q=back
 
 26.5 **数字**：离线 **4,699 pass / 0 fail / 233 groups**（上一轮 4,633/230，**+66 断言 / +3 组**）；`install.set` **29 条**（无新增文件）、TOTAL **560,258 B / SIZE_WARN**（超 stretch 210,733、距硬门禁 629,145 余 **68,887**）、`WINDOW_OK sum=760258`；改动 lua 非 ASCII 计数 0。
 
+27. 屏幕租借前后清屏（T6）
+
+27.1 **现象**：租借开始时上一屏（launcher/上一个应用）的残留和租借应用的画面混在一起；租借结束回桌面时应用画面又残留在 launcher 上。
+
+27.2 **改法**（`system/kernel/desktop.lua`）：新增 `D.COLOUR_BG = 32768`、`D.COLOUR_FG = 1` 与 `D:clear_screen(name, stage)` —— 取注入的 `self.term`（`startup.lua` 现在把 `o.terminal/o.term` 透传为 `term`），缺省 `rawget(_G,"term")`；先恢复默认背景/文字色，再 `pcall(term.clear)`、`pcall(term.setCursorPos, 1, 1)`，全程 pcall（没有 clear/颜色的终端不崩）；日志 `DESKTOP_LOAN_CLEAR app=<name> stage=start|end ok=true|false`。
+
+调用点两处：`D:loan_start` 在记完 `DESKTOP_LOAN`、**跑第一步 tick 之前**清一次（stage=start）；`D:loan_end`（stopped/timeout/abort 三条路径都经过它）在记 `DESKTOP_LOAN_END` 之前清一次（stage=end），随后才停车/投 `desk_focus`/重绘。
+
+27.3 **测试**：`t_desktop_loop` 新增 `desktop_loop.loan_clear`（screen harness）：fixture **只画第 1 行**（`aeloan ui`），所以任何残留都会露出来。断言：租借前帧里有桌面列表与状态行；`DESKTOP_LOAN_CLEAR ... stage=start ok=true` 出现一次；租借中帧第 1 行是 `aeloan ui`、**第 2..18 行全空白**、全帧不含 `apps sel`；租借结束帧里 `aeloan ui` 消失、第 3 行以 `> ` 开头、第 18 行 `display only: aeloan`、第 19 行 `apps sel 1/`，且 `DESKTOP_LOAN_CLEAR ... stage=end ok=true` 出现一次、`DESKTOP_LOAN_END ... reason=timeout` 存在。
+
+27.4 **数字**：离线 **4,713 pass / 0 fail / 234 groups**（上一轮 4,699/233，+14 断言 / +1 组）；TOTAL 见 sizecheck（**SIZE_WARN**，距 629,145 仍有余量）；改动 lua 非 ASCII 计数 0。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1109,3 +1121,4 @@ enter install q=back
 - 2026-11-01: **进入桌面即就绪，不需要按键**（口径见 §24）。现象是开机/应用返回后要按一下方向键画面才"出来"。两个真因：①启动链第 7b 步画的 launcher 首帧被随后的提交日志、以及**仍然指向控制台的 app 运行时日志 sink**（每条 `APP_LOG` 都打印）反复盖掉；②`desktop.run()` 在第一次 pull 之前不画任何东西。修法：`desktop.run()` 进循环前投一次 `desk_focus`（空消息）+ tick 并记 `DESKTOP_READY app=..`（可用 `ready_paint=false` 关掉），`apps.lua` 新增 `A:set_log` 且 `startup.lua` 在 `quiet_log` 之后把运行时 sink 指过去，桌面阶段日志只进 `/kernel.log`。测试新增 `desktop_loop.ready`（零按键首帧逐字断言 + 应用退出/租借结束的返回帧 + pull 计数不增），`dispatcher` 假运行时统一 `ready_paint=false`。离线 **4,606 pass / 0 fail / 229 groups**（4,587/228）；`install.set` 29 条、TOTAL **543,481 B / SIZE_WARN / MARGIN 193,956**、`WINDOW_OK sum=743481`；改动 lua 非 ASCII 计数 0。真机复验：注入一个 terminate、pulls=1，首帧即完整桌面（row3 `> installer`、row18 `up/dn enter run`、row19 `4 apps sel 1/4`），日志 `DESKTOP_READY app=launcher`。
 - 2026-11-01: **Ctrl+T 打开电源菜单，不再退回 shell**（口径见 §25）。桌面收到 `terminate`/`shutdown` 不再返回 "terminate"（那会回 CraftOS shell），而是 `DESKTOP_TERMINATE scope=desktop` + `DESKTOP_POWER_MENU scope=desktop` + 投 `power_menu` 事件并 tick；launcher 自己画三项菜单（Shutdown/Reboot/Cancel，`up/down` 选、`enter` 执行、`Esc`/`q` 取消），执行前写 `POWER shutdown requested`/`POWER reboot requested`，缺 `os.shutdown`/`os.reboot` 时该行 `unavailable` 并给出原因；应用内 Ctrl+T 仍先退应用（`scope=app`）。launcher 的 `q/Q/Esc` 提示改为 `Ctrl+T opens power menu`。测试新增 `desktop_loop.power`（os stub、菜单逐字、Reboot 调用一次、Esc 回桌面、应用内不弹菜单、缺 os.shutdown 显示 unavailable），旧组统一 `power_menu = false`。离线 **4,633 pass / 0 fail / 230 groups**（4,606/229）；未 commit。
 - 2026-11-01: **桌面 OTA 入口 + installer 桥复核**（口径见 §26）。`api.sys.install/uninstall/list` 是 T4 的既有实现（本轮只补断言，未改语义）；新增 `api.sys.ota_list()` / `api.sys.ota_apply(name)`（cap `fs.read` / `fs.write`）：源 = `/disk/ota/meta.txt`（镜像更新，`kernel/ota.lua` 的 `O.parse_meta` 解析）+ `/disk/apps/<name>.app`（包更新）；无源 `no source`、坏 meta `bad meta`、镜像 apply 一律 `image ota needs recovery`（归 recovery），包 apply 复用同一 installer 对象。launcher 电源菜单由三项变四项（`Update` 在首位），`Update` 打开自绘 Updates 屏（`no updates` + 原因、`up/down/enter/q`、不用 Esc）。新增 `tests/t_sys_ota.lua`（3 组 65 断言），`t_ota.lua` 原样保留。离线 **4,699 pass / 0 fail / 233 groups**（4,633/230）；`install.set` 29 条、TOTAL **560,258 B / SIZE_WARN / MARGIN 210,733**（余 68,887）、`WINDOW_OK sum=760258`；无新增镜像文件。
+- 2026-11-01: **屏幕租借前后清屏**（口径见 §27）。`kernel/desktop.lua` 新增 `D:clear_screen(name, stage)`（注入 term / `rawget(_G,"term")`，恢复默认色 + pcall clear + 光标归位，失败不崩，日志 `DESKTOP_LOAN_CLEAR app=.. stage=start|end ok=..`），在 `loan_start` 第一步 tick 之前与 `loan_end`（stopped/timeout/abort 共用）记 END 之前各清一次；`startup.lua` 透传 `term`。新增 `t_desktop_loop.loan_clear`（单行 fixture：租借中 2..18 行必须空白、无 `apps sel`；返回后应用文字消失、第 3 行 `> `、第 18 行 `display only:`、第 19 行状态）。离线 **4,713 pass / 0 fail / 234 groups**（4,699/233）；未 commit。
