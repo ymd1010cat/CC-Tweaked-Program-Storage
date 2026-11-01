@@ -155,7 +155,10 @@ is written. Keep /recovery on the machine: it is the only rescue path.
 
 Keys note
 ---------
-Escape is not a usable key on this target: the CraftOS-PC ROM has no keys.escape
-entry, so an Esc press reaches the runtime as an unmapped code and is dropped.
-Use q (or Q) everywhere this document says "Esc", and Ctrl+T for the power menu.
-The apps still accept raw code 256 if a terminal does deliver it.
+Escape is not a usable key inside the computer at all:
+  - in game, the Minecraft client consumes Esc to close the terminal window, so
+    the keystroke never reaches the computer;
+  - in CraftOS-PC the ROM keys table has no escape entry, so an Esc press would
+    arrive as an unmapped code anyway.
+Use q (or Q) wherever this document says "Esc", and Ctrl+T for the power menu.
+The apps still accept raw code 256 if some terminal does deliver it.

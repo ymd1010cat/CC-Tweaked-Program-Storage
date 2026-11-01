@@ -596,4 +596,4 @@ python tools/build_release.py --project pyroet-os --out dist/release
 （文件集更新、journal、崩溃窗口、bootloader 决策表）为准；本文是面向使用者的入口，
 两者冲突时以 `DECISIONS.md` 为准。装机步骤见 [`INSTALL.txt`](INSTALL.txt)。
 
-> 注：**Esc 在本 ROM 不可用**（CraftOS-PC 的 `keys` 表没有 `escape`），所有“Esc”地方请改按 **`q`**，电源菜单用 **Ctrl+T**。
+> 注：**Esc 本身就不会下发给计算机**（游戏内客户端拿 Esc 关掉终端窗口；CraftOS-PC 的 `keys` 表也没有 `escape`）（CraftOS-PC 的 `keys` 表没有 `escape`），所有“Esc”地方请改按 **`q`**，电源菜单用 **Ctrl+T**。
