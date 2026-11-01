@@ -57,14 +57,14 @@ return function(H)
         H.table("apps", result.apps)
 
         -- the system packages are scanned next to the boot chain
-        H.has(lines, "APP_SCAN root=/system/system loaded=3 failed=0")
+        H.has(lines, "APP_SCAN root=/system/system loaded=4 failed=0")
         H.has(lines, "APP_LOAD name=launcher version=0.2.0 caps=fs.read,fs.write,input,terminal")
         H.has(lines, "APP_LOAD name=net version=0.2.0 caps=net.rpv,fs.read,input,terminal")
         H.has(lines, "APP_LOAD name=settings version=0.2.0 caps=fs.read,fs.write,input,terminal")
 
         -- nothing is decided yet, and reading the table does not prompt
         H.has(lines, "STARTUP_PERMS_READY root=/etc/perms")
-        H.has(lines, "STARTUP_PERMS_TABLE apps=3 loaded=0 pending=3 bad=0")
+        H.has(lines, "STARTUP_PERMS_TABLE apps=4 loaded=0 pending=4 bad=0")
         H.eq("no_prompt_before_launcher", H.count(lines, "PERMS_PROMPT"), 1)
         H.has(lines, "PERMS_PROMPT app=launcher caps=fs.read,fs.write,input,terminal")
 
@@ -178,7 +178,7 @@ return function(H)
     do
         local log, lines = H.logger()
         local rt = APPS.new({ fs = F, log = log, apps_root = "/system/system" })
-        H.eq("scan", rt:scan(), 3)
+        H.eq("scan", rt:scan(), 4)
 
         local function read_file(path)
             if not F.exists(path) then return nil end
@@ -214,14 +214,15 @@ return function(H)
         }
 
         local state = LAUNCHER.build(api)
-        H.eq("entries", #state.entries, 3)
+        H.eq("entries", #state.entries, 4)
         H.eq("entry_names", table.concat({
-            state.entries[1].name, state.entries[2].name, state.entries[3].name }, ","),
-            "launcher,net,settings")
+            state.entries[1].name, state.entries[2].name, state.entries[3].name,
+            state.entries[4].name }, ","),
+            "launcher,net,settings,web")
         H.eq("net_version", state.entries[2].version, "0.2.0")
         local lines_first = LAUNCHER.render(state, 26, 20)
         H.eq("render_rows", #lines_first, 20)
-        H.contains("status_first", lines_first[20], "3 apps sel 1/3")
+        H.contains("status_first", lines_first[20], "4 apps sel 1/4")
 
         -- Enter on the second row starts net.app through the runtime
         H.eq("down", LAUNCHER.handle_key(state, "down", api), "move")

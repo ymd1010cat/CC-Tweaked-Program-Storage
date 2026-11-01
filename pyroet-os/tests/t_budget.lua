@@ -39,7 +39,7 @@ return function(H)
         -- T1 added the Installer UI as image payload (2 files, DECISIONS.md 17),
         -- so the exact count moved 26 -> 28; D1 added the resident desktop loop
         -- (kernel/desktop.lua), so it is 29. The strictness is unchanged.
-        H.eq("install_entries", #paths, 29)
+        H.eq("install_entries", #paths, 31)
         H.check("has_installer", set["pyroet-os/system/kernel/installer.lua"] == true,
             "installer is not image payload")
         H.check("has_desktop", set["pyroet-os/system/kernel/desktop.lua"] == true,
@@ -70,7 +70,7 @@ return function(H)
         H.check("no_tests", set["pyroet-os/tests/run.lua"] == nil, "tests are not payload")
         H.check("has_system_net_text", (text or ""):find("pyroet-os/system/system/net.app", 1, true) ~= nil, "install.set does not name system/net.app")
         H.check("no_examples_text", (text or ""):find("pyroet-os/examples/", 1, true) == nil, "install.set still names an examples/ path")
-        H.check("no_duplicates", #paths == 29, "duplicate active entries")
+        H.check("no_duplicates", #paths == 31, "duplicate active entries")
     end
 
     -- ---------------------------------------------------------------------

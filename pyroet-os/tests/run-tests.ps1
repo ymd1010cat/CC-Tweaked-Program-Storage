@@ -12,7 +12,7 @@
 #                                                installer, ota
 #     .tests/computer/20/system/rpv/*.lua        the vendored rpv subset (SHA-256)
 #     .tests/computer/20/system/net/*.lua        network service + static hosts
-#     .tests/computer/20/system/system/*.app     launcher, settings, net (system apps)
+#     .tests/computer/20/system/system/*.app     launcher, settings, net, browser (system apps)
 #     .tests/computer/20/tests/installer.app/    pyroet-os/system/system/installer.app
 #                                                (fixture: t_desktop/t_settings keep
 #                                                the staged system root at 3 apps)
@@ -62,6 +62,7 @@ foreach ($required in @("startup.lua", "system\startup.lua", "system\boot.lua",
         "system\system\net.app\manifest.lua", "system\system\net.app\main.lua",
         "system\system\launcher.app\manifest.lua", "system\system\launcher.app\main.lua",
         "system\system\settings.app\manifest.lua", "system\system\settings.app\main.lua",
+    "system\system\web.app\manifest.lua", "system\system\web.app\main.lua",
         "system\system\installer.app\manifest.lua", "system\system\installer.app\main.lua",
         "recovery\proto.lua", "recovery\flash.lua", "recovery\bootstrap.lua",
         "ota\server.lua", "install.set")) {
@@ -91,6 +92,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\net.app") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\launcher.app") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\settings.app") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\web.app") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "tests")  | Out-Null
     # T1: the Installer UI is staged as a fixture under /tests, not under
     # /system/system. The staged /system/system root must keep exactly the three
@@ -117,6 +119,7 @@ try {
     Copy-Item (Join-Path $osRoot "install.set")                (Join-Path $comp "install.set")        -Force
     Copy-Item (Join-Path $osRoot "system\system\launcher.app\*") (Join-Path $comp "system\system\launcher.app") -Force
     Copy-Item (Join-Path $osRoot "system\system\settings.app\*") (Join-Path $comp "system\system\settings.app") -Force
+Copy-Item (Join-Path $osRoot "system\system\web.app\*") (Join-Path $comp "system\system\web.app") -Force
     Copy-Item (Join-Path $here "*.lua")                 (Join-Path $comp "tests")               -Force
     Copy-Item (Join-Path $osRoot "system\system\installer.app\*") (Join-Path $comp "tests\installer.app") -Force
     # the ROM stub is not staged as /startup.lua (that is the shim); the layout

@@ -1111,6 +1111,18 @@ enter install q=back
 
 28.4 **数字**：离线 **4,737 pass / 0 fail / 235 groups**（上一轮 4,713/234，+24 断言 / +1 组）；TOTAL 见 sizecheck（**SIZE_WARN**）；改动 lua 非 ASCII 计数 0。
 
+29. 内置文字浏览器 `web.app`（T8）
+
+29.1 **包**：`system/system/web.app/`（manifest.lua 0.1.0 + main.lua，合计约 13 KB，纯 ASCII）。caps = `fs.read`（读 `/etc/browser.home`）、`http`（`api.http.get(url)`）、`input`、`terminal`；**没有** `fs.write`。因为声明了 `input`，launcher 自动扫到 `/system/system/web.app` 后就是前台应用（键盘+屏幕直接交接，不走租借）。
+
+29.2 **键位**（不用 Esc）：`enter` 打开地址（缺 `http://` 自动补，空行报 `empty address`）、`up`/`down` 滚动、`b` 返回上一页（历史栈 8 条）、`r` 重载、`q` 退出返回 `"quit"`。
+
+29.3 **行为**：首帧 → `api.input.pullEvent()` → 有动作才重绘。正文纯文本渲染：`M.wrap` 按屏宽折行（`\r\n\t` 与控制字节变空格，单页上限 64 KB），第 1 行 `Browser 0.1.0`、第 2 行 `url ...`、中间是正文、第 18 行状态（`200 N bytes M lines` / `http 404` / `failed: <err>` / `no history` / `browser unavailable: no http host`）、第 19 行提示 `up/dn b back r reload q quit`。`api.http` 缺失时首帧就显示 `browser unavailable: no http host`，仍可 `q` 退出。日志：`BROWSER_READY url=.. lines=..`、`BROWSER_OPEN url=.. ok=true|false status=..`、`BROWSER_QUIT key=..`、`BROWSER_UNAVAILABLE reason=no_http`。
+
+29.4 **测试**：`tests/t_web.lua`（5 组 52 断言）：manifest 静态含 `http`/`input`/`terminal`（且无 `fs.write`）；`now_url` 补全/保留 scheme、`wrap` 折行宽度、首帧逐字（标题/`url (enter opens home)`/提示行）；固定文本页（假 http 返回 body）→ 第 3 行正文、状态行 `200`；404 → `http 404`；连接失败 → `failed: connection refused`；无 http → `browser unavailable`；按键：enter 打开、history 入栈、`b` 回退、down 滚动、`r` 重载、`q` 退出。
+
+29.5 **数字**：离线 **4,789 pass / 0 fail / 240 groups**（上一轮 4,737/235，+52 断言 / +5 组）；`install.set` **31 条**（+web.app 两个文件）；TOTAL 见 sizecheck（**SIZE_WARN**，仍低于 629,145）。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1143,3 +1155,4 @@ enter install q=back
 - 2026-11-01: **桌面 OTA 入口 + installer 桥复核**（口径见 §26）。`api.sys.install/uninstall/list` 是 T4 的既有实现（本轮只补断言，未改语义）；新增 `api.sys.ota_list()` / `api.sys.ota_apply(name)`（cap `fs.read` / `fs.write`）：源 = `/disk/ota/meta.txt`（镜像更新，`kernel/ota.lua` 的 `O.parse_meta` 解析）+ `/disk/apps/<name>.app`（包更新）；无源 `no source`、坏 meta `bad meta`、镜像 apply 一律 `image ota needs recovery`（归 recovery），包 apply 复用同一 installer 对象。launcher 电源菜单由三项变四项（`Update` 在首位），`Update` 打开自绘 Updates 屏（`no updates` + 原因、`up/down/enter/q`、不用 Esc）。新增 `tests/t_sys_ota.lua`（3 组 65 断言），`t_ota.lua` 原样保留。离线 **4,699 pass / 0 fail / 233 groups**（4,633/230）；`install.set` 29 条、TOTAL **560,258 B / SIZE_WARN / MARGIN 210,733**（余 68,887）、`WINDOW_OK sum=760258`；无新增镜像文件。
 - 2026-11-01: **屏幕租借前后清屏**（口径见 §27）。`kernel/desktop.lua` 新增 `D:clear_screen(name, stage)`（注入 term / `rawget(_G,"term")`，恢复默认色 + pcall clear + 光标归位，失败不崩，日志 `DESKTOP_LOAN_CLEAR app=.. stage=start|end ok=..`），在 `loan_start` 第一步 tick 之前与 `loan_end`（stopped/timeout/abort 共用）记 END 之前各清一次；`startup.lua` 透传 `term`。新增 `t_desktop_loop.loan_clear`（单行 fixture：租借中 2..18 行必须空白、无 `apps sel`；返回后应用文字消失、第 3 行 `> `、第 18 行 `display only:`、第 19 行状态）。离线 **4,713 pass / 0 fail / 234 groups**（4,699/233）；未 commit。
 - 2026-11-01: **安装/OTA 来源改为 `/pkgs` 为主、`/disk` 可选**（口径见 §28；手持电脑没有软驱，`/disk` 永远不存在）。`kernel/installer.lua` 新增 `I.INTERNAL="/pkgs"`、`I.roots_for`、`I:source_for`（`media_root` 默认 `/pkgs`，`/disk/apps` 仅在 `/disk` 存在时参与）；`kernel/apps.lua` 的 OTA 源同步（`A.OTA_INTERNAL`，条目带 `source=internal|disk`，返回 `source` 摘要 `internal|internal+disk|none`，无源日志记检查路径）；installer 应用 header/提示由 `disk ok/none` 改为 `source ..` 与 `no source: checked /pkgs,/disk`，tag `p`=internal。可选 rednet 源（`/etc/update.rednet`）记为 TODO，未实现。新增 `t_sys_ota.ota.internal`（内部源列出/安装/卸载、无 `/disk` 无 `disk none`、合并 `internal+disk`、无源为空 problems）。离线 **4,737 pass / 0 fail / 235 groups**（4,713/234）；未 commit。
+- 2026-11-01: **内置文字浏览器 `web.app`**（口径见 §29）。新包 `system/system/web.app/{manifest.lua,main.lua}`（caps `fs.read`+`http`+`input`+`terminal`，约 13 KB），事件驱动：`enter` 打开地址（自动补 `http://`）、`up/down` 滚动、`b` 历史返回、`r` 重载、`q` 退出（不用 Esc）；正文纯文本按屏宽折行，非 2xx/传输失败/无 http 都有可读状态行，不崩；launcher 自动扫到它并因其声明 `input` 直接交接键盘。新增 `tests/t_web.lua`（5 组 52 断言，假 http 三种返回）；`install.set` 29→31 条、`t_budget` 同步；`t_desktop`/`t_desktop_loop`/`t_apps_ui`/`t_sys_ota` 的 3 包计数改 4。离线 **4,789 pass / 0 fail / 240 groups**（4,737/235）；未 commit。

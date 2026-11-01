@@ -60,7 +60,7 @@ return function(H)
         H.rmrf("/pkgs")
         local inst = installer_for()
         local rt, log, lines = runtime({ installer = inst })
-        H.eq("scan", rt:scan(), 3)
+        H.eq("scan", rt:scan(), 4)
         local api = launch(rt, "launcher")
 
         -- 1) no source medium at all
@@ -137,7 +137,7 @@ return function(H)
         })
         local inst = installer_for()
         local rt, log, lines = runtime({ installer = inst })
-        H.eq("scan", rt:scan(), 3)
+        H.eq("scan", rt:scan(), 4)
         local api = launch(rt, "launcher")
 
         -- a package entry installs through the installer object
@@ -185,7 +185,7 @@ return function(H)
         })
         local inst = installer_for()
         local rt, log, lines = runtime({ installer = inst })
-        H.eq("scan", rt:scan(), 3)
+        H.eq("scan", rt:scan(), 4)
         local api = launch(rt, "launcher")
 
         -- no /disk at all: the internal package is still listed, and the source
