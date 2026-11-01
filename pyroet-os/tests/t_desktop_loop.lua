@@ -400,6 +400,113 @@ return function(H)
     end
 
     -- -----------------------------------------------------------------
+    H.group("desktop_loop.migrate")
+    -- The real-machine failure (D1 fix): the demo disk had booted the previous
+    -- image once, so /etc/perms/launcher.cfg held only fs.read + fs.write. After
+    -- the update the launcher declares input + terminal, both were denied by the
+    -- old file, the launcher went `no_input` and the desktop pulled (and dropped)
+    -- every keystroke: keys did nothing, only the mouse cursor moved. This group
+    -- boots the real chain on that exact disk state and proves the desktop is
+    -- usable again, so the bug cannot come back silently.
+    do
+        H.rmrf("/etc/perms")
+        H.write("/etc/perms/launcher.cfg",
+            "# PYROET-PERMS-1 app=launcher\nfs.read=granted\nfs.write=granted\n")
+        local dir = H.case_dir("loop", "migrate")
+        bootable(dir)
+        local host = new_host()
+        host.keys = KEYS
+        local log, lines = H.logger()
+        local pulls = 0
+        local events = { { "key", 11 }, { "key", 14 }, { "key", 15 } }
+        local pull = function()
+            pulls = pulls + 1
+            local event = events[pulls]
+            if event == nil then return "terminate" end
+            return event[1], event[2], event[3], event[4]
+        end
+        local result = startup.run({
+            fs = F,
+            root = dir,
+            log = log,
+            apps_root = dir .. "/apps",
+            input = host,
+            pull_event = pull,
+            reboot = function() error("rebooted unexpectedly") end,
+            frame = function() return true end,
+        })
+
+        H.eq("migrate_ok", result.ok, true)
+        -- the stale file was extended, not ignored: the new caps are granted
+        H.has(lines, "PERMS_STALE app=launcher caps=input,terminal")
+        H.has(lines, "APP_PERMS_APPLIED app=launcher granted=4 denied=0")
+        local cfg = H.read("/etc/perms/launcher.cfg") or ""
+        H.contains("migrate_cfg_input", cfg, "input=granted")
+        H.contains("migrate_cfg_terminal", cfg, "terminal=granted")
+        H.lacks("migrate_no_input_denial", lines, "APP_CAP_DENIED app=launcher cap=input")
+        H.lacks("migrate_no_terminal_denial", lines,
+            "APP_CAP_DENIED app=launcher cap=terminal")
+
+        -- and the keyboard works: down moved the selection, enter started net,
+        -- escape left the desktop
+        H.eq("migrate_desktop_reason", result.desktop_reason, "quit")
+        H.has(lines, "STARTUP_DESKTOP_ENTER name=launcher source=injected")
+        H.has(lines, "DESKTOP_EVENT n=1 event=key arg=down app=launcher")
+        H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=net")
+        H.has(lines, "APP_START name=net")
+        H.eq("migrate_net_running", result.apps:app("net").state, "running")
+        H.eq("migrate_launcher_result", result.apps:app("launcher").result, "quit")
+        H.eq("migrate_pulls", pulls, 3)
+        H.ascii_check("migrate_logs_ascii", H.joined(lines))
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("desktop_loop.grant")
+    -- Declared is not granted: a desktop whose keyboard or screen was refused must
+    -- not hold the console. It falls back to the shell after one log line instead
+    -- of eating every event (the second half of the same fix).
+    do
+        local function run_with_ask(ask)
+            H.rmrf("/etc/perms")
+            local dir = H.case_dir("loop", "grant_" .. tostring(ask))
+            bootable(dir)
+            local host = new_host()
+            host.keys = KEYS
+            local log, lines = H.logger()
+            local pulls = 0
+            local result = startup.run({
+                fs = F,
+                root = dir,
+                log = log,
+                apps_root = dir .. "/apps",
+                input = host,
+                pull_event = function() pulls = pulls + 1 return "terminate" end,
+                ask = ask,
+                reboot = function() error("rebooted unexpectedly") end,
+                frame = function() return true end,
+            })
+            return result, lines, pulls
+        end
+
+        local result, lines, pulls = run_with_ask(function() return false end)
+        H.eq("input_denied_reason", result.desktop_reason, "skip:input_denied")
+        H.eq("input_denied_no_desktop", result.desktop, nil)
+        H.eq("input_denied_no_pull", pulls, 0)
+        H.has(lines, "STARTUP_DESKTOP_SKIP reason=input_denied app=launcher")
+        H.lacks("input_denied_no_enter", lines, "DESKTOP_ENTRY")
+
+        local result2, lines2, pulls2 = run_with_ask(function(app, cap)
+            return cap ~= "terminal"
+        end)
+        H.eq("terminal_denied_reason", result2.desktop_reason, "skip:terminal_denied")
+        H.eq("terminal_denied_no_pull", pulls2, 0)
+        H.has(lines2, "STARTUP_DESKTOP_SKIP reason=terminal_denied app=launcher")
+        H.eq("terminal_denied_input_granted",
+            result2.apps:app("launcher").perms and result2.apps:app("launcher").perms.input,
+            true)
+    end
+
+    -- -----------------------------------------------------------------
     H.group("desktop_loop.terminate")
     do
         H.rmrf("/etc/perms")

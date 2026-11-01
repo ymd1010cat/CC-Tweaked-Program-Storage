@@ -147,6 +147,78 @@ return function(H)
     end
 
     -- -----------------------------------------------------------------
+    H.group("perms.stale")
+    -- The D1 regression: an image update adds a capability to a package that has
+    -- already been started once, so its decision file does not mention it. An
+    -- absent line is "never decided", not a denial: the cap goes back through the
+    -- policy and the file is extended once. Before this fix the launcher's new
+    -- `input`/`terminal` were silently denied after the update and the desktop
+    -- ate the keyboard forever.
+    do
+        local dir = H.case_dir("perms", "stale")
+        local root = dir .. "/etc/perms"
+        H.write(root .. "/launcher.cfg",
+            "# PYROET-PERMS-1 app=launcher\nfs.read=granted\nfs.write=granted\n")
+        local log, lines = H.logger()
+        local p = PERMS.new({ fs = H.real_fs(), log = log, root = root,
+            ask = function() return true end })
+        local caps = { "fs.read", "fs.write", "input", "terminal" }
+        local where = { dir = "/system/system/launcher.app" }
+
+        -- the read-only pass (boot step 7b) reports the gap and decides nothing
+        local _, pre = p:ensure("launcher", caps, {
+            dir = where.dir, prompt = false,
+        })
+        H.eq("stale_pending", pre.pending, 2)
+        H.eq("stale_not_migrated", pre.migrated, nil)
+        H.eq("stale_file_untouched",
+            (H.read(root .. "/launcher.cfg") or ""):find("input=", 1, true), nil)
+        H.eq("stale_no_cache", p:decisions_for("launcher"), nil)
+
+        -- the real start resolves only the undecided caps and persists them
+        local decisions, info = p:ensure("launcher", caps, where)
+        H.eq("stale_input_granted", decisions and decisions["input"], true)
+        H.eq("stale_terminal_granted", decisions and decisions["terminal"], true)
+        H.eq("stale_read_kept", decisions and decisions["fs.read"], true)
+        H.eq("stale_migrated", info.migrated, 2)
+        H.eq("stale_granted", info.granted, 4)
+        H.eq("stale_denied", info.denied, 0)
+        H.has(lines, "PERMS_STALE app=launcher caps=input,terminal")
+        H.has(lines, "PERMS_DECISION app=launcher cap=input granted=true")
+        H.has(lines, "PERMS_SAVED app=launcher path=" .. root
+            .. "/launcher.cfg granted=4 denied=0")
+        local text = H.read(root .. "/launcher.cfg") or ""
+        H.contains("stale_saved_input", text, "input=granted")
+        H.contains("stale_saved_terminal", text, "terminal=granted")
+        H.contains("stale_saved_read", text, "fs.read=granted")
+
+        -- a user package does not widen: the policy still says no, and the answer
+        -- is persisted so the question is asked exactly once
+        local log2, lines2 = H.logger()
+        local asked = 0
+        local p2 = PERMS.new({ fs = H.real_fs(), log = log2, root = root,
+            ask = function() asked = asked + 1 return false end })
+        H.write(root .. "/user.cfg", "# PYROET-PERMS-1 app=user\nfs.read=granted\n")
+        local decisions2 = p2:ensure("user", { "fs.read", "input" },
+            { dir = "/apps/user.app" })
+        H.eq("stale_user_input_denied", decisions2 and decisions2["input"], false)
+        H.eq("stale_user_read_kept", decisions2 and decisions2["fs.read"], true)
+        H.eq("stale_user_asked_once", asked, 1)
+        H.contains("stale_user_persisted", H.read(root .. "/user.cfg") or "",
+            "input=denied")
+
+        -- a complete file is not read-modified-written at all
+        local before = H.read(root .. "/launcher.cfg")
+        local log3, lines3 = H.logger()
+        local p3 = PERMS.new({ fs = H.real_fs(), log = log3, root = root })
+        p3:ensure("launcher", caps, where)
+        H.eq("complete_untouched", H.read(root .. "/launcher.cfg"), before)
+        H.lacks("complete_no_stale", lines3, "PERMS_STALE")
+        H.lacks("complete_no_save", lines3, "PERMS_SAVED")
+        H.ascii_check("stale_logs_ascii", H.joined(lines) .. H.joined(lines2))
+    end
+
+    -- -----------------------------------------------------------------
     H.group("perms.prompt")
     do
         local dir = H.case_dir("perms", "prompt")

@@ -139,7 +139,8 @@ pyroet-os/
        ├─ 8. boot.commit()      写全局 /boot.ok，删 journal 与 /update.backup
        └─ 9. 常驻桌面对话循环    commit 后**不返回**：kernel/desktop.lua 持有一个阻塞
                                 os.pullEvent，把事件规范化后投给前台应用（launcher）；
-                                只有 Esc / `q` / Ctrl+T / 循环自身的正常退出才回 ROM shell
+                                只有 `q` / Ctrl+T / 循环自身的正常退出才回 ROM shell
+                                （`keys.escape` 在 CraftOS-PC 里不存在，Esc 不一定投递）
 ```
 
 任何会让机器起不来的错误都走 `os.reboot()`（让 `/boot.tries` 记账生效），而**不** commit；
@@ -248,8 +249,13 @@ app 的 `api.input.pullEvent` 是这个队列的**弹出一格**——没事件�
 
 compat：manifest **不写** `capabilities` = 声明空列表 = 全部拒绝，**没有隐式授权**；旧包在 `input` /
 `terminal` 存在之前本来就拿不到这两样，现在只是这两个字段以**桩**的形式出现，包照常加载、启动、退出。
-决策文件里没有的 cap = 未授予（fail closed），manifest 没声明的 cap 即使文件里写了也记 `PERMS_PRUNE`
-并拒绝——**manifest 是上限**。
+决策文件里**没有**的 cap = **未决定**（不是拒绝；拒绝一定写成 `denied`）：该包下一次启动时只对缺的 cap
+重走一遍授权策略（镜像包 = 预授权 → 授予；用户包 = 默认策略仍拒绝），结果写回文件并记
+`PERMS_STALE app=.. caps=..` + `PERMS_SAVED`，**迁移只发生一次**（D1-fix：镜像升级给系统包新增 cap 时
+不会再被判成"永远拒绝"，真机事故见 DECISIONS §20.9）。manifest 没声明的 cap 即使文件里写了也记
+`PERMS_PRUNE` 并拒绝——**manifest 是上限**。桌面进循环前还会再查一次**授予集**：拿不到 `input` /
+`terminal` 时 `STARTUP_DESKTOP_SKIP reason=input_denied|terminal_denied` 并**不接管控制台**，
+回 shell 让你 `permissions.reset(app)` 后重开，而不是顶着一个"吃掉所有按键"的死桌面。
 
 ---
 
@@ -572,15 +578,15 @@ python tools/build_release.py --project pyroet-os --out dist/release
 | --- | --- |
 | 发布版本 | 1.0.0（`pyroet-os-v1.0.0.zip`） |
 | `/startup.lua` starter | 1,070 B（`DECISIONS.md` §13.11 的 1,071 B 为旧读数） |
-| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，38,084 B（D1：+8,896 B，输入队列宿主 + 第 9 步常驻循环；T4：+2,345 B；O3：+821 B） |
+| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，38,870 B（D1：+8,896 B，输入队列宿主 + 第 9 步常驻循环；D1-fix：+786 B，进循环前的授予集检查；T4：+2,345 B；O3：+821 B） |
 | bootloader | `M.VERSION = 2.0`，45,623 B |
-| kernel / apps / permissions / desktop | 1.0 / 1.0 / 1.0 / 1.0（13,958 / 38,453 / 18,821 / 14,180 B；D1：apps +808 B 记录 body 返回值，新增 desktop.lua） |
+| kernel / apps / permissions / desktop | 1.0 / 1.0 / 1.0 / 1.0（13,958 / 38,453 / 21,449 / 14,180 B；D1：apps +808 B 记录 body 返回值、新增 desktop.lua；D1-fix：permissions +2,628 B，陈旧决策文件按"未决定"迁移） |
 | installer / ota | 1.0 / 2.0（17,295 / 31,877 B；N1：+3,854 / +3,566 B，size 校验） |
 | rpv 子集 | 10 文件 / 131,590 B（9 模块 + loader） |
 | 系统应用 | launcher 0.2.0（D1：+5,209 B，常驻桌面循环）/ settings 0.1.0 / installer 0.1.0 / net 0.1.0 |
 | `installer.app`（T1/T4） | 0.1.0，34,853 B（main.lua 33,774 + manifest.lua 1,079） |
 | OTA 服务端（`ota/server.lua`） | 1.0，27,927 B（不进镜像） |
-| 镜像 | 29 条 / 491,480 B / `SIZE_WARN` / `WINDOW_OK sum=691480` |
+| 镜像 | 29 条 / 494,894 B / `SIZE_WARN` / `WINDOW_OK sum=694894` |
 
 设计口径以 [`DECISIONS.md`](DECISIONS.md)（架构、门禁、发布）与 [`P6-design.md`](P6-design.md)
 （文件集更新、journal、崩溃窗口、bootloader 决策表）为准；本文是面向使用者的入口，

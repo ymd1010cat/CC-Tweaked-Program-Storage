@@ -584,6 +584,20 @@ function P.start_desktop_loop(ctx, o, log)
         log("STARTUP_DESKTOP_SKIP reason=no_input app=" .. short(ctx.launcher, 24))
         return nil, "skip:no_input"
     end
+    -- declared is not granted. A desktop that cannot see the keyboard (or the
+    -- screen) must NOT hold the console: it would pull and drop every event and
+    -- repaint nothing, which looks exactly like a frozen machine. Falling back to
+    -- the shell is the recoverable state -- that is where `permissions.reset(app)`
+    -- can be typed. This guard is what turns a silent brick into one log line.
+    local granted = record.caps or {}
+    if not granted.input then
+        log("STARTUP_DESKTOP_SKIP reason=input_denied app=" .. short(ctx.launcher, 24))
+        return nil, "skip:input_denied"
+    end
+    if not granted.terminal then
+        log("STARTUP_DESKTOP_SKIP reason=terminal_denied app=" .. short(ctx.launcher, 24))
+        return nil, "skip:terminal_denied"
+    end
     local module = o.desktop
     if module == nil then
         local loaded, load_err = load_module(o.desktop_path or P.DESKTOP_PATH)

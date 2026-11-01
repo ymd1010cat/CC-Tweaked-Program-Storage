@@ -14,9 +14,18 @@ turns the declaration into a decision:
     4. a line for a capability the manifest no longer declares is stale, not
        corrupt: it is ignored with PERMS_PRUNE. A line naming a capability that
        does not exist at all IS corrupt (see 3).
-    5. a capability the file does not mention is not granted: the runtime denies
-       it (fail closed). A file is never extended behind the user's back --
-       permissions.reset(app) is how a newly declared capability gets asked.
+    5. a capability the file does not mention is *undecided*, not denied: an
+       image update can add a capability to a package that was already started
+       once, and the old file cannot have a line for it. Those caps go back
+       through the same `ask` policy that decided the first start (D1-fix), are
+       logged as PERMS_STALE + PERMS_DECISION, and the file is rewritten with the
+       answers so the migration happens exactly once. For an image package under
+       the system root the policy is the pre-grant, so the new capability is
+       granted; for a user package the default policy still answers no, so
+       nothing widens. A *denial* is always written as `denied`, which is why an
+       absent line can be treated as "never decided" without losing a decision.
+       `ensure(..., { prompt = false })` (the boot chain's read-only pass) never
+       migrates and never writes.
 
 The prompt is split into a pure line builder (`P.prompt_lines`, 26x20 aware, all
 items merged onto one screen) and an `ask` callback. Prompting happens during
@@ -28,6 +37,7 @@ so the answer has to be supplied by the caller:
 Log lines (ASCII, one line each, greppable):
 
     PERMS_PROMPT app=<name> caps=<a,b|->
+    PERMS_STALE app=<name> caps=<a,b>          (file predates the manifest, see 5)
     PERMS_DECISION app=<name> cap=<cap> granted=true|false
     PERMS_SAVED app=<name> path=<path> granted=<n> denied=<n>
     PERMS_SAVE_FAIL app=<name> path=<path> err=<reason>
@@ -384,9 +394,11 @@ end
 
 -- ensure(app, caps, { dir=, known=, ask=, prompt=false, force=false })
 -- -> decisions, info { source = "cache"|"file"|"bad"|"prompt"|"none", prompted,
---                     granted, denied, path }
+--                     granted, denied, path, pending, migrated }
 -- `prompt = false` reads the table only: used by the boot chain to show what is
--- decided before anything asks a question.
+-- decided before anything asks a question (it never migrates and never writes).
+-- `pending` counts the declared caps the file does not mention; a real start
+-- resolves them (rule 5 above) and reports how many it migrated.
 function P:ensure(app, caps, ctx)
     local o = ctx or {}
     local known = o.known and cap_set(o.known) or self.known
@@ -414,15 +426,47 @@ function P:ensure(app, caps, ctx)
     if source == "file" then
         local filtered = {}
         local declared = cap_set(list)
+        local missing = {}
         for i = 1, #list do
-            if decisions[list[i]] ~= nil then filtered[list[i]] = decisions[list[i]] end
+            if decisions[list[i]] ~= nil then
+                filtered[list[i]] = decisions[list[i]]
+            else
+                missing[#missing + 1] = list[i]
+            end
         end
         for cap in pairs(decisions) do
             if not declared[cap] then
                 self:log("PERMS_PRUNE app=" .. tostring(app) .. " cap=" .. cap)
             end
         end
-        self.cache[app] = filtered
+        -- An absent line is "never decided", not a denial (a denial is stored as
+        -- `denied`). That is what an image update looks like from the file's
+        -- side: the package already started once, its manifest then gained a
+        -- capability (D1 added `input` + `terminal` to the launcher), and the old
+        -- file cannot have a line for it. Ask the same policy that decided the
+        -- first start -- the pre-grant for an image package, the default `no`
+        -- for a user package -- and persist the answers so the migration runs
+        -- exactly once. The read-only pass (`prompt = false`) never migrates.
+        if #missing > 0 and o.prompt ~= false then
+            self:log("PERMS_STALE app=" .. tostring(app)
+                .. " caps=" .. table.concat(missing, ","))
+            local decided = self:decide(app, missing, o)
+            for i = 1, #missing do
+                filtered[missing[i]] = decided[missing[i]]
+            end
+            local saved, err = self:save(app, filtered, { order = list })
+            if not saved then
+                -- the decisions still hold for this boot; the next one asks again
+                info.save_error = tostring(err)
+                info.migrate_error = tostring(err)
+            end
+            info.migrated = #missing
+            missing = {}
+        end
+        -- a read-only pass must not cache a table with undecided caps: the start
+        -- that follows has to see them as missing and migrate them
+        if #missing == 0 then self.cache[app] = filtered end
+        info.pending = #missing
         info.source = "file"
         info.granted, info.denied = tally(filtered, list)
         return filtered, info

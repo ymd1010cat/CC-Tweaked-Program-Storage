@@ -351,12 +351,17 @@ end
         H.has(lines, "APP_PERMS_APPLIED app=app granted=1 denied=1")
         H.has(lines, "APP_LOG app=app msg=read=DATA err=nil")
         -- missing from the file = denied, and no question is asked at runtime
+        -- missing from the file = undecided, not denied: the start asks the same
+        -- policy once (D1-fix), which denies here, and the answer is persisted
         H.has(lines, "APP_LOG app=app msg=pull=nil err=capability denied: input")
         H.lacks("no_prompt_for_input", lines, "PERMS_PROMPT app=app")
+        H.has(lines, "PERMS_STALE app=app caps=input")
         local entry = status_of(rt, "app")
         H.eq("file_grants_read", entry and entry.grants["fs.read"], true)
-        H.eq("file_no_input_grant", entry and entry.grants["input"], nil)
+        H.eq("file_no_input_grant", entry and entry.grants["input"], false)
         H.eq("file_denied_input", entry and entry.denied_caps.input, 1)
+        H.contains("file_input_persisted", H.read(dir .. "/perms/app.cfg") or "",
+            "input=denied")
 
         -- the manifest is the ceiling: a file entry for an undeclared capability
         -- is pruned and still refused
