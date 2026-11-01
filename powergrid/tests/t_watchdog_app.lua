@@ -73,6 +73,46 @@ local function countKeys(tbl)
     return n
 end
 
+-- power.lua-style fake: records the modes it was asked to apply and answers
+-- read() with the last applied mode. The real power.lua (ini + redstone writes)
+-- is exercised in t_power.lua and in the app-switch group below.
+local function newNoopPower(mode)
+    local p = { calls = {}, mode = mode or 1 }
+    function p.read() return p.mode end
+    function p.apply(value)
+        p.calls[#p.calls + 1] = value
+        p.mode = value
+        return true
+    end
+    return p
+end
+
+local function newPowerRedstone()
+    local rs = { calls = {} }
+    function rs.setOutput(side, value)
+        rs.calls[#rs.calls + 1] = { "setOutput", side, value }
+        return true
+    end
+    function rs.setAnalogOutput(side, value)
+        rs.calls[#rs.calls + 1] = { "setAnalogOutput", side, value }
+        return true
+    end
+    return rs
+end
+
+local function newSpeaker()
+    local p = { sounds = {} }
+    function p.find(kind)
+        if kind == "speaker" then
+            return { playSound = function(name)
+                p.sounds[#p.sounds + 1] = name
+            end }
+        end
+        return nil
+    end
+    return p
+end
+
 -- Config loading -------------------------------------------------------------
 
 H.group("app-config")
@@ -149,6 +189,7 @@ local appR = A.new({
     redstone = rs,
     logger = log,
     clock = clock.now,
+    power = newNoopPower(1),
     watchdog = H.watchdog,
 })
 H.eq(A.start(appR), "running", "start arms the monitor")
@@ -300,6 +341,7 @@ local appRun = A.new({
     logger = runLog,
     clock = runClock.now,
     sleep = sleepFn,
+    power = newNoopPower(1),
     watchdog = H.watchdog,
 })
 local okRun, runErr = pcall(A.run, appRun)
@@ -323,6 +365,12 @@ H.contains(appSrc, "WATCHDOG_DISABLED", "driver has the disabled keyword")
 H.contains(appSrc, "WATCHDOG_CONFIG_BAD", "driver has the config keyword")
 H.contains(appSrc, "WATCHDOG_READ_FAIL", "driver has the read failure keyword")
 H.contains(appSrc, "WATCHDOG_RELAY_FAIL", "driver has the relay failure keyword")
+H.contains(appSrc, "WATCHDOG_SWITCH_FAIL", "driver has the switch failure keyword")
+H.contains(appSrc, "WATCHDOG_SWITCH", "driver has the switch keyword")
+H.contains(appSrc, "WATCHDOG_RESTORE", "driver has the restore keyword")
+H.contains(appSrc, "WATCHDOG_RESTORE_SKIP", "driver has the restore skip keyword")
+H.contains(appSrc, "switchPower", "driver exposes switchPower")
+H.contains(appSrc, "restorePower", "driver exposes restorePower")
 H.contains(appSrc, "WATCHDOG_STATUS", "driver has the status keyword")
 H.contains(appSrc, "POWERGRID_WATCHDOG_TEST", "driver has the test guard")
 H.lacks(appSrc, "applyPower", "driver never calls applyPower")
@@ -342,7 +390,9 @@ H.lacks(wdSrc, "print(", "the pure module prints nothing")
 H.group("app-autostart-guard")
 H.eq(A.KEYS.low, "powergrid.watchdog.low", "settings key for low")
 H.eq(A.KEYS.alarm_side, "powergrid.watchdog.alarm_side", "settings key for alarm side")
-H.eq(countKeys(A.KEYS), 7, "seven settings keys")
+H.eq(A.KEYS.switch_to, "powergrid.watchdog.switch_to", "settings key for switch_to")
+H.eq(A.KEYS.restore, "powergrid.watchdog.restore", "settings key for restore")
+H.eq(countKeys(A.KEYS), 9, "nine settings keys")
 local savedArg = _G.arg
 local savedShell = _G.shell
 local savedFlag = _G.POWERGRID_WATCHDOG_TEST
@@ -383,3 +433,238 @@ H.contains(mainLog, "input=top", "the start line carries the configured side")
 H.ok(mainLog:find("%[info%] %d%d%d%d%.%d%d%.%d%d %d%d:%d%d") ~= nil,
     "the real log line uses [tag] YYYY.MM.DD HH:MM")
 H.lacks(mainLog, "[error]", "no error line on a healthy start")
+
+-- Power switch and restore ----------------------------------------------------
+
+H.group("app-switch")
+local P = H.power
+local modePath = "/tests/watchdog_mode.ini"
+
+local function writeMode(value)
+    local f = fs.open(modePath, "w")
+    f.write(tostring(value) .. "\n")
+    f.close()
+end
+
+local function modeText()
+    local f = fs.open(modePath, "r")
+    if not f then return nil end
+    local text = f.readAll()
+    f.close()
+    return text
+end
+
+-- A power table backed by the real power.lua, but writing a test-only ini so the
+-- staged PowerGrid.ini fixture is never touched.
+local function rigPower(redstone, peripheralApi)
+    return {
+        read = function() return P.read({ path = modePath }) end,
+        apply = function(value)
+            return P.apply(value, {
+                path = modePath,
+                redstone = redstone,
+                peripheral = peripheralApi,
+            })
+        end,
+    }
+end
+
+writeMode(1)
+local swingLevel = 1
+local relayA = newRedstone(1)
+local powerRsA = newPowerRedstone()
+local speakerA = newSpeaker()
+local logA = newLog()
+local appA = A.new({
+    config = { low = 2, high = 10, window = 30, poll = 10, switch_to = 2,
+        restore = true },
+    redstone = relayA,
+    logger = logA,
+    clock = newClock(0).now,
+    read = function() return swingLevel end,
+    power = rigPower(powerRsA, speakerA),
+    watchdog = H.watchdog,
+})
+H.eq(A.start(appA), "running", "switch scenario starts")
+H.eq(#powerRsA.calls, 0, "start never drives the power output")
+H.num(A.readMode(appA), 1, "readMode sees the pre-alarm mode")
+H.contains(findLine(logA, "WATCHDOG_START"), "switch_to=2", "start log has switch_to")
+H.contains(findLine(logA, "WATCHDOG_START"), "restore=1", "start log has restore")
+H.eq(A.tick(appA, 0), "none", "no switch before the window")
+H.eq(A.tick(appA, 10), "none", "still waiting")
+H.eq(A.tick(appA, 20), "none", "still waiting")
+H.eq(#powerRsA.calls, 0, "no power write before the window")
+H.eq(modeText(), "1\n", "the mode file still holds the main grid")
+H.eq(A.tick(appA, 30), "alarm", "the window fires the alarm")
+H.eq(modeText(), "2\n", "the mode file now holds the backup mode")
+H.eq(#powerRsA.calls, 2, "exactly one setOutput + one setAnalogOutput")
+H.eq(powerRsA.calls[1][1], "setOutput", "setOutput comes first")
+H.eq(powerRsA.calls[1][2], "back", "power writes the back side")
+H.eq(powerRsA.calls[1][3], true, "the power output goes on")
+H.eq(powerRsA.calls[2][1], "setAnalogOutput", "then the analog output")
+H.num(powerRsA.calls[2][3], 2, "the analog level is the backup mode")
+H.eq(speakerA.sounds[1], "create:confirm", "the speaker chirped")
+H.num(appA.switches, 1, "one switch counted")
+H.num(appA.switch_from, 1, "the pre-alarm mode was captured")
+H.eq(appA.switched, true, "the switch is recorded")
+H.eq(appA.last_mode, 2, "the cached mode follows the switch")
+H.eq(count(logA, "WATCHDOG_SWITCH from=1 to=2 reason=low level=1"), 1,
+    "the switch log line is exact")
+H.eq(relayA.calls[#relayA.calls].side, "left", "the alarm relay fired too")
+H.eq(A.tick(appA, 40), "none", "the alarm is one-shot")
+H.eq(#powerRsA.calls, 2, "no extra power write while latched")
+writeMode(3)
+H.eq(A.tick(appA, 50), "none", "still latched")
+H.eq(modeText(), "3\n", "the watchdog does not fight a manual change")
+H.eq(#powerRsA.calls, 2, "no per-poll correction write")
+swingLevel = 12
+H.eq(A.tick(appA, 60), "clear", "recovery clears")
+H.eq(modeText(), "1\n", "recovery restores the pre-alarm mode")
+H.eq(#powerRsA.calls, 4, "the restore writes twice as well")
+H.eq(powerRsA.calls[3][1], "setOutput", "restore setOutput")
+H.eq(powerRsA.calls[3][3], true, "restore output on")
+H.num(powerRsA.calls[4][3], 1, "restore analog level is the pre-alarm mode")
+H.eq(count(logA, "WATCHDOG_RESTORE to=1"), 1, "the restore log line is exact")
+H.num(appA.restores, 1, "one restore counted")
+H.eq(appA.switched, false, "the switch record is cleared")
+H.eq(appA.switch_from, nil, "no stale pre-alarm mode")
+H.eq(A.tick(appA, 70), "none", "healthy samples stay quiet")
+H.eq(#powerRsA.calls, 4, "no power write on healthy polls")
+
+-- Already in the target mode: logged noop, no write, nothing to restore.
+writeMode(2)
+local levelB = 1
+local powerRsB = newPowerRedstone()
+local logB = newLog()
+local appB = A.new({
+    config = { low = 2, high = 10, window = 10, poll = 10, switch_to = 2,
+        restore = true },
+    redstone = newRedstone(1),
+    logger = logB,
+    clock = newClock(0).now,
+    read = function() return levelB end,
+    power = rigPower(powerRsB, newSpeaker()),
+    watchdog = H.watchdog,
+})
+A.start(appB)
+A.tick(appB, 0)
+H.eq(A.tick(appB, 10), "alarm", "the noop scenario alarms")
+H.eq(count(logB, "WATCHDOG_SWITCH to=2 noop"), 1, "already in the target mode is a noop")
+H.eq(#powerRsB.calls, 0, "a noop switch writes nothing")
+H.eq(appB.switches, 0, "a noop is not counted as a switch")
+H.eq(appB.switched, false, "a noop records no switch")
+levelB = 12
+H.eq(A.tick(appB, 20), "clear", "the noop scenario recovers")
+H.eq(count(logB, "WATCHDOG_RESTORE_SKIP reason=no_switch"), 1, "nothing to restore")
+H.eq(modeText(), "2\n", "the backup mode stays")
+H.eq(#powerRsB.calls, 0, "no restore write without a switch")
+
+-- restore=false: the backup mode is kept after recovery.
+writeMode(1)
+local levelC = 1
+local powerRsC = newPowerRedstone()
+local logC = newLog()
+local appC = A.new({
+    config = { low = 2, high = 10, window = 10, poll = 10, switch_to = 2,
+        restore = false },
+    redstone = newRedstone(1),
+    logger = logC,
+    clock = newClock(0).now,
+    read = function() return levelC end,
+    power = rigPower(powerRsC, newSpeaker()),
+    watchdog = H.watchdog,
+})
+A.start(appC)
+A.tick(appC, 0)
+H.eq(A.tick(appC, 10), "alarm", "restore=false still switches on alarm")
+H.eq(modeText(), "2\n", "restore=false switched to the backup mode")
+H.eq(#powerRsC.calls, 2, "restore=false switched once")
+levelC = 12
+H.eq(A.tick(appC, 20), "clear", "restore=false still clears the alarm")
+H.eq(count(logC, "WATCHDOG_RESTORE_SKIP reason=restore_disabled"), 1,
+    "restore=false is logged as a skip")
+H.eq(modeText(), "2\n", "restore=false keeps the backup mode")
+H.eq(#powerRsC.calls, 2, "restore=false writes nothing on recovery")
+H.eq(appC.restores, 0, "no restore counted when disabled")
+H.eq(appC.switched, false, "the switch record is closed")
+
+-- enabled=false: neither the relay nor the power mode is touched.
+writeMode(1)
+local relayD = newRedstone(0)
+local powerRsD = newPowerRedstone()
+local logD = newLog()
+local appD = A.new({
+    config = { enabled = false, switch_to = 2 },
+    redstone = relayD,
+    logger = logD,
+    clock = newClock(0).now,
+    read = function() return 0 end,
+    power = rigPower(powerRsD, newSpeaker()),
+    watchdog = H.watchdog,
+})
+H.eq(A.start(appD), "disabled", "a disabled monitor does not arm")
+H.eq(A.tick(appD, 0), "disabled", "a disabled monitor does not sample")
+H.eq(#powerRsD.calls, 0, "disabled never switches power")
+H.eq(#relayD.calls, 0, "disabled never drives the relay")
+H.eq(modeText(), "1\n", "disabled leaves the mode alone")
+H.eq(appD.switches, 0, "disabled counts no switch")
+
+-- Failure paths: missing module, unreadable mode, failed write.
+writeMode(1)
+local logE = newLog()
+local appE = A.new({
+    config = { low = 2, high = 10, window = 10, poll = 10, switch_to = 2 },
+    redstone = newRedstone(1),
+    logger = logE,
+    clock = newClock(0).now,
+    read = function() return 1 end,
+    power = false,
+    watchdog = H.watchdog,
+})
+A.start(appE)
+A.tick(appE, 0)
+H.eq(A.tick(appE, 10), "alarm", "the alarm still fires without a power module")
+H.eq(count(logE, "WATCHDOG_SWITCH_FAIL reason=no_power_module"), 1,
+    "a missing power module is logged")
+H.eq(appE.switched, false, "no switch is recorded without a module")
+H.eq(modeText(), "1\n", "no power write without a module")
+
+local logF = newLog()
+local appF = A.new({
+    config = { low = 2, high = 10, window = 10, poll = 10, switch_to = 2 },
+    redstone = newRedstone(1),
+    logger = logF,
+    clock = newClock(0).now,
+    read = function() return 1 end,
+    power = {
+        read = function() return nil, "FILE_NOT_FOUND" end,
+        apply = function() error("must not be called") end,
+    },
+    watchdog = H.watchdog,
+})
+A.start(appF)
+A.tick(appF, 0)
+H.eq(A.tick(appF, 10), "alarm", "the alarm fires with an unreadable mode")
+H.eq(count(logF, "WATCHDOG_SWITCH_FAIL reason=read_fail code=FILE_NOT_FOUND"), 1,
+    "an unreadable mode is logged")
+H.eq(appF.switched, false, "an unreadable mode records no switch")
+
+local logG = newLog()
+local appG = A.new({
+    config = { low = 2, high = 10, window = 10, poll = 10, switch_to = 2 },
+    redstone = newRedstone(1),
+    logger = logG,
+    clock = newClock(0).now,
+    read = function() return 1 end,
+    power = {
+        read = function() return 1 end,
+        apply = function() return nil, "WRITE_FAILED" end,
+    },
+    watchdog = H.watchdog,
+})
+A.start(appG)
+A.tick(appG, 0)
+H.eq(A.tick(appG, 10), "alarm", "the alarm fires when the write fails")
+H.eq(count(logG, "WATCHDOG_SWITCH_FAIL reason=write_failed code=WRITE_FAILED"), 1,
+    "a failed write is logged")
+H.eq(appG.switched, false, "a failed write records no switch")

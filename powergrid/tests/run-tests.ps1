@@ -52,15 +52,17 @@ foreach ($sub in @('tests', 'logs')) {
 }
 
 # Deploy layout: the two watchdog modules and logger.lua at the computer root.
-# The archived startup.lua is copied under tests/ as a fixture, so the suite can
-# assert the controller (and its applyPower) is untouched without the runner
-# having to replace its own /startup.lua with it.
+# The controller startup.lua is copied under tests/startup_source.lua as a
+# fixture, so the suite can assert it delegates the power writes to power.lua
+# (and keeps its printer/version behaviour) without the runner having to replace
+# its own /startup.lua with it.
 $copies = [ordered]@{
     'logger.lua'       = 'logger.lua'
+    'power.lua'        = 'power.lua'
     'watchdog.lua'     = 'watchdog.lua'
     'watchdog_app.lua' = 'watchdog_app.lua'
     'PowerGrid.ini'    = 'PowerGrid.ini'
-    'startup.lua'      = 'tests\original_startup.lua'
+    'startup.lua'      = 'tests\startup_source.lua'
 }
 foreach ($pair in $copies.GetEnumerator()) {
     $source = Join-Path $root $pair.Key
@@ -80,7 +82,7 @@ Copy-Item (Join-Path $testsDir 'startup.lua') (Join-Path $computer 'startup.lua'
 # Static gate: every .lua/.ps1 this project adds is pure ASCII (repo rule).
 $staticProblems = @()
 $gateFiles = @()
-foreach ($name in @('watchdog.lua', 'watchdog_app.lua')) {
+foreach ($name in @('power.lua', 'watchdog.lua', 'watchdog_app.lua')) {
     $gateFiles += (Join-Path $root $name)
 }
 foreach ($file in (Get-ChildItem -Path $testsDir -File |
@@ -97,8 +99,9 @@ foreach ($path in $gateFiles) {
         $staticProblems += "non-ASCII byte in $path"
     }
 }
-foreach ($required in @('watchdog.lua', 'watchdog_app.lua', 'tests\run.lua',
-        'tests\startup.lua', 'PowerGrid.ini')) {
+foreach ($required in @('power.lua', 'watchdog.lua', 'watchdog_app.lua',
+        'tests\run.lua', 'tests\startup.lua', 'tests\startup_source.lua',
+        'PowerGrid.ini')) {
     if (-not (Test-Path (Join-Path $computer $required))) {
         $staticProblems += "$required was not staged"
     }

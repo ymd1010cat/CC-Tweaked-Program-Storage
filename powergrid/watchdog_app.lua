@@ -1,9 +1,16 @@
 -- watchdog_app.lua - runtime driver for watchdog.lua
 --
--- Monitor only. This program samples a redstone level, feeds watchdog.lua and
--- drives an alarm relay (plus the logger). It does not switch the power source
--- and does not touch the controller's config file: automatic transfer
--- switching (ATS) is deliberately out of scope for this project.
+-- Samples a redstone level, feeds watchdog.lua and, when the state machine
+-- crosses an edge, acts exactly once: the alarm sample drives the alarm relay
+-- and switches the power mode to powergrid.watchdog.switch_to (default 2 =
+-- backup battery) through power.lua; the recovery sample drives the relay back
+-- and - when powergrid.watchdog.restore is true - restores the mode that was
+-- active before the alarm.
+--
+-- This is NOT a continuous ATS controller: it only acts on those two
+-- transitions, never re-corrects the mode on every poll (so a manual mode change
+-- between transitions is left alone), and it never edits the controller's ini
+-- file itself (power.lua owns that write).
 --
 -- Two ways to use it:
 --   * as a program on a monitoring computer: run `watchdog_app` from the shell
@@ -22,6 +29,11 @@
 --   WATCHDOG_CONFIG_BAD one line per rejected setting (default is used)
 --   WATCHDOG_READ_FAIL  the sensor could not be read (first failure, then 1/60)
 --   WATCHDOG_RELAY_FAIL the alarm side could not be driven
+--   WATCHDOG_SWITCH     the alarm switched the power mode (from=X to=Y ...)
+--   WATCHDOG_SWITCH_FAIL the switch could not be done (no power module/read/write)
+--   WATCHDOG_RESTORE    recovery switched the mode back to the pre-alarm mode
+--   WATCHDOG_RESTORE_SKIP recovery had nothing to restore, or restore is off
+--   WATCHDOG_RESTORE_FAIL the restore read/write failed
 --   WATCHDOG_STATUS     status snapshot on demand
 --   WATCHDOG_CRASH      the main loop died
 
@@ -39,6 +51,8 @@ M.KEYS = {
     poll = "powergrid.watchdog.poll",
     input_side = "powergrid.watchdog.input_side",
     alarm_side = "powergrid.watchdog.alarm_side",
+    switch_to = "powergrid.watchdog.switch_to",
+    restore = "powergrid.watchdog.restore",
 }
 
 local NULL_LOGGER = {}
@@ -48,6 +62,12 @@ function NULL_LOGGER.warn() return false end
 function NULL_LOGGER.error() return false end
 function NULL_LOGGER.debug() return false end
 M.NULL_LOGGER = NULL_LOGGER
+
+local function flag(value)
+    if value == true then return "1" end
+    return "0"
+end
+M.flag = flag
 
 local function fmt(value)
     if type(value) ~= "number" or value ~= value then return "?" end
@@ -128,6 +148,8 @@ end
 --   read     function() -> level[, err] (default: analog input of input_side)
 --   clock    function() -> seconds (default os.clock)
 --   sleep    function(seconds) (default os.sleep)
+--   power    power.lua-style module with read()/apply(value); pass false to
+--            simulate the module being absent (default require/dofile power.lua)
 function M.new(opts)
     if type(opts) ~= "table" then opts = {} end
 
@@ -152,12 +174,20 @@ function M.new(opts)
     local redstone = opts.redstone
     if redstone == nil then redstone = _G.redstone end
 
+    -- power.lua does the actual mode switch/restore. Passing false means "there
+    -- is no power module in this deployment": the monitor still alarms, but a
+    -- switch attempt is logged as WATCHDOG_SWITCH_FAIL instead of crashing.
+    local powerApi = opts.power
+    if powerApi == nil then powerApi = resolveModule("power") end
+    if powerApi == false then powerApi = nil end
+
     local state = wd.new(config)
     local app = {
         version = M.VERSION,
         watchdog = wd,
         logger = log,
         redstone = redstone,
+        power = powerApi,
         clock = opts.clock or defaultClock,
         sleep = opts.sleep or defaultSleep,
         state = state,
@@ -167,6 +197,12 @@ function M.new(opts)
         read_errors = 0,
         relay = false,
         relay_writes = 0,
+        last_mode = nil,
+        switch_from = nil,
+        switch_target = nil,
+        switched = false,
+        switches = 0,
+        restores = 0,
     }
     if opts.read ~= nil then
         app.read = opts.read
@@ -191,10 +227,12 @@ function M.start(app)
         return "disabled"
     end
     app.logger.info(string.format(
-        "WATCHDOG_START input=%s alarm=%s low=%s high=%s window=%s poll=%s",
+        "WATCHDOG_START input=%s alarm=%s low=%s high=%s window=%s poll=%s " ..
+        "switch_to=%s restore=%s",
         tostring(state.cfg.input_side), tostring(state.cfg.alarm_side),
         fmt(state.cfg.low), fmt(state.cfg.high), fmt(state.cfg.window),
-        fmt(state.cfg.poll)))
+        fmt(state.cfg.poll), fmt(state.cfg.switch_to),
+        M.flag(state.cfg.restore)))
     app.status = "running"
     app.started = true
     M.applyAlarm(app, false)
@@ -219,6 +257,111 @@ function M.applyAlarm(app, on)
     end
     app.relay = (on == true)
     app.relay_writes = app.relay_writes + 1
+    return true
+end
+
+-- Read the current power mode through power.lua. Returns mode, or nil, reason.
+local function readMode(app)
+    if type(app.power) ~= "table" or type(app.power.read) ~= "function" then
+        return nil, "no_power_module"
+    end
+    local ok, mode, code = pcall(app.power.read)
+    if not ok then return nil, "read_error" end
+    if type(mode) ~= "number" then
+        return nil, tostring(code or "read_fail")
+    end
+    return mode
+end
+M.readMode = readMode
+
+-- Switch the power mode for an alarm. Called once per excursion, on the alarm
+-- sample only. Returns true when power.lua actually rewrote the mode; an
+-- already-in-target mode is a logged noop, not a write.
+function M.switchPower(app, reason, level)
+    local cfg = app.state.cfg
+    local target = cfg.switch_to
+    if type(app.power) ~= "table" or type(app.power.apply) ~= "function" then
+        app.logger.warn("WATCHDOG_SWITCH_FAIL reason=no_power_module")
+        return false
+    end
+    local current, code = readMode(app)
+    if current == nil then
+        app.logger.warn("WATCHDOG_SWITCH_FAIL reason=read_fail code=" ..
+            tostring(code))
+        return false
+    end
+    app.last_mode = current
+    if current == target then
+        app.logger.info("WATCHDOG_SWITCH to=" .. fmt(target) .. " noop")
+        return false
+    end
+    local ok, applied, err = pcall(app.power.apply, target)
+    if not ok or not applied then
+        local why = err
+        if not ok then why = applied end
+        app.logger.warn("WATCHDOG_SWITCH_FAIL reason=write_failed code=" ..
+            tostring(why))
+        return false
+    end
+    app.switched = true
+    app.switch_from = current
+    app.switch_target = target
+    app.switches = app.switches + 1
+    app.last_mode = target
+    app.logger.info("WATCHDOG_SWITCH from=" .. fmt(current) ..
+        " to=" .. fmt(target) .. " reason=" .. tostring(reason) ..
+        " level=" .. fmt(level))
+    return true
+end
+
+-- Restore the pre-alarm mode on recovery (once, on the clear sample only).
+-- powergrid.watchdog.restore=false keeps the backup mode instead.
+function M.restorePower(app)
+    local cfg = app.state.cfg
+    if app.switched ~= true or app.switch_from == nil then
+        app.logger.info("WATCHDOG_RESTORE_SKIP reason=no_switch")
+        return false
+    end
+    if cfg.restore ~= true then
+        app.switched = false
+        app.switch_from = nil
+        app.switch_target = nil
+        app.logger.info("WATCHDOG_RESTORE_SKIP reason=restore_disabled")
+        return false
+    end
+    if type(app.power) ~= "table" or type(app.power.apply) ~= "function" then
+        app.logger.warn("WATCHDOG_RESTORE_FAIL reason=no_power_module")
+        return false
+    end
+    local target = app.switch_from
+    local current, code = readMode(app)
+    if current == nil then
+        app.logger.warn("WATCHDOG_RESTORE_FAIL reason=read_fail code=" ..
+            tostring(code))
+        return false
+    end
+    app.last_mode = current
+    if current == target then
+        app.switched = false
+        app.switch_from = nil
+        app.switch_target = nil
+        app.logger.info("WATCHDOG_RESTORE to=" .. fmt(target) .. " noop")
+        return false
+    end
+    local ok, applied, err = pcall(app.power.apply, target)
+    if not ok or not applied then
+        local why = err
+        if not ok then why = applied end
+        app.logger.warn("WATCHDOG_RESTORE_FAIL reason=write_failed code=" ..
+            tostring(why))
+        return false
+    end
+    app.switched = false
+    app.switch_from = nil
+    app.switch_target = nil
+    app.last_mode = target
+    app.restores = app.restores + 1
+    app.logger.info("WATCHDOG_RESTORE to=" .. fmt(target))
     return true
 end
 
@@ -264,6 +407,7 @@ function M.tick(app, now)
             "WATCHDOG_ALARM side=%s level=%s low=%s high=%s window=%s sustained=%s",
             tostring(state.cfg.alarm_side), fmt(level), fmt(state.cfg.low),
             fmt(state.cfg.high), fmt(state.cfg.window), fmt(sustained)))
+        M.switchPower(app, "low", level)
     elseif event == "clear" then
         local held = 0
         if type(info) == "table" and type(info.held) == "number" then
@@ -272,6 +416,7 @@ function M.tick(app, now)
         M.applyAlarm(app, false)
         app.logger.info("WATCHDOG_CLEAR level=" .. fmt(level) ..
             " held=" .. fmt(held) .. " alarms=" .. tostring(state.alarms))
+        M.restorePower(app)
     end
     return event, info
 end
@@ -295,6 +440,9 @@ function M.statusLine(app)
     local state, text = app.watchdog.status(app.state)
     text = text .. " status=" .. tostring(app.status) ..
         " relay=" .. (app.relay and "on" or "off") ..
+        " mode=" .. fmt(app.last_mode) ..
+        " switches=" .. tostring(app.switches) ..
+        " restores=" .. tostring(app.restores) ..
         " polls=" .. tostring(app.polls) ..
         " read_fail=" .. tostring(app.read_errors)
     return text, state

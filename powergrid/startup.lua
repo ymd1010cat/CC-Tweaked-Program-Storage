@@ -4,6 +4,7 @@ shell.run("clear")
 -- Load required modules
 local bsod = require("bsod")
 local logger = require("logger")
+local power_api = require("power")
 
 -- Operation feedback display delay (seconds)
 local FEEDBACK_DELAY = 1
@@ -45,79 +46,22 @@ local function wrapText(text, maxWidth)
     return lines
 end
 
--- Helper: update config file, redstone output and play sound
-local function applyPower(value)
-    local f = io.open("PowerGrid.ini", "w")
-    if f then
-        f:write(tostring(value) .. "\n")
-        f:close()
-    end
-
-    if value > 0 then
-        redstone.setOutput("back", true)
-        redstone.setAnalogOutput("back", value)
-    else
-        redstone.setOutput("back", false)
-        redstone.setAnalogOutput("back", 0)
-    end
-
-    local speaker = peripheral.find("speaker")
-    if speaker then
-        speaker.playSound("create:confirm")
-    end
-end
-
--- Read config file
-local file = io.open("PowerGrid.ini", "r")
-if not file then
-    logger.error("Configuration file PowerGrid.ini not found")
+-- Read and validate the config file. power.lua now owns the archived validation
+-- (same error codes and messages); the blue screen stays exactly as it was.
+local power, configError, configLine = power_api.read()
+if configError then
+    local message, extra = power_api.describe(configError, power, configLine)
+    logger.error(message)
     bsod.show({
-        error = "FILE_NOT_FOUND",
+        error = configError,
         file = "PowerGrid.ini",
         title = "This Terminal ran into a problem and need fix.",
-        extra = "Configuration file missing."
+        extra = extra
     })
 end
 
-local line = file:read("*line")
-file:close()
-
--- Check empty value
-if line == nil or #line == 0 then
-    logger.error("PowerGrid.ini is empty")
-    bsod.show({
-        error = "VALUE_LENGTH_IS_ZERO",
-        file = "PowerGrid.ini",
-        title = "This Terminal ran into a problem and need fix.",
-        extra = "Power value is empty."
-    })
-end
-
--- Check type
-local power = tonumber(line)
-if power == nil then
-    logger.error("Invalid power value format: " .. line)
-    bsod.show({
-        error = "VALUE_TYPE_NOT_CORRECT",
-        file = "PowerGrid.ini",
-        title = "This Terminal ran into a problem and need fix.",
-        extra = "Invalid power value format."
-    })
-end
-
--- Check range (allows 0,1,2,3)
-if power < 0 or power > 3 then
-    logger.error("Power value out of range: " .. power)
-    bsod.show({
-        error = "INI_VALUE_OUT_RANGE",
-        file = "PowerGrid.ini",
-        title = "This Terminal ran into a problem and need fix.",
-        extra = "Power value must be between 0 and 3."
-    })
-end
-
--- Apply initial configuration
-applyPower(power)
+-- Apply initial configuration (config write + redstone + speaker chirp)
+power_api.apply(power)
 logger.info("Power Grid initialized with value " .. power)
 
 -- Main command loop (no exit function)
@@ -166,7 +110,7 @@ while true do
         if power ~= 1 then
             local old = power
             power = 1
-            applyPower(power)
+            power_api.apply(power)
             logger.info("Switched from " .. old .. " to Main Grid (mode 1)")
             print("Switched to Main Grid.")
             os.sleep(FEEDBACK_DELAY)
@@ -179,7 +123,7 @@ while true do
         if power ~= 2 then
             local old = power
             power = 2
-            applyPower(power)
+            power_api.apply(power)
             logger.info("Switched from " .. old .. " to Backup Battery (mode 2)")
             print("Switched to Backup Battery.")
             os.sleep(FEEDBACK_DELAY)
@@ -192,7 +136,7 @@ while true do
         if power ~= 3 then
             local old = power
             power = 3
-            applyPower(power)
+            power_api.apply(power)
             logger.info("Switched from " .. old .. " to External Grid (mode 3)")
             print("Switched to External Grid.")
             os.sleep(FEEDBACK_DELAY)
@@ -205,7 +149,7 @@ while true do
         if power ~= 0 then
             local old = power
             power = 0
-            applyPower(power)
+            power_api.apply(power)
             logger.info("Switched from " .. old .. " to Disabled (mode 0)")
             print("Power Grid disabled.")
             os.sleep(FEEDBACK_DELAY)

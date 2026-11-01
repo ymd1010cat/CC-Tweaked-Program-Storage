@@ -1,6 +1,6 @@
 -- run.lua - driver for the powergrid offline suite.
 --
--- Loads the two modules under test, then every /tests/t_*.lua module in sorted
+-- Loads the modules under test, then every /tests/t_*.lua module in sorted
 -- order, passing the harness as its only argument (so adding a new t_*.lua
 -- needs no edit here). Ends by shutting the computer down: CraftOS-PC only
 -- flushes the filesystem when the computer stops, and run-tests.ps1 waits for
@@ -60,6 +60,19 @@ H.app = app
 H.readAll = readAll
 H.iniBefore = iniBefore
 
+local okP, power = pcall(dofile, "/power.lua")
+H.group("power-module-load")
+H.ok(okP, "power.lua loads", H.errText(power))
+H.isType(power, "table", "power.lua returns a table")
+if type(power) == "table" then
+    H.isType(power.apply, "function", "power.apply exported")
+    H.isType(power.read, "function", "power.read exported")
+    H.isType(power.validate, "function", "power.validate exported")
+    H.isType(power.describe, "function", "power.describe exported")
+    H.eq(power.VERSION, "1.0", "power version")
+end
+H.power = power
+
 local names = {}
 for _, name in ipairs(fs.list("/tests") or {}) do
     if name:match("^t_.*%.lua$") then names[#names + 1] = name end
@@ -83,21 +96,25 @@ for _, name in ipairs(names) do
 end
 
 -- The controller keeps its own files: the watchdog must not have rewritten the
--- power config, and the archived startup.lua must still own the power switch.
+-- power config, and startup.lua must still keep all of its non-power behaviour
+-- (the detailed delegation checks live in t_power.lua).
 H.group("suite-integrity")
 local iniAfter = readAll("/PowerGrid.ini")
 H.eq(iniAfter, iniBefore, "PowerGrid.ini byte-identical after the suite")
 H.eq((iniAfter or ""):gsub("%s+$", ""), "1", "PowerGrid.ini still the single value 1")
 H.ok(not fs.exists("/.settings"), "no .settings written by the suite")
-local originalStartup = readAll("/tests/original_startup.lua") or ""
-H.contains(originalStartup, "Power Grid Controller v2.1",
-    "archived controller startup.lua unchanged (version marker)")
-H.contains(originalStartup, "applyPower",
-    "archived controller startup.lua still owns applyPower")
-H.lacks(originalStartup, "watchdog",
-    "archived controller startup.lua has no watchdog hook")
+local startupSource = readAll("/tests/startup_source.lua") or ""
+H.contains(startupSource, "Power Grid Controller v2.1",
+    "controller startup.lua version marker kept")
+H.contains(startupSource, "power_api.apply(power)",
+    "controller startup.lua applies power through power.lua")
+H.lacks(startupSource, "local function applyPower",
+    "controller startup.lua no longer duplicates the helper")
+H.lacks(startupSource, "watchdog",
+    "controller startup.lua has no watchdog hook")
 local watchdogSrc = readAll("/watchdog.lua") or ""
 H.contains(watchdogSrc, "WATCHDOG state=", "status text lives in watchdog.lua")
+H.contains(watchdogSrc, "switch_to", "the pure module carries the switch target")
 
 H.summary()
 if H.log then

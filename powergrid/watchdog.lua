@@ -30,6 +30,8 @@ M.DEFAULTS = {
     poll = 10,
     alarm_side = "left",
     input_side = "back",
+    switch_to = 2,
+    restore = true,
     enabled = true,
 }
 
@@ -176,6 +178,34 @@ function M.sanitize(opts)
     cfg.alarm_side = side("alarm_side")
     cfg.input_side = side("input_side")
 
+    -- Power mode to switch to when the alarm fires (0 disable, 1 main grid,
+    -- 2 backup battery, 3 external). The state machine only carries the number;
+    -- watchdog_app.lua turns it into a power.lua call.
+    if opts.switch_to == nil then
+        cfg.switch_to = M.DEFAULTS.switch_to
+    else
+        local n = tonum(opts.switch_to)
+        if n == nil or n ~= math.floor(n) or n < 0 or n > 3 then
+            bad("switch_to", opts.switch_to, "expected integer 0-3")
+            cfg.switch_to = M.DEFAULTS.switch_to
+        else
+            cfg.switch_to = n
+        end
+    end
+
+    -- Whether recovery restores the mode that was active before the alarm.
+    if opts.restore == nil then
+        cfg.restore = M.DEFAULTS.restore
+    else
+        local b = tobool(opts.restore)
+        if b == nil then
+            bad("restore", opts.restore, "expected true/false")
+            cfg.restore = M.DEFAULTS.restore
+        else
+            cfg.restore = b
+        end
+    end
+
     return cfg, problems
 end
 
@@ -318,6 +348,8 @@ function M.status(w)
         poll = cfg.poll,
         alarm_side = cfg.alarm_side,
         input_side = cfg.input_side,
+        switch_to = cfg.switch_to,
+        restore = cfg.restore == true,
         low_since = source.low_since,
         low_for = low_for,
         alarm_at = source.alarm_at,
@@ -333,10 +365,12 @@ function M.status(w)
 
     local text = string.format(
         "WATCHDOG state=%s zone=%s alarm=%s enabled=%s level=%s low=%s high=%s " ..
-        "window=%s low_for=%s checks=%s alarms=%s recoveries=%s",
+        "window=%s low_for=%s checks=%s alarms=%s recoveries=%s " ..
+        "switch_to=%s restore=%s",
         s.state, s.zone, flag(s.alarm), flag(s.enabled), fmt(s.level),
         fmt(s.low), fmt(s.high), fmt(s.window), fmt(math.floor(low_for)),
-        fmt(s.checks), fmt(s.alarms), fmt(s.recoveries))
+        fmt(s.checks), fmt(s.alarms), fmt(s.recoveries),
+        fmt(s.switch_to), flag(s.restore))
     return s, text
 end
 
