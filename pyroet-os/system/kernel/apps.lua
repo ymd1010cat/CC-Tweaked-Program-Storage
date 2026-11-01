@@ -354,7 +354,7 @@ A.SYS_OTA = {
     ota_apply = { cap = "fs.write", method = "sys_ota_apply" },
 }
 -- T7: a pocket computer has no disk drive. The internal /pkgs directory is the
--- primary source; the disk paths are only added when /disk is mounted.
+-- only package source: nothing else is ever mounted.
 A.OTA_INTERNAL = "/pkgs"
 -- T15: launch and rescan are runtime-served too, so a package installed at run
 -- time is launchable without a reboot: `launch` rescans once when the name is
@@ -502,124 +502,46 @@ end
 -- the desktop OTA surface (T5)
 -- ---------------------------------------------------------------------------
 
--- the meta parser is the kernel's own module: the app never sees a file handle,
--- only the parsed result (or an error string it can render)
-function A:ota_module()
-    if type(self.ota) == "table" then return self.ota end
-    local ok, module = pcall(function()
-        return assert(loadfile("/system/kernel/ota.lua"))()
-    end)
-    if not ok or type(module) ~= "table" then
-        self:log("APP_OTA_NO_MODULE")
-        return nil
-    end
-    self.ota = module
-    return module
-end
-
--- What the source medium offers: `/disk/ota/meta.txt` is an image update (the
--- boot image is reflashed by recovery, so it is listed but not applied here);
--- `/disk/apps/<name>.app` are package updates, applied through the installer.
+-- What the source medium offers: the packages in `/pkgs`, on this computer's
+-- own storage. A pocket computer has no disk drive, so there is no other
+-- medium to consult.
 function A:sys_ota_list(record)
     if not record.caps["fs.read"] then return self:denied(record, "fs.read") end
     local fsx = self.fs
-    local entries, notes = {}, {}
-    local ota = self:ota_module()
-    local meta_path = self.opts.ota_meta or A.OTA_META
+    local entries = {}
     local internal = self.opts.ota_internal or A.OTA_INTERNAL
-    local disk = self.opts.ota_disk or A.OTA_DISK
-    -- /disk is optional: a mounted disk adds both its packages and its meta
-    local disk_mounted = false
-    do
-        local called, here = pcall(fsx.exists, "/disk")
-        disk_mounted = (called and here) == true
-    end
-    local media_list = { { root = internal, source = "internal" } }
-    if disk_mounted then media_list[#media_list + 1] = { root = disk, source = "disk" } end
-    local sources, listed = {}, {}
-    local function source_text()
-        local parts = {}
-        for i = 1, #sources do parts[#parts + 1] = sources[i] end
-        if #parts == 0 then return "none" end
-        return table.concat(parts, "+")
-    end
-    local called, exists = pcall(fsx.exists, meta_path)
-    if called and exists then
-        local ok_read, text = pcall(fsx.open, meta_path, "r")
-        local body = nil
-        if ok_read and text then
-            local hcalled, handle = pcall(function() return text end)
-            if hcalled and handle and type(handle.readAll) == "function" then
-                local rcalled, data = pcall(handle.readAll)
-                pcall(handle.close)
-                if rcalled then body = data end
-            end
-        end
-        if body == nil then
-            self:log("APP_OTA_LIST ok=false reason=unreadable")
-            return nil, "unreadable meta"
-        end
-        if type(ota) ~= "table" or type(ota.parse_meta) ~= "function" then
-            self:log("APP_OTA_LIST ok=false reason=no_module")
-            return nil, "ota unavailable"
-        end
-        local mcalled, meta = pcall(ota.parse_meta, body)
-        if not mcalled or type(meta) ~= "table" then
-            self:log("APP_OTA_LIST ok=false reason=bad_meta")
-            return nil, "bad meta"
-        end
-        entries[#entries + 1] = {
-            name = "image",
-            version = tostring(meta.version or "?"),
-            kind = "image",
-            source = "disk",
-            files = tonumber(meta.files) or 0,
-        }
-        sources[#sources + 1] = "disk"
-    end
-    for s = 1, #media_list do
-        local root, source = media_list[s].root, media_list[s].source
-        local mcalled, names = pcall(fsx.list, root)
-        local listing = (mcalled and type(names) == "table") and names or {}
-        table.sort(listing)
-        for i = 1, #listing do
-            local dir = join(root, listing[i])
-            if listing[i]:sub(-4) == ".app" then
-                local dcalled, is_dir = pcall(fsx.isDir, dir)
-                if dcalled and is_dir then
-                    local name = listing[i]:sub(1, -5)
-                    local version = "?"
-                    local inst = self:installer_of()
-                    if inst and type(inst.read_manifest) == "function" then
-                        local vcalled, manifest = pcall(inst.read_manifest, inst, dir)
-                        if vcalled and type(manifest) == "table" then
-                            version = tostring(manifest.version or "?")
-                        end
+    local called, names = pcall(fsx.list, internal)
+    local listing = (called and type(names) == "table") and names or {}
+    table.sort(listing)
+    for i = 1, #listing do
+        local dir = join(internal, listing[i])
+        if listing[i]:sub(-4) == ".app" then
+            local dcalled, is_dir = pcall(fsx.isDir, dir)
+            if dcalled and is_dir then
+                local name = listing[i]:sub(1, -5)
+                local version = "?"
+                local inst = self:installer_of()
+                if inst and type(inst.read_manifest) == "function" then
+                    local vcalled, manifest = pcall(inst.read_manifest, inst, dir)
+                    if vcalled and type(manifest) == "table" then
+                        version = tostring(manifest.version or "?")
                     end
-                    entries[#entries + 1] = {
-                        name = name, version = version, kind = "package",
-                        source = source,
-                    }
-                    listed[source] = true
                 end
+                entries[#entries + 1] = {
+                    name = name, version = version, kind = "package",
+                    source = "internal",
+                }
             end
-        end
-    end
-    for i = 1, #media_list do
-        if listed[media_list[i].source] then
-            sources[#sources + 1] = media_list[i].source
         end
     end
     if #entries == 0 then
         -- the reason stays `no source`; the log records exactly what was checked
-        self:log("APP_OTA_LIST ok=false reason=no_source checked="
-            .. internal .. ",/disk")
+        self:log("APP_OTA_LIST ok=false reason=no_source checked=" .. internal)
         return nil, "no source"
     end
-    local text = source_text()
     self:log("APP_OTA_LIST ok=true entries=" .. tostring(#entries)
-        .. " source=" .. text)
-    return true, { source = text, entries = entries }
+        .. " source=internal")
+    return true, { source = "internal", entries = entries }
 end
 
 function A:sys_ota_apply(record, name)

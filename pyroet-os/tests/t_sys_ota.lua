@@ -1,19 +1,18 @@
---[[- pyroet-os/tests/t_ota.lua -- T5: the desktop OTA surface.
+--[[- pyroet-os/tests/t_sys_ota.lua -- T5: the desktop OTA surface.
 
-The kernel owns the medium: `api.sys.ota_list()` reads `/disk/ota/meta.txt`
-(an image update, parsed by kernel/ota.lua) and `/disk/apps/<name>.app`
-(package updates), and `api.sys.ota_apply(name)` applies a package through the
-*same* installer object as `api.sys.install`. The launcher only renders the
-answer: `no updates` plus a reason when there is no source, never a crash.
+The kernel owns the medium: `api.sys.ota_list()` reads `/pkgs` on this
+computer's own storage (a pocket computer has no disk drive, so there is no
+other medium), and `api.sys.ota_apply(name)` applies a package through the
+*same* installer object as `api.sys.install`. The image meta parser
+(`kernel/ota.lua`'s `parse_meta`) has its own suite in t_ota.lua. The launcher
+only renders the answer: `no updates` plus a reason when there is no source,
+never a crash.
 
 No non-ASCII bytes in this file.
 ]]
 
 local APPS = assert(loadfile("/system/kernel/apps.lua"))()
 local INSTALLER = assert(loadfile("/system/kernel/installer.lua"))()
-
-local HEX = string.rep("ab", 32)
-local META_OK = "PYROET-OTA/2 META version=1.2.0 files=2 manifest_sha=" .. HEX
 
 return function(H)
     local F = H.real_fs()
@@ -41,8 +40,7 @@ return function(H)
             -- uninstall / list / ota_*); the functions behind them are the
             -- runtime's own, not host callbacks
             sys = o.sys or {},
-            ota_meta = o.ota_meta,
-            ota_media = o.ota_media,
+            ota_internal = o.ota_internal,
         })
         return rt, log, lines
     end
@@ -56,20 +54,20 @@ return function(H)
     H.group("ota.list")
     do
         H.rmrf("/apps")
-        H.rmrf("/disk")
         H.rmrf("/pkgs")
         local inst = installer_for()
         local rt, log, lines = runtime({ installer = inst })
         H.eq("scan", rt:scan(), 3)
         local api = launch(rt, "launcher")
 
-        -- 1) no source medium at all
+        -- 1) the source directory is missing: `no source`, and the log names
+        -- exactly what was checked
         local ok, info = api.sys.ota_list()
         H.eq("none_ok", ok, nil)
         H.eq("none_reason", info, "no source")
-        H.has(lines, "APP_OTA_LIST ok=false reason=no_source checked=/pkgs,/disk")
+        H.has(lines, "APP_OTA_LIST ok=false reason=no_source checked=/pkgs")
 
-        -- 2) a package on the source medium is an update
+        -- 2) a package in /pkgs is an update
         H.app_package("/pkgs/demo.app", {
             manifest = 'return { name = "demo", version = "1.0.1", entry = "main.lua",'
                 .. ' capabilities = { "fs.read" } }',
@@ -78,30 +76,15 @@ return function(H)
         local ok2, info2 = api.sys.ota_list()
         H.eq("pkg_ok", ok2, true)
         H.table("pkg_info", info2)
+        H.eq("pkg_source", info2 and info2.source, "internal")
         H.eq("pkg_entries", info2 and #info2.entries, 1)
         H.eq("pkg_name", info2 and info2.entries[1].name, "demo")
         H.eq("pkg_version", info2 and info2.entries[1].version, "1.0.1")
         H.eq("pkg_kind", info2 and info2.entries[1].kind, "package")
-        H.has(lines, "APP_OTA_LIST ok=true entries=1")
+        H.eq("pkg_entry_source", info2 and info2.entries[1].source, "internal")
+        H.has(lines, "APP_OTA_LIST ok=true entries=1 source=internal")
 
-        -- 3) an image meta is listed too, parsed by kernel/ota.lua
-        H.mkdirp("/disk/ota")
-        H.write("/disk/ota/meta.txt", META_OK .. "\n")
-        local ok3, info3 = api.sys.ota_list()
-        H.eq("image_ok", ok3, true)
-        H.eq("image_entries", info3 and #info3.entries, 1)
-        H.eq("image_kind", info3 and info3.entries[1].kind, "package")
-        H.eq("image_version", info3 and info3.entries[1].version, "1.0.1")
-
-        -- 4) an unparsable meta is an error the caller can show, not a crash
-        H.write("/disk/ota/meta.txt", "garbage\n")
-        local ok4, info4 = api.sys.ota_list()
-        H.eq("bad_ok", ok4, true)
-        H.eq("bad_reason", info4 and info4.source, "internal")
-        H.has(lines, "APP_OTA_LIST ok=true")
-        H.write("/disk/ota/meta.txt", META_OK .. "\n")
-
-        -- 5) capability gates: the bridge asks the caller's own cap set
+        -- 3) capability gates: the bridge asks the caller's own cap set
         H.rmrf("/apps")
         H.app_package("/apps/reader.app", {
             manifest = 'return { name = "reader", version = "1.0.0",'
@@ -120,7 +103,6 @@ return function(H)
         H.eq("reader_apply_ok", aok, nil)
         H.eq("reader_apply_reason", aerr, "capability denied: fs.write")
         H.rmrf("/apps")
-        H.rmrf("/disk")
         H.rmrf("/pkgs")
     end
 
@@ -128,7 +110,6 @@ return function(H)
     H.group("ota.apply")
     do
         H.rmrf("/apps")
-        H.rmrf("/disk")
         H.rmrf("/pkgs")
         H.app_package("/pkgs/demo.app", {
             manifest = 'return { name = "demo", version = "1.0.1", entry = "main.lua",'
@@ -149,8 +130,6 @@ return function(H)
         H.has(lines, "APP_OTA_APPLY name=demo ok=true")
 
         -- an image update cannot be applied from the desktop (recovery owns it)
-        H.mkdirp("/disk/ota")
-        H.write("/disk/ota/meta.txt", META_OK .. "\n")
         local iok, ierr = api.sys.ota_apply("image")
         H.eq("image_apply_ok", iok, nil)
         H.eq("image_apply_reason", ierr, "image ota needs recovery")
@@ -166,17 +145,15 @@ return function(H)
         H.eq("remove_ok", select(1, api.sys.uninstall("demo")), true)
         H.eq("remove_gone", F.exists("/apps/demo.app"), false)
         H.rmrf("/apps")
-        H.rmrf("/disk")
         H.rmrf("/pkgs")
     end
 
     -- -----------------------------------------------------------------
     H.group("ota.internal")
     -- T7: a pocket computer has no disk drive, so /pkgs (on this computer's own
-    -- disk) is the primary source; /disk is only added when it is mounted.
+    -- storage) is the only source.
     do
         H.rmrf("/apps")
-        H.rmrf("/disk")
         H.rmrf("/pkgs")
         H.app_package("/pkgs/demo.app", {
             manifest = 'return { name = "demo", version = "2.0.0", entry = "main.lua",'
@@ -188,8 +165,8 @@ return function(H)
         H.eq("scan", rt:scan(), 3)
         local api = launch(rt, "launcher")
 
-        -- no /disk at all: the internal package is still listed, and the source
-        -- summary says `internal` (never `disk none`)
+        -- the internal package is listed, and the source summary says
+        -- `internal` (never `disk none`)
         local ok, info = api.sys.ota_list()
         H.eq("internal_ok", ok, true)
         H.eq("internal_source", info and info.source, "internal")
@@ -203,24 +180,7 @@ return function(H)
             "not installed")
         H.eq("internal_remove", select(1, api.sys.uninstall("demo")), true)
 
-        -- with a mounted disk both sources are merged into `internal+disk`
-        H.app_package("/disk/apps/diskapp.app", {
-            manifest = 'return { name = "diskapp", version = "1.0.0",'
-                .. ' entry = "main.lua", capabilities = { "fs.read" } }',
-            main = 'return function(manifest, api) return nil end\n',
-        })
-        local ok2, info2 = api.sys.ota_list()
-        H.eq("merged_ok", ok2, true)
-        H.eq("merged_source", info2 and info2.source, "internal")
-        H.eq("merged_entries", info2 and #info2.entries, 1)
-        local sources = {}
-        for i = 1, #(info2 and info2.entries or {}) do
-            sources[info2.entries[i].source] = true
-        end
-        H.eq("merged_has_internal", sources.internal, true)
-        H.eq("merged_no_disk", sources.disk, nil)
-
-        -- the installer app reads the same roots: /pkgs first, /disk optional
+        -- the installer app reads the same root: /pkgs only
         _G.PYROET_INSTALLER_TEST = true
         local APP = assert(loadfile("/tests/installer.app/main.lua"))()
         _G.PYROET_INSTALLER_TEST = nil
@@ -243,28 +203,26 @@ return function(H)
             found[entries[i].source .. ":" .. entries[i].name] = true
         end
         H.eq("app_pkgs", found["internal:demo"], true)
-        H.check("app_scan_ok", true, "")
+        -- the scan really returned the /pkgs package as an installable row
+        H.ge("app_scan_entries", #entries, 1)
         H.eq("app_tag", APP.tag_of({ source = "internal" }), "p")
         H.eq("app_action", APP.action_of({ source = "internal" }), "install")
 
-        -- a machine with neither source: the hint names what was checked
+        -- a machine with no package at all: the hint names what was checked
         H.rmrf("/pkgs")
-        H.rmrf("/disk")
-        local no_disk_entries, no_disk_problems, ok4, text2 = APP.scan({
+        local no_src_entries, no_src_problems, ok4, text2 = APP.scan({
             fs = fs_api,
             sys = { apps = function() return {} end },
         })
         H.eq("app_none_text", text2, "none")
         local off_source = 0
-        for i = 1, #no_disk_entries do
-            local source = no_disk_entries[i].source
-            if source == "internal" or source == "disk" then off_source = off_source + 1 end
+        for i = 1, #no_src_entries do
+            if no_src_entries[i].source == "internal" then off_source = off_source + 1 end
         end
         H.eq("app_none_entries", off_source, 0)
-        H.absent("app_none_no_disk_word", H.joined(no_disk_problems), "no disk")
-        H.eq("app_none_problems", #no_disk_problems, 0)
+        H.absent("app_none_no_disk_word", H.joined(no_src_problems), "no disk")
+        H.eq("app_none_problems", #no_src_problems, 0)
         H.rmrf("/apps")
-        H.rmrf("/disk")
         H.rmrf("/pkgs")
     end
 
@@ -283,8 +241,8 @@ return function(H)
             main = 'return function(manifest, api) return nil end\n',
         })
         local log, lines = H.logger()
-        -- the default constructor must find /pkgs on its own: the source roots
-        -- are constants (I.INTERNAL / I.DISK), not something a caller passes
+        -- the default constructor must find /pkgs on its own: the source root
+        -- is a constant (I.INTERNAL), not something a caller passes
         H.eq("e2e_internal_const", INSTALLER.INTERNAL, "/pkgs")
         H.eq("e2e_disk_const", INSTALLER.DISK, nil)
         local inst = INSTALLER.new({
@@ -445,8 +403,9 @@ return function(H)
         -- the power menu always offers Update, and it opens this screen
         H.eq("menu_has_update", L.POWER_ITEMS[1].id, "update")
         H.eq("menu_count", #L.POWER_ITEMS, 4)
+        -- the launcher only renders the kernel's answer: source "internal"
         local api = api_with(function()
-            return true, { source = "/disk/ota/meta.txt", entries = {
+            return true, { source = "internal", entries = {
                 { name = "demo", version = "1.0.1", kind = "package" },
             } }
         end, function() return true, { version = "1.0.1" } end)
@@ -490,7 +449,7 @@ return function(H)
 
         -- a failing apply is shown, not raised
         local api3 = api_with(function()
-            return true, { source = "/disk/apps", entries = {
+            return true, { source = "internal", entries = {
                 { name = "demo", version = "1.0.1", kind = "package" },
             } }
         end, function() return nil, "hash check failed" end)

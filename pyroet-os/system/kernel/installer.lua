@@ -50,8 +50,8 @@ local function short(v, max)
     return s == "" and "-" or s
 end
 
--- the source roots that actually exist right now: /pkgs first (always
--- checked), /disk/apps only when a disk is mounted
+-- the source roots: /pkgs is the only media root (a pocket computer has no
+-- disk drive, so nothing else is ever mounted)
 function I.roots_for(fsx, explicit)
     if type(explicit) == "table" then return explicit end
     return { I.INTERNAL }
@@ -174,8 +174,8 @@ local function parse_sums_line(line)
     return nil
 end
 
--- T7: the source roots. A pocket computer has no disk drive, so /pkgs (on this
--- computer's own disk) is the primary source; /disk/apps only when it exists.
+-- T7: the source root. A pocket computer has no disk drive, so /pkgs (on this
+-- computer's own storage) is the only place a source package can live.
 I.INTERNAL = "/pkgs"
 
 function I.new(opts)
@@ -184,8 +184,8 @@ function I.new(opts)
     self.fs, self.sink, self.logs, self.rt = o.fs or rawget(_G, "fs"), o.log, {}, nil
     self.loadfile = o.loadfile or rawget(_G, "loadfile")
     self.apps = o.apps
-    -- T7: a pocket computer has no disk drive, so the primary source is the
-    -- internal /pkgs directory; /disk/apps is only consulted when /disk exists
+    -- T7: a pocket computer has no disk drive, so the only source is the
+    -- internal /pkgs directory
     self.media_root = o.media_root or I.INTERNAL
     self.media_roots = o.media_roots
     self.packages = o.packages or {}

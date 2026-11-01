@@ -1306,7 +1306,7 @@ GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校�
 
 40.4 **结果**：`install.set` 仍 29 条，TOTAL 从 581,362 降到 580,019 B（installer `main.lua` 41,554 B，-1,368）；离线 **5,024 pass / 0 fail / 257 groups** 不变。
 
-40.5 **遗留观察（本次未改）**：`kernel/apps.lua` 的 `sys_ota_list` 仍保留 `/disk` 死分支（`A.OTA_META`/`A.OTA_DISK` 都未定义，`/disk` 探测与 image meta 分支永远无效），无源日志仍打印 `checked=/pkgs,/disk`；`kernel/installer.lua` 的注释也还提 `/disk`。§39.3 声称已删，与代码不一致；`t_sys_ota` 目前还断言了那条带 `/disk` 的日志行。清理它需要同步改该断言，属于下一步，不在本条改动内。
+40.5 **已完成（T21）**：`kernel/apps.lua` 的 `sys_ota_list` 删掉 `/disk` 死分支——`A.OTA_META`/`A.OTA_DISK` 引用、`pcall(fsx.exists, "/disk")` 探测、把磁盘包与镜像 meta 并入列表的分支、以及随之无用的 `A:ota_module()` 全部删除；`source` 摘要只可能是 `internal`（或 `none`），无源日志固定 `APP_OTA_LIST ok=false reason=no_source checked=/pkgs`。`kernel/installer.lua` 的三处注释也只提 `/pkgs`（逻辑未动）。`t_sys_ota` 删掉所有 `/disk` fixture 与合并用例、`checked=` 断言改为 `/pkgs`，镜像 meta 解析仍由 `t_ota.lua` 的 `ota.parse_meta` 覆盖。**kernel 不再引用 `/disk`**（`grep` 全树确认；只剩 `recovery/flash.lua` 的手工刷写 `--disk=` 选项，那是救援工具不是安装源）。
 
 41. 远程推包：`pushpkg`（另一台电脑）+ `pkgget` 接收模式（T20）
 

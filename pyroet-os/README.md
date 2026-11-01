@@ -149,7 +149,7 @@ pyroet-os/
        ├─ 8. boot.commit()      写全局 /boot.ok，删 journal 与 /update.backup
        └─ 9. 常驻桌面对话循环    commit 后**不返回**：kernel/desktop.lua 持有一个阻塞
                                 os.pullEvent，把事件规范化后投给前台应用（launcher）；
-                                **Ctrl+T（ROM 的 `terminate`）在桌面打开电源菜单**（Update / Shutdown / Reboot / Cancel；Update 列出 `/disk/ota/meta.txt` 与 `/disk/apps/*.app` 的更新，没有时显示 `no updates` + 原因，
+                                **Ctrl+T（ROM 的 `terminate`）在桌面打开电源菜单**（Update / Shutdown / Reboot / Cancel；Update 列出 `/pkgs/*.app` 的更新，没有时显示 `no updates` + 原因，
                                 `up/down` 选、`enter` 执行、`Esc`/`q` 取消），不再直接退回 shell；
                                 桌面上按 `q`/`Q`/Esc 只写一行 `Ctrl+T opens power menu`，
                                 应用内按它们则退回 launcher（应用内 Ctrl+T 也是先退应用）
@@ -503,12 +503,12 @@ recovery/flash.lua --host=12
 -- 推送模式接收（发布端推，不请求）
 recovery/bootstrap.lua
 
--- 安装/卸载/列出用户应用（来源：/disk/apps、内存包表或 opts.dir）
+-- 安装/卸载/列出用户应用（来源：/pkgs、内存包表或 opts.dir）
 local inst = dofile("/system/kernel/installer.lua").new({ log = print })
 inst:install("hello"); inst:uninstall("hello"); inst:list()
 
--- 图形入口：launcher 的列表里选 installer.app（26x20；行前缀 d/i/s 分别表示
--- 来源盘上的包、已装在 /apps、镜像自带）。它自己不实现安装，只通过宿主桥调用上面的
+-- 图形入口：launcher 的列表里选 installer.app（26x20；行前缀 p/i/s 分别表示
+-- /pkgs 里的包、已装在 /apps、镜像自带）。它自己不实现安装，只通过宿主桥调用上面的
 -- 安装器；桥的接法与降级见 §5.5。
 ```
 
