@@ -72,8 +72,15 @@ if type(power) == "table" then
     H.isType(power.config, "function", "power.config exported")
     H.isType(power.parse, "function", "power.parse exported")
     H.isType(power.setModeInText, "function", "power.setModeInText exported")
+    H.isType(power.boot, "function", "power.boot exported")
+    H.isType(power.errorLine, "function", "power.errorLine exported")
+    H.isType(power.normalizeCode, "function", "power.normalizeCode exported")
+    H.isType(power.legacyOf, "function", "power.legacyOf exported")
     H.isType(power.WATCHDOG_KEYS, "table", "power.WATCHDOG_KEYS exported")
-    H.eq(power.VERSION, "1.1", "power version")
+    H.isType(power.LEGACY_CODES, "table", "power.LEGACY_CODES exported")
+    H.isType(power.DESCRIPTIONS, "table", "power.DESCRIPTIONS exported")
+    H.eq(power.DEFAULT_MODE, 1, "power.DEFAULT_MODE is the main grid")
+    H.eq(power.VERSION, "1.2", "power version")
 end
 H.power = power
 
@@ -110,10 +117,12 @@ H.ok(not fs.exists("/.settings"), "no .settings written by the suite")
 local startupSource = readAll("/tests/startup_source.lua") or ""
 H.contains(startupSource, "Power Grid Controller v2.1",
     "controller startup.lua version marker kept")
-H.contains(startupSource, "power_api.apply(power)",
-    "controller startup.lua applies power through power.lua")
-H.lacks(startupSource, "local function applyPower",
-    "controller startup.lua no longer duplicates the helper")
+H.contains(startupSource, "power_api.boot()",
+    "controller startup.lua boots through power.lua")
+H.contains(startupSource, "CONFIG_ERROR",
+    "controller startup.lua logs config problems instead of a blue screen")
+H.lacks(startupSource, "configError",
+    "controller startup.lua no longer treats config errors as fatal")
 H.lacks(startupSource, "watchdog",
     "controller startup.lua has no watchdog hook")
 local watchdogSrc = readAll("/watchdog.lua") or ""

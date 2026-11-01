@@ -187,12 +187,24 @@ local appMissing = A.new({
     watchdog = H.watchdog,
 })
 H.eq(appMissing.ini.format, "missing", "a missing ini is reported")
-H.eq(appMissing.ini.mode_error, "FILE_NOT_FOUND", "a missing ini keeps the archived code")
+H.eq(appMissing.ini.mode_error, "CONFIG_FILE_MISSING",
+    "a missing ini reports the readable code")
 H.num(appMissing.state.cfg.low, 2, "a missing ini uses the defaults")
 H.eq(appMissing.state.cfg.enabled, true, "a missing ini still enables the monitor")
-H.eq(A.start(appMissing), "running", "a missing ini still starts")
-H.eq(count(missingLog, "WATCHDOG_CONFIG_FAIL code=FILE_NOT_FOUND"), 1,
+local missingLevel = 0
+appMissing.read = function() return missingLevel end
+H.eq(A.start(appMissing), "running", "a missing ini still starts and keeps running")
+H.eq(count(missingLog, "WATCHDOG_CONFIG_FAIL code=CONFIG_FILE_MISSING"), 1,
     "the missing ini is logged")
+H.eq(count(missingLog, "CONFIG_ERROR code=CONFIG_FILE_MISSING file=" ..
+    "/tests/no_config_here.ini fallback=defaults"), 1,
+    "the monitor logs the shared CONFIG_ERROR line")
+H.contains(findLine(missingLog, "WATCHDOG_CONFIG "), "fallback=defaults",
+    "the summary says defaults were used")
+H.eq(A.tick(appMissing, 0), "none", "the monitor keeps sampling")
+H.eq(A.tick(appMissing, 300), "alarm", "the default window still alarms")
+H.eq(appMissing.relay, true, "the relay still fires on a missing ini")
+H.eq(A.start(appMissing), "running", "starting twice is harmless")
 
 local appDirect = A.new({
     config = { low = 4, high = 9, window = 30, poll = 5 },
@@ -233,10 +245,25 @@ H.eq(count(badLog, "WATCHDOG_CONFIG_BAD line=stray line fallback=ignored"), 1,
     "malformed lines are reported")
 H.eq(count(badLog, "WATCHDOG_CONFIG path=" .. badPath ..
     " format=keyvalue mode=1"), 1, "the parse summary is logged")
+H.contains(findLine(badLog, "WATCHDOG_CONFIG "), "fallback=defaults",
+    "the summary says defaults were used")
+H.contains(findLine(badLog, "WATCHDOG_CONFIG "), "problems=3",
+    "the summary counts the fallbacks")
 H.num(appBad.state.cfg.low, 2, "invalid low fell back to the default")
 H.num(appBad.state.cfg.high, 10, "invalid high fell back to the default")
 H.num(appBad.state.cfg.window, 300, "invalid window fell back to the default")
 H.eq(readText("/PowerGrid.ini"), "1\n", "the staged fixture is still untouched")
+
+-- A missing ini is rebuilt by the next apply (bare number, as before).
+local rebuildPath = "/tests/app_config_rebuild.ini"
+local rebuildPower = powerAt(rebuildPath, newPowerRedstone(), newSpeaker())
+local rebuildBoot = H.power.boot({ path = rebuildPath })
+H.eq(rebuildBoot.ok, false, "the rebuild fixture starts missing")
+H.num(rebuildBoot.mode, 1, "a missing ini boots the default mode")
+H.eq(rebuildPower.apply(rebuildBoot.mode), true, "power.lua recreates the file")
+H.eq(readText(rebuildPath), "1\n", "the recreated ini is the bare default mode")
+H.eq(H.power.boot({ path = rebuildPath }).ok, true,
+    "the recreated ini boots clean")
 
 -- Alarm relay ----------------------------------------------------------------
 
@@ -709,7 +736,7 @@ local appF = A.new({
     clock = newClock(0).now,
     read = function() return 1 end,
     power = {
-        read = function() return nil, "FILE_NOT_FOUND" end,
+        read = function() return nil, "CONFIG_FILE_MISSING" end,
         apply = function() error("must not be called") end,
     },
     watchdog = H.watchdog,
@@ -717,7 +744,7 @@ local appF = A.new({
 A.start(appF)
 A.tick(appF, 0)
 H.eq(A.tick(appF, 10), "alarm", "the alarm fires with an unreadable mode")
-H.eq(count(logF, "WATCHDOG_SWITCH_FAIL reason=read_fail code=FILE_NOT_FOUND"), 1,
+H.eq(count(logF, "WATCHDOG_SWITCH_FAIL reason=read_fail code=CONFIG_FILE_MISSING"), 1,
     "an unreadable mode is logged")
 H.eq(appF.switched, false, "an unreadable mode records no switch")
 
@@ -730,14 +757,14 @@ local appG = A.new({
     read = function() return 1 end,
     power = {
         read = function() return 1 end,
-        apply = function() return nil, "WRITE_FAILED" end,
+        apply = function() return nil, "CONFIG_WRITE_FAILED" end,
     },
     watchdog = H.watchdog,
 })
 A.start(appG)
 A.tick(appG, 0)
 H.eq(A.tick(appG, 10), "alarm", "the alarm fires when the write fails")
-H.eq(count(logG, "WATCHDOG_SWITCH_FAIL reason=write_failed code=WRITE_FAILED"), 1,
+H.eq(count(logG, "WATCHDOG_SWITCH_FAIL reason=write_failed code=CONFIG_WRITE_FAILED"), 1,
     "a failed write is logged")
 H.eq(appG.switched, false, "a failed write records no switch")
 
@@ -793,6 +820,9 @@ H.eq(appIni.ini.format, "keyvalue", "the report says key=value")
 H.eq(A.start(appIni), "running", "the ini-configured monitor starts")
 H.eq(count(iniLog, "WATCHDOG_CONFIG path=" .. iniPath ..
     " format=keyvalue mode=1"), 1, "the ini summary is logged")
+H.contains(findLine(iniLog, "WATCHDOG_CONFIG "), "fallback=none",
+    "a good ini does not fall back")
+H.eq(count(iniLog, "CONFIG_ERROR"), 0, "a good ini logs no CONFIG_ERROR")
 H.eq(iniRelay.calls[1].side, "left", "the ini alarm side is used")
 H.eq(A.tick(appIni, 0), "none", "no alarm before the ini window")
 H.eq(A.tick(appIni, 10), "none", "still waiting")

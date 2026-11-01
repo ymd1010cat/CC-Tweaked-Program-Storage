@@ -244,12 +244,24 @@ function M.start(app)
 
     local info = app.ini
     if type(info) == "table" and info.format ~= nil then
-        if info.format ~= nil then
-            app.logger.info("WATCHDOG_CONFIG path=" .. tostring(info.path) ..
-                " format=" .. tostring(info.format) ..
-                " mode=" .. fmt(info.mode))
+        local fallback = "none"
+        if info.format == "missing" or info.mode_error ~= nil or #problems > 0 then
+            fallback = "defaults"
         end
+        app.logger.info("WATCHDOG_CONFIG path=" .. tostring(info.path) ..
+            " format=" .. tostring(info.format) ..
+            " mode=" .. fmt(info.mode) ..
+            " fallback=" .. fallback ..
+            " problems=" .. tostring(#problems))
         if info.mode_error ~= nil then
+            local detail = "config read failed"
+            if type(app.power) == "table" and type(app.power.describe) == "function" then
+                local okd, message = pcall(app.power.describe, info.mode_error)
+                if okd and type(message) == "string" then detail = message end
+            end
+            app.logger.warn("CONFIG_ERROR code=" .. tostring(info.mode_error) ..
+                " file=" .. tostring(info.path) .. " fallback=defaults" ..
+                " detail=" .. tostring(detail))
             app.logger.warn("WATCHDOG_CONFIG_FAIL code=" ..
                 tostring(info.mode_error) .. " fallback=defaults")
         end
@@ -264,6 +276,7 @@ function M.start(app)
                 " value=" .. tostring(unknown[i].value) .. " fallback=ignored")
         end
     elseif type(info) == "table" and info.reason ~= nil then
+        app.logger.info("WATCHDOG_CONFIG path=? format=none fallback=defaults problems=0")
         app.logger.warn("WATCHDOG_CONFIG_FAIL reason=" .. tostring(info.reason) ..
             " fallback=defaults")
     end

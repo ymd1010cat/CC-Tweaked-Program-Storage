@@ -98,14 +98,14 @@ end
 -- Reference validation: the archived inline checks from startup.lua.
 local function refValidate(line)
     if line == nil or #line == 0 then
-        return nil, "VALUE_LENGTH_IS_ZERO", line
+        return nil, "CONFIG_FILE_EMPTY", line
     end
     local power = tonumber(line)
     if power == nil then
-        return nil, "VALUE_TYPE_NOT_CORRECT", line
+        return nil, "MODE_NOT_A_NUMBER", line
     end
     if power < 0 or power > 3 then
-        return power, "INI_VALUE_OUT_RANGE", line
+        return power, "MODE_OUT_OF_RANGE", line
     end
     return power, nil, line
 end
@@ -123,44 +123,83 @@ for _, raw in ipairs(cases) do
 end
 local nilValue, nilCode = P.validate(nil)
 H.eq(nilValue, nil, "a nil line has no value")
-H.eq(nilCode, "VALUE_LENGTH_IS_ZERO", "a nil line is the empty error")
+H.eq(nilCode, "CONFIG_FILE_EMPTY", "a nil line is the empty error")
 H.eq(P.validate(""), nil, "an empty line has no value")
-H.eq(select(2, P.validate("")), "VALUE_LENGTH_IS_ZERO", "empty line code")
+H.eq(select(2, P.validate("")), "CONFIG_FILE_EMPTY", "empty line code")
 H.eq(P.validate(" 1"), 1, "surrounding space is accepted")
-H.eq(select(2, P.validate("abc")), "VALUE_TYPE_NOT_CORRECT", "text is a type error")
+H.eq(select(2, P.validate("abc")), "MODE_NOT_A_NUMBER", "text is a type error")
 H.eq(P.validate("3.5"), 3.5, "fractional modes are accepted like before")
 H.eq(select(1, P.validate("-1")), -1, "a negative mode still yields its value")
-H.eq(select(2, P.validate("-1")), "INI_VALUE_OUT_RANGE", "negative mode code")
+H.eq(select(2, P.validate("-1")), "MODE_OUT_OF_RANGE", "negative mode code")
 H.eq(select(1, P.validate("4")), 4, "mode 4 yields its value for the log line")
-H.eq(select(2, P.validate("4")), "INI_VALUE_OUT_RANGE", "mode 4 code")
+H.eq(select(2, P.validate("4")), "MODE_OUT_OF_RANGE", "mode 4 code")
 H.eq(select(1, P.validate("15")), 15, "mode 15 value")
-H.eq(select(2, P.validate("15")), "INI_VALUE_OUT_RANGE", "mode 15 code")
+H.eq(select(2, P.validate("15")), "MODE_OUT_OF_RANGE", "mode 15 code")
 
 -- Messages -------------------------------------------------------------------
 
 H.group("power-describe")
 local fixed = {
-    { "FILE_NOT_FOUND", "Configuration file PowerGrid.ini not found",
-        "Configuration file missing." },
-    { "VALUE_LENGTH_IS_ZERO", "PowerGrid.ini is empty", "Power value is empty." },
+    { "CONFIG_FILE_MISSING", "PowerGrid.ini not found or not readable",
+        "Configuration file missing. Using mode=1 (Main Grid)." },
+    { "CONFIG_FILE_EMPTY", "PowerGrid.ini is empty",
+        "Power value is empty. Using mode=1 (Main Grid)." },
+    { "CONFIG_WRITE_FAILED", "PowerGrid.ini could not be written",
+        "PowerGrid.ini could not be saved (disk full or read-only). " ..
+        "The redstone output was still driven; fix the disk and restart." },
 }
 for _, case in ipairs(fixed) do
     local message, extra = P.describe(case[1])
     H.eq(message, case[2], "message for " .. case[1])
     H.eq(extra, case[3], "extra for " .. case[1])
 end
-H.eq(P.describe("VALUE_TYPE_NOT_CORRECT", nil, "abc"),
-    "Invalid power value format: abc", "type message carries the raw line")
-H.eq(select(2, P.describe("VALUE_TYPE_NOT_CORRECT", nil, "abc")),
-    "Invalid power value format.", "type extra text")
-H.eq(P.describe("INI_VALUE_OUT_RANGE", 5, "5"),
-    "Power value out of range: 5", "range message carries the value")
-H.eq(P.describe("INI_VALUE_OUT_RANGE", -1, "-1"),
-    "Power value out of range: -1", "negative range message")
-H.eq(select(2, P.describe("INI_VALUE_OUT_RANGE", 5)),
-    "Power value must be between 0 and 3.", "range extra text")
+H.eq(P.describe("MODE_NOT_A_NUMBER", nil, "abc"),
+    "PowerGrid.ini mode is not a number: abc", "type message carries the raw line")
+H.eq(select(2, P.describe("MODE_NOT_A_NUMBER", nil, "abc")),
+    "Invalid power value format. Using mode=1 (Main Grid).", "type extra text")
+H.eq(P.describe("MODE_OUT_OF_RANGE", 5, "5"),
+    "PowerGrid.ini mode is out of range: 5", "range message carries the value")
+H.eq(P.describe("MODE_OUT_OF_RANGE", -1, "-1"),
+    "PowerGrid.ini mode is out of range: -1", "negative range message")
+H.eq(select(2, P.describe("MODE_OUT_OF_RANGE", 5)),
+    "Power value must be between 0 and 3. Using mode=1 (Main Grid).",
+    "range extra text")
 H.contains(select(1, P.describe("UNKNOWN_CODE")), "Unknown PowerGrid.ini error",
     "unknown codes are reported")
+-- Old codes keep working through describe()/normalizeCode().
+H.eq(P.normalizeCode("FILE_NOT_FOUND"), "CONFIG_FILE_MISSING",
+    "old missing code normalises")
+H.eq(P.normalizeCode("CONFIG_FILE_MISSING"), "CONFIG_FILE_MISSING",
+    "new codes normalise to themselves")
+H.eq(P.describe("FILE_NOT_FOUND"), "PowerGrid.ini not found or not readable",
+    "describe accepts an old code")
+H.eq(P.legacyOf("MODE_OUT_OF_RANGE"), "INI_VALUE_OUT_RANGE",
+    "new code maps back to the old one")
+H.eq(P.legacyOf("CONFIG_WRITE_FAILED"), "WRITE_FAILED",
+    "the write code maps back too")
+H.eq(P.describe("MODE_KEY_MISSING"), "PowerGrid.ini has no mode= line",
+    "the missing mode line has a message")
+H.eq(select(2, P.describe("MODE_KEY_MISSING")),
+    "Missing mode setting. Using mode=1 (Main Grid).",
+    "the missing mode line explains the fallback")
+
+H.group("power-codes")
+H.eq(P.DEFAULT_MODE, 1, "the default mode is the main grid")
+H.eq(P.LEGACY_CODES.FILE_NOT_FOUND, "CONFIG_FILE_MISSING", "legacy map: missing")
+H.eq(P.LEGACY_CODES.VALUE_LENGTH_IS_ZERO, "CONFIG_FILE_EMPTY", "legacy map: empty")
+H.eq(P.LEGACY_CODES.VALUE_TYPE_NOT_CORRECT, "MODE_NOT_A_NUMBER", "legacy map: type")
+H.eq(P.LEGACY_CODES.INI_VALUE_OUT_RANGE, "MODE_OUT_OF_RANGE", "legacy map: range")
+H.eq(P.LEGACY_CODES.MODE_MISSING, "MODE_KEY_MISSING", "legacy map: key")
+H.eq(P.LEGACY_CODES.WRITE_FAILED, "CONFIG_WRITE_FAILED", "legacy map: write")
+local codeCount = 0
+for _ in pairs(P.LEGACY_CODES) do codeCount = codeCount + 1 end
+H.eq(codeCount, 6, "six legacy codes are mapped")
+H.contains(P.DESCRIPTIONS.CONFIG_FILE_MISSING, "not found",
+    "the missing code has a description")
+H.contains(P.DESCRIPTIONS.MODE_OUT_OF_RANGE, "0-3",
+    "the range code has a description")
+H.isType(P.DESCRIPTIONS.CONFIG_WRITE_FAILED, "string",
+    "the write code has a description")
 
 -- Reading --------------------------------------------------------------------
 
@@ -168,23 +207,23 @@ H.group("power-read")
 local missing = "/tests/power_missing.ini"
 H.eq(readText(missing), nil, "the missing fixture really is absent")
 H.eq(select(1, P.read({ path = missing })), nil, "a missing file has no value")
-H.eq(select(2, P.read({ path = missing })), "FILE_NOT_FOUND", "missing file code")
+H.eq(select(2, P.read({ path = missing })), "CONFIG_FILE_MISSING", "missing file code")
 writeText("/tests/power_blank.ini", "\n")
 H.eq(select(2, P.read({ path = "/tests/power_blank.ini" })),
-    "VALUE_LENGTH_IS_ZERO", "a blank line is the empty error")
+    "CONFIG_FILE_EMPTY", "a blank line is the empty error")
 writeText("/tests/power_empty.ini", "")
 H.eq(select(2, P.read({ path = "/tests/power_empty.ini" })),
-    "VALUE_LENGTH_IS_ZERO", "a zero byte file is the empty error")
+    "CONFIG_FILE_EMPTY", "a zero byte file is the empty error")
 writeText("/tests/power_bad.ini", "abc\n")
 H.eq(select(2, P.read({ path = "/tests/power_bad.ini" })),
-    "VALUE_TYPE_NOT_CORRECT", "text is a type error")
+    "MODE_NOT_A_NUMBER", "text is a type error")
 H.eq(select(3, P.read({ path = "/tests/power_bad.ini" })), "abc",
     "the type error keeps the raw line")
 writeText("/tests/power_range.ini", "7\n")
 H.eq(select(1, P.read({ path = "/tests/power_range.ini" })), 7,
     "the range error still returns the value")
 H.eq(select(2, P.read({ path = "/tests/power_range.ini" })),
-    "INI_VALUE_OUT_RANGE", "range file code")
+    "MODE_OUT_OF_RANGE", "range file code")
 writeText("/tests/power_ok.ini", "2\n")
 local okValue, okCode = P.read({ path = "/tests/power_ok.ini" })
 H.eq(okValue, 2, "a valid file yields the mode")
@@ -229,7 +268,7 @@ local okBad, whyBad = P.apply(1, {
     peripheral = newPeripheral(false),
 })
 H.eq(okBad, nil, "an unwritable path reports failure")
-H.eq(whyBad, "WRITE_FAILED", "unwritable path code")
+H.eq(whyBad, "CONFIG_WRITE_FAILED", "unwritable path code")
 H.eq(#rsBad.calls, 2, "the redstone output is still driven")
 H.num(rsBad.calls[2][3], 1, "the requested mode is still driven")
 
@@ -272,36 +311,48 @@ end
 
 H.group("power-source")
 local src = H.readAll("/power.lua") or ""
-H.contains(src, "Configuration file PowerGrid.ini not found",
-    "archived missing-file message kept")
-H.contains(src, "PowerGrid.ini is empty", "archived empty-file message kept")
-H.contains(src, "Invalid power value format: ", "archived type message kept")
-H.contains(src, "Power value out of range: ", "archived range message kept")
-H.contains(src, "Configuration file missing.", "archived missing-file extra kept")
-H.contains(src, "Power value is empty.", "archived empty extra kept")
-H.contains(src, "Invalid power value format.", "archived type extra kept")
+H.contains(src, "PowerGrid.ini not found or not readable",
+    "the missing-file message is the readable one")
+H.contains(src, "PowerGrid.ini is empty", "the empty-file message is kept")
+H.contains(src, "PowerGrid.ini mode is not a number: ", "the type message is readable")
+H.contains(src, "PowerGrid.ini mode is out of range: ", "the range message is readable")
+H.contains(src, "Configuration file missing.", "the missing-file consequence is kept")
+H.contains(src, "Power value is empty.", "the empty-file consequence is kept")
+H.contains(src, "Invalid power value format.", "the type consequence is kept")
 H.contains(src, "Power value must be between 0 and 3.",
-    "archived range extra kept")
-H.contains(src, "FILE_NOT_FOUND", "archived error code kept")
-H.contains(src, "VALUE_LENGTH_IS_ZERO", "archived empty code kept")
-H.contains(src, "VALUE_TYPE_NOT_CORRECT", "archived type code kept")
-H.contains(src, "INI_VALUE_OUT_RANGE", "archived range code kept")
-H.contains(src, 'M.PATH = "PowerGrid.ini"', "archived config path kept")
-H.contains(src, 'M.SIDE = "back"', "archived redstone side kept")
-H.contains(src, 'M.SOUND = "create:confirm"', "archived speaker sound kept")
+    "the range consequence is kept")
+H.contains(src, "CONFIG_FILE_MISSING", "the missing code is present")
+H.contains(src, "CONFIG_FILE_EMPTY", "the empty code is present")
+H.contains(src, "MODE_NOT_A_NUMBER", "the type code is present")
+H.contains(src, "MODE_OUT_OF_RANGE", "the range code is present")
+H.contains(src, "MODE_KEY_MISSING", "the missing-mode code is present")
+H.contains(src, "CONFIG_WRITE_FAILED", "the write code is present")
+H.contains(src, "M.LEGACY_CODES", "the legacy code table is present")
+H.contains(src, "M.DEFAULT_MODE = 1", "the default mode is documented in code")
+H.contains(src, 'M.PATH = "PowerGrid.ini"', "the config path is kept")
+H.contains(src, 'M.SIDE = "back"', "the redstone side is kept")
+H.contains(src, 'M.SOUND = "create:confirm"', "the speaker sound is kept")
 
 local startupSrc = H.readAll("/tests/startup_source.lua") or ""
 H.contains(startupSrc, 'local power_api = require("power")',
     "startup.lua uses power.lua")
-H.contains(startupSrc, "power_api.read()", "startup reads through power.lua")
-H.contains(startupSrc, "power_api.describe(configError, power, configLine)",
-    "startup describes errors through power.lua")
-H.lacks(startupSrc, "local function applyPower",
-    "startup.lua no longer defines the helper")
+H.contains(startupSrc, "power_api.boot()", "startup boots through power.lua")
+H.contains(startupSrc, "CONFIG_ERROR", "startup logs CONFIG_ERROR lines")
+H.contains(startupSrc, "power_api.errorLine(boot.code",
+    "startup uses the shared diagnostic line")
+H.contains(startupSrc, "local function applyPower",
+    "startup keeps a thin applyPower wrapper")
+H.contains(startupSrc, "power_api.apply(value)",
+    "the wrapper delegates the write to power.lua")
 H.lacks(startupSrc, 'io.open("PowerGrid.ini", "w")',
-    "startup.lua no longer writes the ini itself")
-H.eq(countIn(startupSrc, "power_api.apply(power)"), 5,
+    "startup.lua never writes the ini itself")
+H.eq(countIn(startupSrc, "applyPower(power)"), 5,
     "startup applies power from five places (boot + four menu entries)")
+H.contains(startupSrc, "CONFIG_WRITE_FAILED",
+    "only a write failure reaches the blue screen")
+H.eq(countIn(startupSrc, "bsod.show"), 1,
+    "there is exactly one blue-screen path left")
+H.lacks(startupSrc, "configError", "no config error path hands over to the blue screen")
 H.contains(startupSrc, 'shell.run("clear")', "the screen clear is kept")
 H.contains(startupSrc, "local function wrapText", "printer wrapping is kept")
 H.contains(startupSrc, "MAX_LINE_WIDTH = 40", "printer width is kept")
@@ -318,8 +369,8 @@ H.contains(startupSrc, 'title = "Power Grid Controller v2.1"',
 H.contains(startupSrc, "FEEDBACK_DELAY = 1", "the feedback delay is kept")
 H.contains(startupSrc, "Switch To Main Grid", "the menu text is kept")
 H.contains(startupSrc, "Press ESC TO EXIT", "the menu footer is kept")
-H.contains(startupSrc, "error = configError",
-    "the blue screen still receives the archived code")
+H.contains(startupSrc, "CONFIG_ERROR", "the controller logs CONFIG_ERROR")
+H.contains(startupSrc, "boot.code", "the controller logs the boot error code")
 H.lacks(startupSrc, "watchdog",
     "the controller still has no watchdog hook of its own")
 
@@ -371,25 +422,26 @@ H.eq(P.read({ path = "/tests/parse_dup.ini" }), 2, "the last duplicate wins")
 writeText("/tests/parse_no_mode.ini", "watchdog.low=3\n")
 local noModeValue, noModeCode = P.read({ path = "/tests/parse_no_mode.ini" })
 H.eq(noModeValue, nil, "a key=value file without mode has no value")
-H.eq(noModeCode, "MODE_MISSING", "a key=value file without mode is flagged")
-H.eq(P.describe("MODE_MISSING"), "PowerGrid.ini has no mode= line",
-    "MODE_MISSING has a log line")
-H.eq(select(2, P.describe("MODE_MISSING")), "Missing mode setting.",
-    "MODE_MISSING has a blue-screen text")
+H.eq(noModeCode, "MODE_KEY_MISSING", "a key=value file without mode is flagged")
+H.eq(P.describe("MODE_KEY_MISSING"), "PowerGrid.ini has no mode= line",
+    "MODE_KEY_MISSING has a log line")
+H.eq(select(2, P.describe("MODE_KEY_MISSING")),
+    "Missing mode setting. Using mode=1 (Main Grid).",
+    "MODE_KEY_MISSING has a consequence text")
 
 writeText("/tests/parse_mode_text.ini", "mode=abc\n")
 H.eq(select(2, P.read({ path = "/tests/parse_mode_text.ini" })),
-    "VALUE_TYPE_NOT_CORRECT", "a text mode keeps the archived type code")
+    "MODE_NOT_A_NUMBER", "a text mode keeps the archived type code")
 H.eq(select(3, P.read({ path = "/tests/parse_mode_text.ini" })), "abc",
     "a text mode reports the raw value")
 writeText("/tests/parse_mode_empty.ini", "mode=\n")
 H.eq(select(2, P.read({ path = "/tests/parse_mode_empty.ini" })),
-    "VALUE_LENGTH_IS_ZERO", "an empty mode keeps the archived empty code")
+    "CONFIG_FILE_EMPTY", "an empty mode keeps the archived empty code")
 writeText("/tests/parse_mode_range.ini", "mode=5\n")
 H.eq(select(1, P.read({ path = "/tests/parse_mode_range.ini" })), 5,
     "an out of range mode reports its value")
 H.eq(select(2, P.read({ path = "/tests/parse_mode_range.ini" })),
-    "INI_VALUE_OUT_RANGE", "an out of range mode keeps the archived code")
+    "MODE_OUT_OF_RANGE", "an out of range mode keeps the archived code")
 
 writeText("/tests/parse_bad_line.ini", "mode=1\nstray line\n")
 parsed = P.parse(readText("/tests/parse_bad_line.ini"))
@@ -401,7 +453,7 @@ writeText("/tests/parse_comments.ini", "# only comments\n\n")
 parsed = P.parse(readText("/tests/parse_comments.ini"))
 H.eq(parsed.format, "comments", "a comment-only file is its own format")
 H.eq(select(2, P.read({ path = "/tests/parse_comments.ini" })),
-    "VALUE_LENGTH_IS_ZERO", "a comment-only file has no mode")
+    "CONFIG_FILE_EMPTY", "a comment-only file has no mode")
 writeText("/tests/parse_empty.ini", "")
 H.eq(P.parse("").format, "empty", "an empty text is the empty format")
 H.eq(P.parse(nil).format, "missing", "nil text is the missing format")
@@ -471,7 +523,7 @@ fs.makeDir("/tests/write_dir")
 H.eq(P.apply(2, { path = "/tests/write_dir", redstone = newRedstone(),
     peripheral = newPeripheral(false) }), nil, "a directory path cannot be written")
 H.eq(select(2, P.apply(2, { path = "/tests/write_dir", redstone = newRedstone(),
-    peripheral = newPeripheral(false) })), "WRITE_FAILED", "the write failure code")
+    peripheral = newPeripheral(false) })), "CONFIG_WRITE_FAILED", "the write failure code")
 
 -- Ini watchdog section -------------------------------------------------------
 
@@ -512,7 +564,7 @@ H.eq(#info.bad_lines, 1, "the malformed line is reported")
 local rawMissing, infoMissing = P.config({ path = "/tests/config_missing.ini" })
 H.eq(countKeysLua(rawMissing), 0, "a missing ini has no raw options")
 H.eq(infoMissing.format, "missing", "a missing ini is reported as missing")
-H.eq(infoMissing.mode_error, "FILE_NOT_FOUND", "a missing ini keeps the archived code")
+H.eq(infoMissing.mode_error, "CONFIG_FILE_MISSING", "a missing ini keeps the archived code")
 
 local rawLegacy, infoLegacy = P.config({ path = "/tests/parse_legacy.ini" })
 H.eq(countKeysLua(rawLegacy), 0, "a legacy ini has no watchdog options")
@@ -521,7 +573,7 @@ H.num(infoLegacy.mode, 1, "a legacy ini still reports the mode")
 
 local rawBad, infoBad = P.config({ path = "/tests/parse_no_mode.ini" })
 H.eq(rawBad.low, "3", "config returns values even without a mode")
-H.eq(infoBad.mode_error, "MODE_MISSING", "a mode-less key=value file is flagged")
+H.eq(infoBad.mode_error, "MODE_KEY_MISSING", "a mode-less key=value file is flagged")
 
 writeText("/tests/config_invalid.ini", "mode=1\nwatchdog.low=abc\n")
 local rawInvalid = select(1, P.config({ path = "/tests/config_invalid.ini" }))
@@ -531,3 +583,96 @@ H.eq(countKeysLua(P.WATCHDOG_KEYS), 9, "the driver mapping has nine keys")
 H.eq(P.WATCHDOG_KEYS.low, "watchdog.low", "the low key name")
 H.eq(P.WATCHDOG_KEYS.restore, "watchdog.restore", "the restore key name")
 H.eq(P.MODE_KEY, "mode", "the mode key name")
+
+-- Fault tolerance: a broken config never stops the program -------------------
+
+H.group("power-boot")
+local missingBoot = P.boot({ path = "/tests/boot_missing.ini" })
+H.eq(missingBoot.ok, false, "a missing ini is not ok")
+H.eq(missingBoot.code, "CONFIG_FILE_MISSING", "a missing ini reports the missing code")
+H.num(missingBoot.mode, 1, "a missing ini boots with the default mode")
+H.contains(missingBoot.message, "not found", "the boot message is human readable")
+H.contains(missingBoot.extra, "Using mode=1 (Main Grid)",
+    "the consequence names the default mode")
+
+writeText("/tests/boot_empty.ini", "")
+local emptyBoot = P.boot({ path = "/tests/boot_empty.ini" })
+H.eq(emptyBoot.ok, false, "an empty ini is not ok")
+H.eq(emptyBoot.code, "CONFIG_FILE_EMPTY", "an empty ini reports the empty code")
+H.num(emptyBoot.mode, 1, "an empty ini boots with the default mode")
+
+writeText("/tests/boot_comment.ini", "# nothing here\n")
+H.eq(P.boot({ path = "/tests/boot_comment.ini" }).code, "CONFIG_FILE_EMPTY",
+    "a comment-only ini counts as empty for the mode")
+
+writeText("/tests/boot_text.ini", "mode=abc\n")
+local textBoot = P.boot({ path = "/tests/boot_text.ini" })
+H.eq(textBoot.code, "MODE_NOT_A_NUMBER", "a text mode is reported")
+H.num(textBoot.mode, 1, "a text mode boots with the default mode")
+H.contains(textBoot.message, "abc", "the message keeps the bad value")
+
+writeText("/tests/boot_range.ini", "mode=9\n")
+local rangeBoot = P.boot({ path = "/tests/boot_range.ini" })
+H.eq(rangeBoot.code, "MODE_OUT_OF_RANGE", "an out of range mode is reported")
+H.num(rangeBoot.mode, 1, "an out of range mode boots with the default mode")
+H.num(rangeBoot.value, 9, "the parsed value is kept for the log")
+
+writeText("/tests/boot_nokey.ini", "watchdog.low=3\n")
+local keyBoot = P.boot({ path = "/tests/boot_nokey.ini" })
+H.eq(keyBoot.code, "MODE_KEY_MISSING", "a key=value file without mode is reported")
+H.num(keyBoot.mode, 1, "a mode-less file boots with the default mode")
+
+writeText("/tests/boot_ok.ini", "mode=2\n")
+local okBoot = P.boot({ path = "/tests/boot_ok.ini" })
+H.eq(okBoot.ok, true, "a good ini boots ok")
+H.num(okBoot.mode, 2, "a good ini keeps its own mode")
+H.eq(okBoot.code, nil, "a good ini has no error code")
+
+H.eq(P.errorLine("CONFIG_FILE_MISSING", { message = missingBoot.message }),
+    "CONFIG_ERROR code=CONFIG_FILE_MISSING file=PowerGrid.ini fallback=mode=1 " ..
+    "detail=PowerGrid.ini not found or not readable",
+    "the CONFIG_ERROR line is exact")
+H.contains(P.errorLine("CONFIG_WRITE_FAILED", { fallback = "none" }),
+    "fallback=none", "a write failure has no mode fallback")
+H.eq(P.errorLine("FILE_NOT_FOUND"),
+    "CONFIG_ERROR code=CONFIG_FILE_MISSING file=PowerGrid.ini " ..
+    "fallback=mode=1 detail=PowerGrid.ini not found or not readable",
+    "an old code is normalised in the log line")
+
+-- After booting from a missing file, apply recreates it (legacy bare number).
+local recreatePath = "/tests/boot_recreate.ini"
+H.eq(P.read({ path = recreatePath }), nil, "the recreate fixture starts absent")
+H.eq(P.boot({ path = recreatePath }).code, "CONFIG_FILE_MISSING",
+    "the recreate fixture boots with the missing code")
+H.eq(P.apply(1, { path = recreatePath, redstone = newRedstone(),
+    peripheral = newPeripheral(false) }), true, "apply recreates the file")
+H.eq(readText(recreatePath), "1\n", "the recreated file is the bare default mode")
+H.eq(P.read({ path = recreatePath }), 1, "the recreated file reads back as mode 1")
+H.eq(P.boot({ path = recreatePath }).ok, true, "the recreated file boots clean")
+
+writeText("/tests/boot_recreate_empty.ini", "")
+P.apply(P.boot({ path = "/tests/boot_recreate_empty.ini" }).mode, {
+    path = "/tests/boot_recreate_empty.ini",
+    redstone = newRedstone(),
+    peripheral = newPeripheral(false),
+})
+H.eq(readText("/tests/boot_recreate_empty.ini"), "1\n",
+    "an empty file is rebuilt as a bare number")
+
+writeText("/tests/boot_recreate_kv.ini", "mode=9\nwatchdog.low=4\n")
+local kvBoot = P.boot({ path = "/tests/boot_recreate_kv.ini" })
+H.eq(kvBoot.code, "MODE_OUT_OF_RANGE", "the key=value fixture is out of range")
+H.num(kvBoot.mode, 1, "the key=value fixture boots the default mode")
+P.apply(kvBoot.mode, { path = "/tests/boot_recreate_kv.ini",
+    redstone = newRedstone(), peripheral = newPeripheral(false) })
+H.eq(readText("/tests/boot_recreate_kv.ini"), "mode=1\nwatchdog.low=4\n",
+    "the recovery write only fixes the mode line")
+local rebuiltRaw, rebuiltInfo = P.config({ path = "/tests/boot_recreate_kv.ini" })
+H.num(rebuiltInfo.mode, 1, "the rebuilt key=value file parses")
+H.eq(rebuiltRaw.low, "4", "the watchdog keys survived the recovery")
+
+-- A good config is never rewritten by a boot: read only.
+writeText("/tests/boot_untouched.ini", "# keep\nmode=3\n")
+P.boot({ path = "/tests/boot_untouched.ini" })
+H.eq(readText("/tests/boot_untouched.ini"), "# keep\nmode=3\n",
+    "booting never rewrites a good file")

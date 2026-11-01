@@ -12,8 +12,8 @@
 
 | 文件 | 说明 |
 |---|---|
-| `startup.lua` | 主程序。开机读取配置、恢复供电模式、进入命令循环（菜单 1–4 切换、5 打印日志、`version` 显示版本）。电源写入与配置校验都委托给 `power.lua`，输出与错误码保持原样。 |
-| `power.lua` | 配置与电源原语：解析/写回 `PowerGrid.ini`（key=value 新格式 + 旧的裸数字格式），`M.read()` 返回模式与旧错误码，`M.describe()` 给出旧日志行与蓝屏文案，`M.config()` 读出 watchdog 段，`M.apply(value)` 改 ini 里 `mode=` 那一行 + 驱动 `back` 模拟输出 + 播放 speaker 提示音。启动菜单与 watchdog 共用它。 |
+| `startup.lua` | 主程序。开机读取配置、恢复供电模式、进入命令循环（菜单 1–4 切换、5 打印日志、`version` 显示版本）。电源写入与配置读取都委托给 `power.lua`；配置坏了只记 `CONFIG_ERROR` 并按 `mode=1` 继续跑，蓝屏只留给写盘失败。 |
+| `power.lua` | 配置与电源原语：解析/写回 `PowerGrid.ini`（key=value 新格式 + 旧的裸数字格式），`M.read()` 返回模式与错误码，`M.boot()` 坏配置时回落默认模式 `mode=1`，`M.errorLine()` 产出 `CONFIG_ERROR ...` 诊断行，`M.describe()` 给出人类可读说明与"用了什么默认值"，`M.config()` 读出 watchdog 段，`M.apply(value)` 改 ini 里 `mode=` 那一行 + 驱动 `back` 模拟输出 + 播放 speaker 提示音。启动菜单与 watchdog 共用它。 |
 | `logger.lua` | 极简日志库：`logger.info/warn/error/debug`，每条按 `[tag] %Y.%m.%d %H:%M message` 追加到 `Main.log`。 |
 | `bsod.lua` | 蓝屏模块：用 `window` API 铺满全屏、居中显示 `:(` / 错误码 / 失败文件，然后把父终端光标移出屏幕并 `error()` 退出。 |
 | `watchdog.lua` | watchdog 的**纯逻辑状态机**（阈值、回差、持续窗口、一次性报警、切换目标/恢复开关）。不读文件、不读时钟、不碰红石，时间、读数与配置全部由调用方注入，所以能离线测。 |
@@ -31,7 +31,7 @@
 
 | 键 | 默认 | 取值 | 说明 |
 |---|---|---|---|
-| `mode` | 必填 | `0`–`3` | 当前供电模式，控制器与 watchdog 都读写这一行 |
+| `mode` | `1`（主网） | `0`–`3` | 当前供电模式，控制器与 watchdog 都读写这一行；缺失或非法时按默认 `mode=1` 继续跑 |
 | `watchdog.enabled` | `true` | `true/false/1/0/yes/no/on/off` | 关掉后 watchdog 不采样、不告警、不切电源 |
 | `watchdog.low` | `2` | 整数 0–15 | 低于它算"低" |
 | `watchdog.high` | `10` | 整数 0–15，且必须大于 `low` | 达到它算健康/恢复 |
@@ -68,22 +68,44 @@ watchdog 全用默认值；而且 `power.lua` 对它**仍然只写裸数字**—
 其它行（注释、未知键、watchdog 键、空行）与行序全部原样保留；新格式文件里没有 `mode=` 行时，
 在末尾追加一行 `mode=<值>`（只有注释的文件同样保留注释、追加 `mode=`）。
 
-### 校验与诊断
+### 错误码与防故障
 
-读取并校验时，文件缺失 / 为空 / `mode` 不是数字 / `mode` 超出 `0–3` 分别返回
-`FILE_NOT_FOUND` / `VALUE_LENGTH_IS_ZERO` / `VALUE_TYPE_NOT_CORRECT` / `INI_VALUE_OUT_RANGE`
-（`startup.lua` 原样交给蓝屏，日志文案与之前逐字一致）。新格式文件里完全没有 `mode=` 行时
-返回 `MODE_MISSING`（蓝屏提示 `Missing mode setting.`）。
+配置坏掉**不会**蓝屏、不会退出：读不到/空/`mode` 非法/缺 `mode=` 行时，`power.lua` 记下原因、
+**按默认模式 `mode=1`（主网 Main Grid）继续跑**，启动程序只写一行 `CONFIG_ERROR`：
+
+```
+CONFIG_ERROR code=CONFIG_FILE_MISSING file=PowerGrid.ini fallback=mode=1 detail=PowerGrid.ini not found or not readable
+```
+
+随后那次启动的 `apply` 会把缺失的文件**重建出来**（旧格式裸数字 `1`，保持既有行为）。
+
+| 新错误码 | 含义 | 旧错误码（兼容映射 `M.LEGACY_CODES`） |
+|---|---|---|
+| `CONFIG_FILE_MISSING` | 文件不存在 / 读不到 | `FILE_NOT_FOUND` |
+| `CONFIG_FILE_EMPTY` | 文件为空（或 `mode=` 没值） | `VALUE_LENGTH_IS_ZERO` |
+| `MODE_NOT_A_NUMBER` | `mode` 不是数字 | `VALUE_TYPE_NOT_CORRECT` |
+| `MODE_OUT_OF_RANGE` | `mode` 不在 `0–3` | `INI_VALUE_OUT_RANGE` |
+| `MODE_KEY_MISSING` | key=value 文件里没有 `mode=` 行 | `MODE_MISSING` |
+| `CONFIG_WRITE_FAILED` | 写不回 `PowerGrid.ini`（**唯一会蓝屏的情况**） | `WRITE_FAILED` |
+
+每个码都有一句人类可读说明（`M.DESCRIPTIONS`）和一句"用了什么默认值"（`M.describe` 的第二返回值），
+蓝屏文案就是后者：例如 `Power Value is empty. Using mode=1 (Main Grid).`。
+旧码仍可传给 `M.describe`/`M.errorLine`（内部用 `M.normalizeCode` 规范化），`M.legacyOf(新码)` 能取回旧名。
+
+**蓝屏只保留给 `CONFIG_WRITE_FAILED`**：真的写不进 ini（磁盘满/只读）时，红石输出仍已按新模式驱动，
+但控制器再也记不住状态，于是蓝屏显示"发生了什么 + 用了什么默认值"，其余情况一律"日志 + 继续跑"。
 
 watchdog 段是"非法值回落默认 + 一条可 grep 的诊断"，不会带着半套配置运行：
 
 | 关键字 | 级别 | 含义 |
 |---|---|---|
-| `WATCHDOG_CONFIG` | info | 启动时的解析摘要：`path=.. format=.. mode=..`（format = `keyvalue` / `legacy` / `comments` / `empty` / `missing`） |
+| `WATCHDOG_CONFIG` | info | 启动时的解析摘要：`path=.. format=.. mode=.. fallback=<defaults\|none> problems=<n>`（format = `keyvalue` / `legacy` / `comments` / `empty` / `missing`） |
+| `CONFIG_ERROR` | warn | 与控制器同一行的配置诊断：`code=.. file=.. fallback=defaults detail=..` |
 | `WATCHDOG_CONFIG_BAD` | warn | 非法值：`key=watchdog.low value=abc fallback=2 reason=..` |
 | `WATCHDOG_CONFIG_BAD` | warn | 杂行：`line=<原文> fallback=ignored` |
 | `WATCHDOG_CONFIG_BAD` | warn | 未知键：`key=<键> value=<原文> fallback=ignored`（写回时保留） |
-| `WATCHDOG_CONFIG_FAIL` | warn | 整个 ini 读不到：`code=FILE_NOT_FOUND fallback=defaults` |
+| `WATCHDOG_CONFIG_FAIL` | warn | 整个 ini 读不到：`code=CONFIG_FILE_MISSING fallback=defaults` |
+
 
 ## 供电模式与硬件
 
@@ -144,8 +166,9 @@ watchdog 段是"非法值回落默认 + 一条可 grep 的诊断"，不会带着
 | 任何其它采样 | 只更新状态机与日志，**不动电源、不动继电器** | 无 |
 
 失败路径都只写日志、不会拖垮监视：缺 `power.lua` → `WATCHDOG_SWITCH_FAIL reason=no_power_module`；
-读不到当前模式 → `reason=read_fail code=<错误码>`；写盘失败 → `reason=write_failed code=WRITE_FAILED`
-（此时不会记"已切换"，恢复时也就不会乱切）。
+读不到当前模式 → `reason=read_fail code=<新错误码>`；写盘失败 → `reason=write_failed code=CONFIG_WRITE_FAILED`
+（此时不会记"已切换"，恢复时也就不会乱切）。ini 缺失/非法时 watchdog 用默认参数继续跑，
+启动的 `WATCHDOG_CONFIG` 汇总行会带 `fallback=defaults`。
 
 ### 参数
 
@@ -232,16 +255,19 @@ pwsh -NoProfile -File powergrid/tests/run-tests.ps1
   `status()` 文本、`switch_to`/`restore` 参数（非法值以结构化问题记录回落默认）。
 - `t_watchdog_app.lua`：用假红石/假 logger/假时钟 + **真实的 `power.lua`**（写测试专用 ini）断言：
   参数全部来自 ini（并注入一个"会说 enabled=false"的 settings 假实现，证明运行时完全忽略它）、
-  非法值/杂行/未知键的 `WATCHDOG_CONFIG_BAD` 行、报警那次只切一次（ini 变 `2\n`、`back` 得到
+  非法值/杂行/未知键的 `WATCHDOG_CONFIG_BAD` 行、`WATCHDOG_CONFIG` 汇总行的 `fallback=` 标记、
+  缺 ini 时记 `CONFIG_ERROR` 但继续采样/报警、报警那次只切一次（ini 变 `2\n`、`back` 得到
   `setOutput(true)`+`setAnalogOutput(2)`、speaker 响一声）、恢复切回 `1\n`、`restore=false` 保持 2、
   已在目标模式 noop、手动改模式不被每轮校正、`enabled=false` 全程不动电源/继电器、
   缺模块/读失败/写失败的日志与"不记已切换"。
 - `t_power.lua`：ini 解析矩阵（裸数字旧格式、key=value、注释/空行、未知键、缺 `mode`、非法值、
   越界码）、写回保真（只改 `mode=` 行、旧格式仍写裸数字、注释/未知键/行序/CRLF 不丢）、
-  `M.config()` 的 watchdog 段与 `M.WATCHDOG_KEYS` 映射，外加与旧 `startup.lua` 内联实现的
-  **逐项等价回归**（同一组输入比较 ini 字节、红石调用序列、speaker 调用序列；错误码/日志文案钉死）。
+  `M.config()` 的 watchdog 段与 `M.WATCHDOG_KEYS` 映射、**错误码表**（新码 + `LEGACY_CODES` 旧→新
+  映射 + `describe` 文案）、**防故障矩阵**（缺失/空/非数字/越界/缺 `mode=` 行 → `M.boot()` 回落
+  `mode=1` + 对应新码，之后 `M.apply` 能重建 ini）、以及 `CONFIG_ERROR` 行格式，外加与旧
+  `startup.lua` 内联实现的**逐项等价回归**（同一组输入比较 ini 字节、红石调用序列、speaker 调用序列）。
 - 跑完还检查 staged 的 `PowerGrid.ini` 字节不变、没有生成 `.settings`。
-- 当前基线：`OFFLINE_PASS 713` / `OFFLINE_FAIL 0` / `OFFLINE_GROUPS 32`。
+- 当前基线：`OFFLINE_PASS 802` / `OFFLINE_FAIL 0` / `OFFLINE_GROUPS 34`。
 
 ## 部署
 

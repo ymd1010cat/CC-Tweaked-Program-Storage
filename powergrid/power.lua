@@ -9,10 +9,18 @@
 --     the bare number for such a file, so an old controller's file is never
 --     silently upgraded.
 --
--- M.read() still returns mode, errorCode, rawLine and still reports the archived
--- error codes (FILE_NOT_FOUND / VALUE_LENGTH_IS_ZERO / VALUE_TYPE_NOT_CORRECT /
--- INI_VALUE_OUT_RANGE). The only new code is MODE_MISSING, used when a
--- key=value file simply has no mode= line.
+-- Error codes (one glance readable; M.LEGACY_CODES maps the old names):
+--   CONFIG_FILE_MISSING   file does not exist / cannot be read
+--   CONFIG_FILE_EMPTY     file has no mode value
+--   MODE_NOT_A_NUMBER     the mode value is not a number
+--   MODE_OUT_OF_RANGE     the mode value is outside 0-3
+--   MODE_KEY_MISSING      key=value file without a mode= line
+--   CONFIG_WRITE_FAILED   the file could not be rewritten (only fatal one)
+--
+-- A bad config never stops the program: M.boot() always returns a usable mode
+-- (M.DEFAULT_MODE = 1, Main Grid) plus the reason, so the caller logs one
+-- CONFIG_ERROR line and keeps running. M.apply() can then recreate a missing
+-- file (bare number, as before).
 --
 -- Writes are format preserving: in a key=value file M.apply() rewrites only the
 -- mode line, in place; comments, unknown keys, blank lines and the line order
@@ -22,7 +30,7 @@
 
 local M = {}
 
-M.VERSION = "1.1"
+M.VERSION = "1.2"
 
 M.PATH = "PowerGrid.ini"
 M.SIDE = "back"
@@ -30,6 +38,7 @@ M.SOUND = "create:confirm"
 M.MIN = 0
 M.MAX = 3
 M.MODE_KEY = "mode"
+M.DEFAULT_MODE = 1
 
 -- field name -> ini key, for the watchdog section.
 M.WATCHDOG_KEYS = {
@@ -44,11 +53,50 @@ M.WATCHDOG_KEYS = {
     restore = "watchdog.restore",
 }
 
+-- old error code -> new error code. Kept so old logs/tests can be compared.
+M.LEGACY_CODES = {
+    FILE_NOT_FOUND = "CONFIG_FILE_MISSING",
+    VALUE_LENGTH_IS_ZERO = "CONFIG_FILE_EMPTY",
+    VALUE_TYPE_NOT_CORRECT = "MODE_NOT_A_NUMBER",
+    INI_VALUE_OUT_RANGE = "MODE_OUT_OF_RANGE",
+    MODE_MISSING = "MODE_KEY_MISSING",
+    WRITE_FAILED = "CONFIG_WRITE_FAILED",
+}
+
+local LEGACY_OF = {}
+for oldCode, newCode in pairs(M.LEGACY_CODES) do
+    LEGACY_OF[newCode] = oldCode
+end
+M.LEGACY_OF = LEGACY_OF
+
+-- One-line, human readable meaning of each code.
+M.DESCRIPTIONS = {
+    CONFIG_FILE_MISSING = "PowerGrid.ini not found or not readable",
+    CONFIG_FILE_EMPTY = "PowerGrid.ini has no mode value",
+    MODE_NOT_A_NUMBER = "the mode value is not a number",
+    MODE_OUT_OF_RANGE = "the mode value is outside 0-3",
+    MODE_KEY_MISSING = "the file has no mode= line",
+    CONFIG_WRITE_FAILED = "PowerGrid.ini could not be written",
+}
+
 local KNOWN = {}
 for _, key in pairs(M.WATCHDOG_KEYS) do
     KNOWN[key] = true
 end
 KNOWN[M.MODE_KEY] = true
+
+-- Accept an old code and hand back the new one (anything else is returned as is).
+function M.normalizeCode(code)
+    if type(code) == "string" and M.LEGACY_CODES[code] ~= nil then
+        return M.LEGACY_CODES[code]
+    end
+    return code
+end
+
+-- New code -> old code, for log consumers that still match the old names.
+function M.legacyOf(code)
+    return LEGACY_OF[M.normalizeCode(code)]
+end
 
 local function trim(text)
     if type(text) ~= "string" then return text end
@@ -138,18 +186,17 @@ function M.parse(text)
     return info
 end
 
--- Validate the first line of the config. Returns value, errorCode, rawLine.
--- The error codes and their precedence match the archived startup.lua.
+-- Validate the mode text. Returns value, errorCode, rawLine.
 function M.validate(line)
     if line == nil or #line == 0 then
-        return nil, "VALUE_LENGTH_IS_ZERO", line
+        return nil, "CONFIG_FILE_EMPTY", line
     end
     local value = tonumber(line)
     if value == nil then
-        return nil, "VALUE_TYPE_NOT_CORRECT", line
+        return nil, "MODE_NOT_A_NUMBER", line
     end
     if value < M.MIN or value > M.MAX then
-        return value, "INI_VALUE_OUT_RANGE", line
+        return value, "MODE_OUT_OF_RANGE", line
     end
     return value, nil, line
 end
@@ -162,23 +209,23 @@ function M.modeFrom(info)
     if info.format == "keyvalue" then
         local value = info.raw[M.MODE_KEY]
         if value == nil then
-            return nil, "MODE_MISSING", nil
+            return nil, "MODE_KEY_MISSING", nil
         end
         return M.validate(trim(value))
     end
     return M.validate(info.first_content)
 end
 
--- Read a file as text. Returns text, or nil, "FILE_NOT_FOUND".
+-- Read a file as text. Returns text, or nil, "CONFIG_FILE_MISSING".
 function M.readText(path)
     local okOpen, file = pcall(io.open, path, "r")
     if not okOpen or file == nil then
-        return nil, "FILE_NOT_FOUND"
+        return nil, "CONFIG_FILE_MISSING"
     end
     local okRead, text = pcall(file.read, file, "*a")
     file:close()
     if not okRead or type(text) ~= "string" then
-        return nil, "FILE_NOT_FOUND"
+        return nil, "CONFIG_FILE_MISSING"
     end
     return text
 end
@@ -190,9 +237,39 @@ function M.read(opts)
     local path = opts.path or M.PATH
     local text = M.readText(path)
     if text == nil then
-        return nil, "FILE_NOT_FOUND", nil
+        return nil, "CONFIG_FILE_MISSING", nil
     end
     return M.modeFrom(M.parse(text))
+end
+
+-- Resolve the mode to run with, without ever failing:
+--   ok=true  -> mode is the configured mode
+--   ok=false -> mode is M.DEFAULT_MODE and code says why (message/extra are
+--               human readable, ready for the log and the blue screen)
+-- Also carries the parsed value (useful for MODE_OUT_OF_RANGE) and the raw line.
+function M.boot(opts)
+    local mode, code, raw = M.read(opts)
+    if code == nil then
+        return {
+            ok = true,
+            mode = mode,
+            code = nil,
+            value = mode,
+            raw = raw,
+            message = nil,
+            extra = nil,
+        }
+    end
+    local message, extra = M.describe(code, mode, raw)
+    return {
+        ok = false,
+        mode = M.DEFAULT_MODE,
+        code = code,
+        value = mode,
+        raw = raw,
+        message = message,
+        extra = extra,
+    }
 end
 
 -- Rewrite only the mode line of a key=value (or comment-only) file. Every other
@@ -230,24 +307,53 @@ function M.setModeInText(text, value)
     return table.concat(out)
 end
 
--- Archived log line + bsod "extra" text for an error code.
+-- Human readable message + consequence text for an error code (old codes are
+-- accepted and normalised).
 function M.describe(code, value, raw)
-    if code == "FILE_NOT_FOUND" then
-        return "Configuration file PowerGrid.ini not found",
-            "Configuration file missing."
-    elseif code == "VALUE_LENGTH_IS_ZERO" then
-        return "PowerGrid.ini is empty", "Power value is empty."
-    elseif code == "VALUE_TYPE_NOT_CORRECT" then
-        return "Invalid power value format: " .. tostring(raw),
-            "Invalid power value format."
-    elseif code == "INI_VALUE_OUT_RANGE" then
-        return "Power value out of range: " .. tostring(value),
-            "Power value must be between 0 and 3."
-    elseif code == "MODE_MISSING" then
-        return "PowerGrid.ini has no mode= line", "Missing mode setting."
+    local newCode = M.normalizeCode(code)
+    local fallback = M.DEFAULT_MODE
+    if newCode == "CONFIG_FILE_MISSING" then
+        return "PowerGrid.ini not found or not readable",
+            "Configuration file missing. Using mode=" .. fallback ..
+            " (Main Grid)."
+    elseif newCode == "CONFIG_FILE_EMPTY" then
+        return "PowerGrid.ini is empty",
+            "Power value is empty. Using mode=" .. fallback .. " (Main Grid)."
+    elseif newCode == "MODE_NOT_A_NUMBER" then
+        return "PowerGrid.ini mode is not a number: " .. tostring(raw),
+            "Invalid power value format. Using mode=" .. fallback ..
+            " (Main Grid)."
+    elseif newCode == "MODE_OUT_OF_RANGE" then
+        return "PowerGrid.ini mode is out of range: " .. tostring(value),
+            "Power value must be between 0 and 3. Using mode=" .. fallback ..
+            " (Main Grid)."
+    elseif newCode == "MODE_KEY_MISSING" then
+        return "PowerGrid.ini has no mode= line",
+            "Missing mode setting. Using mode=" .. fallback .. " (Main Grid)."
+    elseif newCode == "CONFIG_WRITE_FAILED" then
+        return "PowerGrid.ini could not be written",
+            "PowerGrid.ini could not be saved (disk full or read-only). " ..
+            "The redstone output was still driven; fix the disk and restart."
     end
     return "Unknown PowerGrid.ini error: " .. tostring(code),
         "Invalid power configuration."
+end
+
+-- One grep-able diagnostic line, e.g.
+--   CONFIG_ERROR code=CONFIG_FILE_MISSING file=PowerGrid.ini fallback=mode=1 detail=...
+function M.errorLine(code, opts)
+    if type(opts) ~= "table" then opts = {} end
+    local file = opts.file or M.PATH
+    local fallback = opts.fallback
+    if fallback == nil then fallback = "mode=" .. tostring(M.DEFAULT_MODE) end
+    local message = opts.message
+    if message == nil then
+        message = (M.describe(code))
+    end
+    return "CONFIG_ERROR code=" .. tostring(M.normalizeCode(code)) ..
+        " file=" .. tostring(file) ..
+        " fallback=" .. tostring(fallback) ..
+        " detail=" .. tostring(message)
 end
 
 -- Read the watchdog section. Returns the raw option table (field -> raw string,
@@ -264,7 +370,7 @@ function M.config(opts)
             path = path,
             format = "missing",
             mode = nil,
-            mode_error = "FILE_NOT_FOUND",
+            mode_error = "CONFIG_FILE_MISSING",
             bad_lines = {},
             unknown = {},
             entries = {},
@@ -300,9 +406,10 @@ function M.config(opts)
 end
 
 -- Apply a mode: rewrite the config file, drive the analog output, chirp the
--- speaker. Returns true when the file was rewritten, or nil, "WRITE_FAILED"
--- when the file could not be opened (the redstone output is still driven, as
--- the archived startup.lua did).
+-- speaker. Returns true when the file was rewritten, or nil,
+-- "CONFIG_WRITE_FAILED" when the file could not be opened (the redstone output
+-- is still driven, as the archived startup.lua did). This is the only fatal
+-- error in the project.
 function M.apply(value, opts)
     if type(opts) ~= "table" then opts = {} end
     local path = opts.path or M.PATH
@@ -348,7 +455,7 @@ function M.apply(value, opts)
     end
 
     if written then return true end
-    return nil, "WRITE_FAILED"
+    return nil, "CONFIG_WRITE_FAILED"
 end
 
 return M

@@ -46,22 +46,37 @@ local function wrapText(text, maxWidth)
     return lines
 end
 
--- Read and validate the config file. power.lua now owns the archived validation
--- (same error codes and messages); the blue screen stays exactly as it was.
-local power, configError, configLine = power_api.read()
-if configError then
-    local message, extra = power_api.describe(configError, power, configLine)
-    logger.error(message)
+-- Resolve the mode to run with. A broken/missing config never stops the
+-- controller: power.lua hands back the default mode (1 = Main Grid) plus the
+-- reason, we log one CONFIG_ERROR line and keep running.
+local boot = power_api.boot()
+local power = boot.mode
+if not boot.ok then
+    logger.error(power_api.errorLine(boot.code, { message = boot.message }))
+end
+
+-- Apply a mode and drive the redstone/speaker. Only an unwritable config file is
+-- fatal (blue screen), because then the controller can no longer record its
+-- state; the redstone output itself is still driven.
+local function applyPower(value)
+    local ok, err = power_api.apply(value)
+    if ok ~= nil then return ok end
+    local message, extra = power_api.describe("CONFIG_WRITE_FAILED")
+    logger.error(power_api.errorLine("CONFIG_WRITE_FAILED", {
+        fallback = "none",
+        message = message
+    }))
     bsod.show({
-        error = configError,
+        error = "CONFIG_WRITE_FAILED",
         file = "PowerGrid.ini",
         title = "This Terminal ran into a problem and need fix.",
         extra = extra
     })
+    return nil, err
 end
 
 -- Apply initial configuration (config write + redstone + speaker chirp)
-power_api.apply(power)
+applyPower(power)
 logger.info("Power Grid initialized with value " .. power)
 
 -- Main command loop (no exit function)
@@ -110,7 +125,7 @@ while true do
         if power ~= 1 then
             local old = power
             power = 1
-            power_api.apply(power)
+            applyPower(power)
             logger.info("Switched from " .. old .. " to Main Grid (mode 1)")
             print("Switched to Main Grid.")
             os.sleep(FEEDBACK_DELAY)
@@ -123,7 +138,7 @@ while true do
         if power ~= 2 then
             local old = power
             power = 2
-            power_api.apply(power)
+            applyPower(power)
             logger.info("Switched from " .. old .. " to Backup Battery (mode 2)")
             print("Switched to Backup Battery.")
             os.sleep(FEEDBACK_DELAY)
@@ -136,7 +151,7 @@ while true do
         if power ~= 3 then
             local old = power
             power = 3
-            power_api.apply(power)
+            applyPower(power)
             logger.info("Switched from " .. old .. " to External Grid (mode 3)")
             print("Switched to External Grid.")
             os.sleep(FEEDBACK_DELAY)
@@ -149,7 +164,7 @@ while true do
         if power ~= 0 then
             local old = power
             power = 0
-            power_api.apply(power)
+            applyPower(power)
             logger.info("Switched from " .. old .. " to Disabled (mode 0)")
             print("Power Grid disabled.")
             os.sleep(FEEDBACK_DELAY)
