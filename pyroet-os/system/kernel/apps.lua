@@ -16,6 +16,23 @@ api.yield() end`); the scheduler pulls it forward one step per `tick()`.
 Capabilities (the whole list, no inheritance):
 
     fs.read  fs.write  net.rpv  net.rednet  redstone  peripheral  http
+    input    terminal
+
+The two UI capabilities are deliberately separate. `input` is the event side:
+`api.input.pullEvent(...)` (a gated function; the host supplies the raw pull
+through `opts.input`, a table `{ pullEvent = fn, keys = <keys api> }` or just
+the pull function) and `api.input.keys` (the key-name table). `terminal` is the
+screen side: `api.terminal` is the host's terminal object (`opts.terminal`,
+normally the ROM's `term`), or a refusing table when the capability is missing.
+An app can therefore ask for the keyboard without the screen, or the screen
+without the keyboard; neither implies the other, and nothing else in the api
+grew a screen or an event source.
+
+Both are opt-in and additive: a package that never declares them gets refusing
+stubs and keeps exactly the api it had before the capabilities existed (the
+fields are new, nothing was moved or renamed). A manifest with no
+`capabilities` at all declares the empty list, so every capability is denied --
+there is no implicit legacy grant, and that is the P2 behaviour unchanged.
 
 An app gets a restricted API table. A capability it did not declare is still
 present as a *callable* stub, so a buggy app gets `nil, "capability denied:
@@ -32,7 +49,10 @@ record's cap set, so it takes exactly the same `capability denied` stub path as
 an undeclared one -- a denied app still starts and still runs, it just cannot
 reach the host object. Without a permission table the runtime keeps the old
 behaviour (a declared capability is granted), which is what the P2 tests rely
-on.
+on. A capability the decision file does not mention is denied as well: this is
+how an app that later declares `input` / `terminal` stays ungranted until
+someone runs `permissions.reset(app)`, instead of a stale file silently
+acquiring new permissions.
 
 `api.sys` is a separate, host-supplied introspection surface, not a capability:
 the host passes `sys = <table>` or `sys = function(record) -> table|nil` and only
@@ -86,7 +106,8 @@ local A = {}
 
 A.VERSION = "1.0"
 A.DEFAULT_MAX_STARTS = 8
-A.CAPS = { "fs.read", "fs.write", "net.rpv", "net.rednet", "redstone", "peripheral", "http" }
+A.CAPS = { "fs.read", "fs.write", "net.rpv", "net.rednet", "redstone", "peripheral",
+    "http", "input", "terminal" }
 
 local CAP_SET = {}
 for i = 1, #A.CAPS do CAP_SET[A.CAPS[i]] = true end
@@ -227,6 +248,10 @@ function A.new(opts)
         redstone = o.redstone,
         peripheral = o.peripheral,
         http = o.http,
+        -- O3: the UI hosts. `input` is a table { pullEvent = fn, keys = api } (a
+        -- bare function is accepted as the pull), `terminal` is a term-like table.
+        input = o.input,
+        terminal = o.terminal,
     }
     self.records = {}
     self.index = {}
@@ -535,6 +560,7 @@ function A:load(dir)
         starts = 0,
         write_bytes = 0,
         denied = 0,
+        denied_caps = {},
         error = nil,
         hook_errors = {},
     }
@@ -594,6 +620,9 @@ end
 function A:denied(record, cap)
     self:log("APP_CAP_DENIED app=" .. record.name .. " cap=" .. cap)
     record.denied = record.denied + 1
+    -- per-capability tally: the aggregate counter cannot tell a missing keyboard
+    -- from a refused file write, and `status()` needs to (O3)
+    record.denied_caps[cap] = (record.denied_caps[cap] or 0) + 1
     return nil, "capability denied: " .. cap
 end
 
@@ -728,6 +757,17 @@ function A:build_api(record)
     api.redstone = tree(self, record, "redstone", self.hosts.redstone)
     api.peripheral = tree(self, record, "peripheral", self.hosts.peripheral)
     api.http = tree(self, record, "http", self.hosts.http)
+    -- O3: the two UI capabilities. Both shapes already exist in this api and are
+    -- reused on purpose: `pullEvent` is a gated function like api.fs.read, while
+    -- `keys` and the whole terminal are gated tables like api.peripheral, so a
+    -- denied app still gets a table it can index instead of a nil-index.
+    local input = self.hosts.input
+    if type(input) == "function" then input = { pullEvent = input } end
+    api.input = {
+        pullEvent = gate(self, record, "input", input and input.pullEvent),
+        keys = tree(self, record, "input", input and input.keys),
+    }
+    api.terminal = tree(self, record, "terminal", self.hosts.terminal)
     api.sys = self:sys_api(record)
     api.log = function(message)
         self:log("APP_LOG app=" .. record.name .. " msg=" .. short(message, 80))
@@ -922,6 +962,7 @@ function A:status()
             starts = record.starts,
             write_bytes = record.write_bytes,
             denied = record.denied,
+            denied_caps = copy_map(record.denied_caps),
             capabilities = copy_list(record.manifest.capabilities),
             grants = copy_map(record.perms),
             error = record.error,

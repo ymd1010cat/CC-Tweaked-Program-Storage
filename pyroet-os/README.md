@@ -179,7 +179,7 @@ pyroet-os/
 
 ## 4. 权限模型
 
-### 4.1 七个 capability（固定集合，无继承）
+### 4.1 九个 capability（固定集合，无继承）
 
 | cap | 授予的能力 |
 | --- | --- |
@@ -190,6 +190,13 @@ pyroet-os/
 | `redstone` | 红石读写 |
 | `peripheral` | peripheral 访问 |
 | `http` | CC 的 http API（掌机上通常不可用） |
+| `input` | 键盘/事件：`api.input.pullEvent(...)` + `api.input.keys` |
+| `terminal` | 屏幕：`api.terminal`（term 句柄本身；授予 = 宿主对象） |
+
+后两个是 UI 能力，**互不蕴含**：只要键盘不要屏幕、只要屏幕不要键盘都行；只声明一个时另一个仍是拒绝桩。
+它们与另外七个走**完全同一套**机制（声明 → 首启决策 → 运行时拦截 → `nil, "capability denied: <cap>"`
++ `APP_CAP_DENIED`），没有另一条旁路。宿主由启动链注入：`input` = 包装过的 `os.pullEvent` + `keys` 表，
+`terminal` = ROM 的 `term`（`opts.input` / `opts.terminal` 可覆盖）。详见 DECISIONS §19。
 
 manifest 的 `capabilities` 只是**声明**：首启时 `PERMS_PROMPT app=.. caps=..` → 逐项决策 →
 写 `/etc/perms/<app>.cfg`。文件存在且合法 = 那就是最终决策，不再询问；坏文件（无法解析、未知 cap、
@@ -211,18 +218,29 @@ fs.read=granted
 - 持久化失败只记 `PERMS_SAVE_FAIL`，不阻断启动。
 
 `api.sys`（`status()` / `apps()` / `perms(app)` / `launch(name)` / `install(name)` /
-`uninstall(name)` / `list()`）**不是第 8 个 cap**，而是宿主注入的只读内省面，且只交给 `/system/`
+`uninstall(name)` / `list()`）**不是 cap**，而是宿主注入的只读内省面，且只交给 `/system/`
 下的系统包；用户包拿到桩，`launch` 按**目录**而不是按 cap 授权。后三个由**运行时自己**实现
 （只有它知道调用方 record 的 cap 集合）：`install`/`uninstall` 需 `fs.write`、`list` 需 `fs.read`，
 未授权仍是 `nil, "capability denied: <cap>"` + `APP_CAP_DENIED`；目标对象由启动链构造并以
 `apps.new({ installer = inst })` 注入，缺失时返回 `nil, "installer unavailable"`。详见 §5.5。
 
-### 4.3 没有键盘这条边界
+### 4.3 键盘与屏幕这两条边界
 
-P2 运行时没有 input cap，所以"询问"是注入的回调：默认实现（`startup.P.default_ask`）对
-`/system/` 下的系统镜像包按 manifest 原样授权（`PERMS_PREGRANT`），其它包一律拒绝，
-等输入服务落地再把回调换成真询问。launcher 的按键是纯函数 `M.handle_key(state, key)`，
-由 `opts.keys` 驱动；Net app 的 probe 目标从 `/etc/net.target` 读一行。
+`input` / `terminal` 是**新增的 opt-in 能力**（DECISIONS §19）：包不声明就拿不到，且两者互不蕴含。
+"询问"仍然是**注入的回调**（`startup.P.default_ask`）：启动时还没有任何 app、也没有事件派发器，所以
+`/system/` 下的系统镜像包按 manifest 原样授权（`PERMS_PREGRANT`），其它包一律拒绝；要重新询问某包，
+删掉它的决策文件（`permissions.reset(app)`）。launcher 的按键是纯函数 `M.handle_key(state, key)`，
+仍由 `opts.keys` 驱动（它没有声明 `input`）；Net app 的 probe 目标仍从 `/etc/net.target` 读一行。
+
+两条写死的边界：①cap 是 **API 收口**，不是沙盒——app 与内核同一个 Lua VM，绕过 `api` 直接摸
+`term` / `os.pullEvent` 拦不住（与另外七个 cap 同一强度）；②整机**还没有事件循环接管**（启动链
+commit 后不传 `loop` 钩子，ROM shell 接管），所以 `api.input.pullEvent` 目前只在"有人驱动 app 调度"
+的场景可用，首帧与桌面仍是静态渲染。
+
+compat：manifest **不写** `capabilities` = 声明空列表 = 全部拒绝，**没有隐式授权**；旧包在 `input` /
+`terminal` 存在之前本来就拿不到这两样，现在只是这两个字段以**桩**的形式出现，包照常加载、启动、退出。
+决策文件里没有的 cap = 未授予（fail closed），manifest 没声明的 cap 即使文件里写了也记 `PERMS_PRUNE`
+并拒绝——**manifest 是上限**。
 
 ---
 
@@ -248,7 +266,7 @@ P2 运行时没有 input cap，所以"询问"是注入的回调：默认实现�
 | `name` | 是 | 运行时索引键；建议等于目录名去掉 `.app`，同名只保留首个并进 problems |
 | `version` | 否 | 字符串，默认 `0.0.0`，≤32 字节；只比较、不解析语义 |
 | `entry` | 否 | 入口文件名，默认 `main.lua`；不得含路径分隔符 |
-| `capabilities` | 否 | 只能是 §4.1 的 7 个 cap；未知 cap 直接拒绝加载 |
+| `capabilities` | 否 | 只能是 §4.1 的 9 个 cap；未知 cap 直接拒绝加载 |
 | `max_starts` | 否 | 正整数，启动次数配额（默认 8，超限 `quota exceeded: starts`） |
 | `size` | 否 | 包内字节总和（**不含 `manifest.lua` 自己**：文件无法包含自己的最终长度）；安装器逐字节核对 |
 
@@ -299,7 +317,7 @@ d2 i1 s2 sel 1/5
 
 - **按键是纯函数**（`M.handle_key(state, key, api, opts)`）：上/下（或左/右）移动、数字键跳转、
   回车/return 执行、`escape`/`q`/`c` 取消当前提示行；`M.run` 的键从 `opts.keys` 取
-  （运行时没有 `input` capability，见 §4.3）。
+  （安装器没有声明 `input`，见 §4.3）。
 - **来源**：`/disk/apps/*.app`（有驱动器时；没有驱动器是正常状态，文案是 `no disk, no apps`）、
   `/apps`（用户包）、`/system/system`（镜像包）。版本号：来源盘上的包从 `manifest.lua`
   **按文本匹配**读取（绝不执行来源盘里的代码），已装的包从 `api.sys.apps()` 取。
@@ -471,8 +489,8 @@ WINDOW_OK  : sum=648380 limit=900000
 | **无 DNS 客户端** | `services.lua` 未 vendor，`node:lookup(name)` 返回 `nil`；域名解析只能用 `/etc/hosts.conf` 静态表 |
 | **无 ICMP / 无 ping** | `icmp` 模块已裁；`probe()` 用 UDP 一发一收，所以"端口无响应 / 主机不在线 / 被丢弃"对外都只能表现为 timeout |
 | **无 DHCP / NAT / 路由 / WAN ACL / 多跳** | `nat`/`wan`/`wansec`/`fabric`/`topo`/`qos`/`mcast`/`dv` 全部裁掉；掌机只做端点，不转发、不做网关 |
-| **无 `input` capability** | 运行时的 7 个 cap 里没有输入/终端 cap；launcher 的按键是纯函数 + `opts.keys`，Net app 的 probe 目标从 `/etc/net.target` 读一行 |
-| **没有事件循环接管** | 启动链 commit 后返回（starter 不传 `loop` 钩子），ROM shell 接管；首帧与桌面是**静态渲染**，按键事件无处派发 |
+| **cap 只是 API 收口，不是沙盒** | app 与内核共享一个 Lua VM 与全局表；`fs`/`net`/`term`/`os.pullEvent` 的约束只对"经过 `api` 的调用"成立，绕过 `api` 直接摸全局拦不住（`input`/`terminal` 与另外七个 cap 同一强度） |
+| **没有事件派发器** | 启动链 commit 后不传 `loop` 钩子，ROM shell 接管；首帧与桌面是**静态渲染**。`input` cap 与 `api.input.pullEvent` 已就位，但要按键真正生效还需要一个驱动 app 调度的派发器 |
 | **没有 `/etc/network.conf` 就没有网络** | `net` 服务由启动链默认注册（§3.1），但配置是用户数据：文件不存在就跳过（`STARTUP_NET_SKIP reason=no_config`），不猜默认地址、不写默认配置 |
 | **settings 严格只读** | 只声明 `fs.read`，没有任何写路径；看得到配置，改不了配置 |
 | **无中文** | CJK 字库与三件套全部删除（省 1,440,360 B）；界面与日志纯 ASCII，原版 CC 字体即可显示 |
@@ -502,10 +520,11 @@ pwsh -NoProfile -File pyroet-os/tests/run-tests.ps1
 脚本把镜像 stage 到 `pyroet-os/.tests/computer/20`（与真机同布局：`/system` + `/system/system/*.app`），
 headless 启动、读取 `/offline-report.txt` 判分，**PASS 后自动删除 staging**（`-Keep` 保留）。
 
-基线（v1.0.0 + N1 修正 + T1 安装器 UI + T4 + M2 画面测试）：**OFFLINE_PASS 4138 / FAIL 0 / GROUPS 201**。
+基线（v1.0.0 + N1 修正 + T1 安装器 UI + T4 + M2 画面测试 + O3 能力）：**OFFLINE_PASS 4239 / FAIL 0 / GROUPS 210**。
 M2 之后新增的是 PC 侧渲染测试：`tests/screen.lua`（屏幕缓冲 harness，替换 `_G.term`）与
 `tests/t_bios_screen.lua`（首帧 / 试启动帧 / 无 `/system` 的 fatal 屏 / 根 starter 失败文案 / 10x4 小屏），
-细节见 `DECISIONS.md` §18。
+细节见 `DECISIONS.md` §18；O3 新增 `tests/t_caps.lua`（`input` / `terminal` 的拒绝、放行、unavailable、
+旧包兼容与决策文件语义），细节见 §19。
 
 另有 P1 的 rpv 子集冒烟测试（可选）：
 
@@ -544,15 +563,15 @@ python tools/build_release.py --project pyroet-os --out dist/release
 | --- | --- |
 | 发布版本 | 1.0.0（`pyroet-os-v1.0.0.zip`） |
 | `/startup.lua` starter | 1,070 B（`DECISIONS.md` §13.11 的 1,071 B 为旧读数） |
-| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，28,367 B（T4：+2,345 B，安装器构造与注入） |
+| 启动链 `/system/startup.lua` | `P.VERSION = 0.2.0`，29,188 B（T4：+2,345 B，安装器构造与注入；O3：+821 B，input/terminal 宿主） |
 | bootloader | `M.VERSION = 2.0`，45,623 B |
-| kernel / apps / permissions | 1.0 / 1.0 / 1.0（13,958 / 35,140 / 18,387 B） |
+| kernel / apps / permissions | 1.0 / 1.0 / 1.0（13,958 / 37,645 / 18,821 B；O3：apps +2,505、permissions +434，两个 UI cap） |
 | installer / ota | 1.0 / 2.0（17,295 / 31,877 B；N1：+3,854 / +3,566 B，size 校验） |
 | rpv 子集 | 10 文件 / 131,590 B（9 模块 + loader） |
 | 系统应用 | launcher / settings / installer / net，均 0.1.0 |
 | `installer.app`（T1/T4） | 0.1.0，34,853 B（main.lua 33,774 + manifest.lua 1,079） |
 | OTA 服务端（`ota/server.lua`） | 1.0，27,927 B（不进镜像） |
-| 镜像 | 28 条 / 458,100 B / `SIZE_WARN` / `WINDOW_OK` |
+| 镜像 | 28 条 / 461,860 B / `SIZE_WARN` / `WINDOW_OK` |
 
 设计口径以 [`DECISIONS.md`](DECISIONS.md)（架构、门禁、发布）与 [`P6-design.md`](P6-design.md)
 （文件集更新、journal、崩溃窗口、bootloader 决策表）为准；本文是面向使用者的入口，

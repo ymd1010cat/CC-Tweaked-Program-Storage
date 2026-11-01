@@ -41,7 +41,7 @@ startup.lua                       ROM 只会自动跑这一个文件，内容必
 
 (a) **CC 没有真进程**。整机只有一个 Lua VM，并发单位只有 `coroutine`；所谓“沙盒”是 **API 收口**（把 `fs` / `net` / `peripheral` / `redstone` / `http` 换成受控代理），**不是内存隔离**。因此：app 崩溃用 `pcall` 边界隔离；app 死循环**无法抢占**，只能靠“app 必须在关键路径上 `os.pullEvent`/yield”的约定 + watchdog 记账，纯 CPU 死循环只能重启整机。这是能力上限，文档写明，不做超出该上限的承诺（例如“杀进程”）。
 
-(b) **权限 = capabilities**。固定集合：`fs.read`、`fs.write`、`net.rpv`、`net.rednet`、`redstone`、`peripheral`、`http`。三件套语义：**manifest 声明** → **首启确认**（用户点一次，落盘到权限库）→ **运行时拦截**（每次 API 调用查当前 app 的 cap 集；拒绝时返回 `nil, "EPERM"` 而不是抛错，避免 app 只能靠 pcall 活下去）。权限仲裁只有一处在 kernel 的 service manager，runtime 不得自授。
+(b) **权限 = capabilities**。固定集合（9 项）：`fs.read`、`fs.write`、`net.rpv`、`net.rednet`、`redstone`、`peripheral`、`http`、`input`、`terminal`。三件套语义：**manifest 声明** → **首启确认**（用户点一次，落盘到权限库）→ **运行时拦截**（每次 API 调用查当前 app 的 cap 集；拒绝时返回 `nil, "EPERM"` 而不是抛错，避免 app 只能靠 pcall 活下去）。权限仲裁只有一处在 kernel 的 service manager，runtime 不得自授。后两项（`input` / `terminal`）是 O3 追加的 UI 能力，语义、拒绝路径与兼容策略见 §19；追加在表尾，旧决策文件按前缀解析不受影响。
 
 (c) **系统应用与用户应用同一套包格式**。没有“特权格式”。Launcher/Settings/Net/Files 也是 `.app`（§5），只是它们的 cap 由镜像内的系统清单授予，且**只能用 OTA 换**（用户不能手装系统 app，否则等于绕过 OTA 的完整性保证）。
 
@@ -234,7 +234,7 @@ python pyroet-os/tools/sizecheck.py                                      # 门�
 | --- | --- | --- |
 | `name` | string | 唯一标识，必须等于目录名（不含 `.app`） |
 | `version` | string | `MAJOR.MINOR.PATCH`，安装器只比较、不解析语义 |
-| `capabilities` | table of string | 只能取自 §1.2(b) 的 7 个 cap，未知 cap 直接拒绝安装 |
+| `capabilities` | table of string | 只能取自 §1.2(b) 的 9 个 cap，未知 cap 直接拒绝安装 |
 | `entry` | string | 入口文件名，默认 `"main.lua"` |
 | `size` | integer | 包内字节总和，**不含 `manifest.lua` 自己**（文件无法包含自己的最终长度）；安装前核对，不符即拒绝（口径见 §16.3） |
 
@@ -288,7 +288,7 @@ python pyroet-os/tools/sizecheck.py                                      # 门�
 - 没有 ICMP：**没有 ping**。`probe(ip, port, payload, timeout)` 用 UDP 发一发一收，因此“端口无响应”“主机不在线”“被 ACL 丢弃”三者对外表现**只能是 timeout**；只有 `sendto` 直接失败（无路由/保留地址）才报 `unreachable`。`stats()` 分 `sent` / `received` / `timeouts` 三类，另有 `inflight` 供排查；`probe` 是异步句柄（`done`/`result`，可带回调），不发阻塞等待，符合 §7.3“不用 os.sleep 硬等”；
 - 单次 probe 只能证明“这一发这一收在同一时刻可用”，不是连通性 SLA；连续探测由调用方自己节流。
 
-9.7 **Net 系统 app**（`pyroet-os/system/net.app/`——P5b 曾移到 `examples/net.app/`，**G1 已加回镜像**，是 payload，见 §7.1/§8.4/§11.7）：manifest `name="net"`、`version="0.1.0"`、`entry="main.lua"`、`capabilities={"net.rpv","fs.read"}`。界面 26x20（标题 1、内容 2-19、状态 20），纯函数 `render(state, cols, rows)` 每行严格 pad/truncate 到列宽；`layout_selftest()` 无终端校验行数与列宽。**输入源是文件 `/etc/net.target`（一行 `<ip> <port>`，`#` 注释）**：P2 的 app 运行时只有 7 个固定 cap（§1.2(b)），没有输入/终端 cap，`os.pullEvent` 也不经 kernel 派发，键盘输入在当前运行时里不可达；`fs.read` 读一行是唯一被授权的入口，未来加 input 服务只需换读取源。能力未声明 → `nil, "capability denied: net.rpv"`；已声明但宿主未提供 → `nil, "capability unavailable: net.rpv"`；两者都只在界面显示并写 `api.log`，不崩溃（`net.app.runtime` 测试覆盖两种分支）。
+9.7 **Net 系统 app**（`pyroet-os/system/net.app/`——P5b 曾移到 `examples/net.app/`，**G1 已加回镜像**，是 payload，见 §7.1/§8.4/§11.7）：manifest `name="net"`、`version="0.1.0"`、`entry="main.lua"`、`capabilities={"net.rpv","fs.read"}`。界面 26x20（标题 1、内容 2-19、状态 20），纯函数 `render(state, cols, rows)` 每行严格 pad/truncate 到列宽；`layout_selftest()` 无终端校验行数与列宽。**输入源是文件 `/etc/net.target`（一行 `<ip> <port>`，`#` 注释）**：O3 之后运行时虽然有 `input` cap，但它要求包自己声明、并且要有人驱动事件循环（启动链 commit 后没有调度者，见 §19.5）；Net app 至今不声明 `input`，`fs.read` 读一行仍是它唯一被授权的入口，未来换成按键只需再加一行声明与一个输入源。能力未声明 → `nil, "capability denied: net.rpv"`；已声明但宿主未提供 → `nil, "capability unavailable: net.rpv"`；两者都只在界面显示并写 `api.log`，不崩溃（`net.app.runtime` 测试覆盖两种分支）。
 
 9.8 **尺寸与测试口径（P3 时点，P5b 曾把 net.app 转出镜像、G1 已加回，见 §8.4）**：新增 4 文件 = `net/hosts.lua` 11,488 B + `net/service.lua` 27,504 B + `system/net.app/main.lua` 15,493 B + `system/net.app/manifest.lua` 437 B = **54,922 B**；`install.set` 18 条（18 文件），`python pyroet-os/tools/sizecheck.py` → **TOTAL 257,650 / SIZE_PASS / MARGIN 4,494 B under stretch（91,875 under upper）**。离线套件 `pwsh -NoProfile -File pyroet-os/tests/run-tests.ps1` → **OFFLINE_PASS 1,116 / FAIL 0 / GROUPS 55**（P2 基线 522/38，新增 **594** 断言：hosts 140、net service 282、net app 172）。新增 lua 的非 ASCII 计数 0。本段数字保留为 P3 记录。
 
@@ -300,13 +300,13 @@ python pyroet-os/tools/sizecheck.py                                      # 门�
 
 10.3 **拒绝不崩**：被拒绝的 cap 从 record 的 cap 集里移除，走与"未声明"完全相同的桩路径——`nil, "capability denied: <cap>"` + `APP_CAP_DENIED app=.. cap=..`，**不抛错**；app 仍然启动、仍然被调度、仍然能正常退出。权限表自身抛错 → `APP_PERMS_FAIL app=..` + **全拒绝** + 启动继续（fail closed）；持久化失败只记 `PERMS_SAVE_FAIL`，不阻断启动。
 
-10.4 **没有键盘这条边界（沿用 §9.7）**：P2 运行时没有 input cap，所以"询问"是**注入的回调**（`permissions.new({ask=function(app,cap,info)})`），默认实现一律 `false`（fail closed）。启动链的默认策略（`startup.P.default_ask`）：`/system/` 下的**系统镜像包**按 manifest 原样授权（记 `PERMS_PREGRANT`），其它包一律拒绝，等输入服务落地再把回调换成真询问。launcher 的按键是纯函数 `M.handle_key(state, key)`，由 `opts.keys`（表或迭代器）驱动；真实键盘同样等 input 服务。`api.sys` 之外的输入通道一律不开。
+10.4 **权限询问仍不是交互式（O3 之后的口径）**："询问"仍是**注入的回调**（`permissions.new({ask=function(app,cap,info)})`），默认实现一律 `false`（fail closed）。O3 加了 `input` cap，但那不等于"启动时能弹问询屏"：询问发生在任何 app 启动之前，此时没有谁持有事件循环，`input` 也还没被任何包声明（§19.5）。启动链的默认策略（`startup.P.default_ask`）不变：`/system/` 下的**系统镜像包**按 manifest 原样授权（记 `PERMS_PREGRANT`），其它包一律拒绝。launcher 的按键仍是纯函数 `M.handle_key(state, key)`，由 `opts.keys`（表或迭代器）驱动——包不声明 `input` 就拿不到键盘，那是有意的默认。`api.sys` 之外的输入通道只有 `api.input`（需 `input` cap）。
 
 10.5 **launcher（桌面）**：`pyroet-os/system/launcher.app/`，`capabilities = {"fs.read","fs.write"}`（写**只**用于成功后追加一行 `/etc/launcher.recent`，被拒绝就忽略）。扫描 `/apps` 与 `/system` 下的 `<name>.app`（目录里必须有 `manifest.lua`），名称 = 目录名去掉 `.app`，版本取自运行时索引（`api.sys.apps()`）；运行时没有加载的包仍然列出、版本显示 `?`（桌面上"介质里有什么"不等于"运行时加载了什么"）。排序按名称升序，同名重复只取首个并进 problems。顶部两行状态：`ver <version> sha <8 位十六进制>`（只读全局 `/boot.ok` 的 `version` 与 `manifest_sha` 前 8 位；`manifest_sha=none` 或非十六进制时省略 `sha` 段，标记读不到就 `ver ?`——单树没有槽位指针，G2 已删掉全部槽位兜底）与 `net <ok|degraded|down|off> free <n>`（`fs.getFreeSpace("/")`，读不到就 `n/a`）。启动**只**走 `api.sys.launch(name)`（运行时 `rt:start`），绝不自己起 coroutine。布局：行 1–2 头部、行 3..n-2 列表、行 n-1 提示或单条消息、行 n 选择计数；**列 < 16 或行 < 6 → 降级成单行状态**，列 < 26 → 列表降级为单列（去掉版本列），任何行都 pad/truncate 到列宽，越界写屏不可能发生。
 
 10.6 **settings（设置）**：`pyroet-os/system/settings.app/`，`capabilities = {"fs.read"}`——**严格只读**，没有写路径。离线套件用 instrumented fs 断言 `write/append/delete/makeDir` 调用数为 0、没有非 `"r"` 模式的 `open`，并断言运行时确实对 `fs.write` 返回 `capability denied: fs.write`。内容：系统版本、镜像版本 + `manifest_sha` 前 8 位（只读全局 `/boot.ok`）、net health、应用清单与每个 cap 的 granted/denied/pending、`/etc/network.conf` 关键项（键名含 `psk`/`pass`/`secret`/`key`/`token` 的值一律显示 `***`，明文永不进屏幕）、存储（free + 硬门禁 349,525 B + `/etc/install.set` 条目数）。缺文件时是固定降级文案（`apps n/a` / `conf n/a` / `install.set n/a` / `free n/a`），不抛错、不空白屏。与 launcher 共用同一套 26x20 规则和 `layout_selftest()`。
 
-10.7 **`api.sys` 不是第 8 个 cap**：它是宿主注入的**只读系统内省面**（`apps.new({sys = <table> | function(record) -> table|nil})`），四件事：`status()`（kernel 健康）、`apps()`（运行时 `status().apps`）、`perms(app)`（该 app 的决策表）、`launch(name)`（`rt:start`）。没注入的函数返回 `nil, "system unavailable: <fn>"` 并记 `APP_SYS_UNAVAILABLE`，所以 app 问什么都不会 nil-index。startup 的 `sys_for` 只把整表交给 `/system/` 下的包，用户包拿到桩：`launch` 是唯一有副作用的入口，按**目录**而不是按 cap 授权——cap 列表是 app 自己声明的，用它去决定"谁能启动别的 app"等于让被约束方自己发权限。`api.fs.getFreeSpace` 作为 `fs.read` 的一部分提供（读介质容量不写任何东西），宿主没有这个方法时返回 `capability unavailable: fs.read`。
+10.7 **`api.sys` 不是 cap**：它是宿主注入的**只读系统内省面**（`apps.new({sys = <table> | function(record) -> table|nil})`），四件事：`status()`（kernel 健康）、`apps()`（运行时 `status().apps`）、`perms(app)`（该 app 的决策表）、`launch(name)`（`rt:start`）。没注入的函数返回 `nil, "system unavailable: <fn>"` 并记 `APP_SYS_UNAVAILABLE`，所以 app 问什么都不会 nil-index。startup 的 `sys_for` 只把整表交给 `/system/` 下的包，用户包拿到桩：`launch` 是唯一有副作用的入口，按**目录**而不是按 cap 授权——cap 列表是 app 自己声明的，用它去决定"谁能启动别的 app"等于让被约束方自己发权限。`api.fs.getFreeSpace` 作为 `fs.read` 的一部分提供（读介质容量不写任何东西），宿主没有这个方法时返回 `capability unavailable: fs.read`。
 
 ## 11. 安装与 OTA
 
@@ -781,6 +781,39 @@ MARGIN 108,575**、`WINDOW_OK sum=658,100`（+9,720 B = `kernel/apps.lua` 28,804
 **+141 断言 / +6 组**）。`tests/` 不进 `install.set`，`sizecheck.py` 不变：仍 **28 条**、TOTAL
 **458,100 B / SIZE_WARN / MARGIN 108,575**、`WINDOW_OK sum=658,100`。
 
+## 19. `input` / `terminal` capability（O3）
+
+19.1 **为什么是两个而不是一个 `ui`**：键盘与屏幕不是一回事。只读状态的包（画一屏就走）不该顺手拿到键盘；只处理按键的包（菜单/快捷键）不该能乱画。两个 cap 都在 §1.2(b) 的**扁平集合**里，**无继承、无蕴含**：只声明一个就只拿到一个。合起来才是"能交互的界面"。
+
+19.2 **语义（运行时 `api` 面上只新增这两个字段）**：
+
+| cap | app 拿到的 api | 宿主注入方式（`startup.lua` 已在做） |
+| --- | --- | --- |
+| `input` | `api.input.pullEvent(...)`（受控函数，参数/返回值原样透传）+ `api.input.keys`（键名表，如 `keys.getName`） | `apps.new({ input = { pullEvent = fn, keys = <keys api> } })`；只给一个函数也接受（视作 pull） |
+| `terminal` | `api.terminal`（就是 term 句柄本身，不是副本） | `apps.new({ terminal = <term 类表> })`；启动链默认传 ROM 的 `term`（`opts.terminal` 可覆盖） |
+
+- 形状刻意与既有 api 一致：`api.input.pullEvent` 是**函数**（同 `api.fs.read`），`api.input.keys` 与 `api.terminal` 是**表**（同 `api.peripheral`）。所以拒绝时 app 拿到的仍是**同形状的桩**，只会收到 `nil, "capability denied: <cap>"`，不会 nil-index（§10.3 的 404 语义）。
+- 两者互不蕴含；宿主缺失时是 `capability unavailable: <cap>`（§4.2 口径），**不是** denied——"没声明"和"声明了但机器没这块"必须能区分。
+- 生产宿主：`startup.P.default_input()` 返回 `{ pullEvent = (包装后的 os.pullEvent), keys = keys }`，`terminal = opts.terminal or term`。`opts.input` / `opts.terminal` 仍可注入（测试与未来的输入服务）。
+
+19.3 **可观测面（拒绝路径与 status 可见性）**：
+
+- 日志不新增 tag，沿用 `APP_CAP_DENIED app=.. cap=..` / `APP_CAP_UNAVAILABLE app=.. cap=..`：新能力进的是同一套拒绝机制，而不是另一条旁路。
+- `rt:status().apps[i]` 新增 **`denied_caps = { [cap] = 次数 }`**：聚合的 `denied` 分不清"缺键盘"和"拒写盘"，而 UI/设置页要能分清（settings 展示的 cap 决策表因此也能落到具体 cap）。`capabilities` 仍是声明表、`grants` 仍是决策表，两者都包含这两个新 cap。
+- `api.sys` 不因此扩张：`A.SYS_FUNCTIONS` 仍是 7 项（`status/apps/perms/launch/install/uninstall/list`），`input` / `terminal` **不是**系统调用（§10.7）。
+
+19.4 **向后兼容（写死；§19.6 每条都有断言）**：
+
+1. 旧包（manifest **没写** `capabilities`）= 声明空列表 = **全部拒绝**，**没有隐式授权**。这不构成回退：O3 之前 `api.input` / `api.terminal` **根本不存在**，旧包因此"本来就拿不到键盘和屏幕"；现在只是这两个字段以**桩**的形式出现，包照常加载、启动、被调度、退出。
+2. 只声明其中一个就只拿到一个；另一个是 denied 桩。
+3. `/etc/perms/<app>.cfg` 里**没有**的 cap = 未授予（fail closed）。旧决策文件只写了旧 cap，所以包以后新增声明 `input` / `terminal` 时**不会静默获得权限，也不会在启动时被追问**；要重新询问必须 `permissions.reset(app)`（删决策文件）。这是刻意的：坏/旧决策文件绝不静默变宽。
+4. 反过来，决策文件里出现 manifest **没声明**的 cap 是陈旧行：记 `PERMS_PRUNE`、仍然拒绝——**manifest 是上限**，文件只能收紧或确认，不能扩权。
+5. 未知 cap 仍在 manifest 校验阶段硬失败（`unknown capability '<name>'`）：`keyboard`、`key`、`term`、`input.pullEvent` 都不是别名，也不做前缀匹配。
+
+19.5 **它不做什么（写死，避免过度承诺）**：`input` / `terminal` 是 **API 收口**，不是沙盒（§1.2(a)）：app 与内核共享一个 Lua VM 与全局表，绕过 `api` 直接摸 `term` / `os.pullEvent` 的代码**拦不住**——cap 只约束"经过 api 的调用"，与既有 7 个 cap **同一强度**，不单独加码。另外整机**还没有事件循环接管**：启动链 commit 后不传 `loop` 钩子，ROM shell 接管，所以 `api.input.pullEvent` 目前只在"有人驱动 app 调度"的场景可用，首帧与桌面仍是静态渲染。要让 launcher / installer 真吃键盘，需要在 commit 之后加一个派发器（下一步，不在 O3 范围）。
+
+19.6 **测试与数字（O3 实测）**：新增 `tests/t_caps.lua`（**9 组 101 断言**）：cap 列表与 `permissions.CAPS` 逐项一致、缺 cap 被拒（含 `keys` 的方法调用、`type()` 形状不变）、有 cap 放行（宿主对象同一性、参数透传、真正写出的字节）、声明但宿主缺失 = unavailable（且不是 denied）、未知 cap 硬失败（4 个近似名）、旧包（无 `capabilities`）无隐式授权且照常运行、决策文件缺行 = 拒（且不追问）、文件授予未声明的 cap = `PERMS_PRUNE` + 仍拒、**真启动链端到端**（`startup.run` 注入的 `input`/`terminal` 就是 app 看到的那两个宿主：`STARTUP_LAUNCHER_STARTED name=ui` + `api.terminal.marker` + `api.input.pullEvent` 透传）。`tests/t_apps.lua` 的 `cap_count` 7 → 9，并补 `input` / `terminal` 的 `cap_known`；`tests/run.lua` 的 FILES 追加 `t_caps`。离线 **4,239 pass / 0 fail / 210 groups**（M2 基线 4,138/201，**+101 断言 / +9 组**）；`install.set` 仍 **28 条**、TOTAL **461,860 B / SIZE_WARN / MARGIN 112,335 / 距硬门禁余 167,285**、`WINDOW_OK sum=661,860`（+3,760 B = `kernel/apps.lua` +2,505 + `kernel/permissions.lua` +434 + `system/startup.lua` +821）；`tests/` 不进镜像，`tests/t_budget.lua` 的 `install_entries` 仍 28 未变；改动 lua 非 ASCII 计数 0。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -800,3 +833,4 @@ MARGIN 108,575**、`WINDOW_OK sum=658,100`（+9,720 B = `kernel/apps.lua` 28,804
 - 2026-11-01: **T1 图形安装器 `installer.app`**（口径见 §17）。新增 `system/system/installer.app/`（`manifest.lua` 1,079 + `main.lua` 32,735 = **33,814 B**，纯 ASCII，26x20）：扫 `/disk/apps`（无驱动器即 `no disk`）+ `/apps` + `/system/system`，行前缀 `d`/`i`/`s`，回车装/卸/拒，结果与失败文案上屏（`installed <name> <ver>`、`hash check failed`、`size check failed`、`cancelled`、`system app locked`、`installer unavailable`），`layout_selftest()` 与桌面/设置同一套规则；安装器对象只经**宿主桥**取得（`opts.installer` → `api.sys.install`/`api.sys.uninstall` → `api.installer`，平函数 `install(name) -> true, info | nil, err`），源码不含任何内核路径字面量。`install.set` 26 → **28 条**、TOTAL **448,380 B / SIZE_WARN / MARGIN 98,855**、`WINDOW_OK sum=648,380`。新增 `tests/t_installer_app.lua`（10 组 **391** 断言），`tests/run.lua` 的 FILES 追加；`tests/run-tests.ps1` 把 app stage 到 `/tests/installer.app` 并列入 `$required`（理由见 §17.8）；离线 **3,770 pass / 0 fail / 186 groups**（N1 3,379/176）。`tests/t_budget.lua` 的 `install_entries` 26 → 28 随清单同步（强度不变）。README 删掉「无 installer UI」这条限制、新增 §5.5 用法，§2.1/§5.4/§6.3/§7/§9.1/§10 的数字同步。**未接内核桥**：`api.sys` 仍只有四个函数，真机上 UI 显示 `installer unavailable`（§17.2 末尾）。
 - 2026-11-01: **T4 把 `installer.app` 真正接通**（口径见 §17.2/§17.9）。`kernel/apps.lua`：`A.SYS_FUNCTIONS` 增 `install`/`uninstall`/`list`（+6,336 B），后三个由运行时自己实现并按调用方 record 授权——`install`/`uninstall` 需 `fs.write`、`list` 需 `fs.read`，未授权 `nil, "capability denied: <cap>"` + `APP_CAP_DENIED`；包名白名单 `[%w_%-]+`/≤40 B（`..`、路径分隔、绝对路径、空、非字符串 → `nil, "bad name"`）；`uninstall` 对 `<system_root>/<name>.app` 一律 `nil, "system app"` + `APP_SYS_PROTECT name=..` 且不调安装器；无实例时 `nil, "installer unavailable"`（T1 文案）；日志 `APP_INSTALL name=.. ok=..` / `APP_UNINSTALL name=.. ok=..` / `APP_LIST n=..`。`system/startup.lua`：新增第 3b 步 `P.build_installer`（+2,345 B），构造 `/system/kernel/installer.lua` 实例并以 `apps.new({ installer = inst })` 注入，失败只记 `STARTUP_INSTALLER_UNAVAILABLE`、不阻塞启动。`installer.app`（+1,039 B）：`M.bridge` 的检测改为"桥对象是否存在"（`M.BRIDGE_FUNCTIONS = install/uninstall/list`），`installer unavailable` 只由桥完全缺失触发。新增 `tests/t_installer_bridge.lua`（9 组 227 断言，含真实安装器 + 真实 fs 的端到端与 UI 回车链路），离线 **3,997 pass / 0 fail / 195 groups**（T1 3,770/186）；`install.set` 仍 28 条、TOTAL **458,100 B / SIZE_WARN / MARGIN 108,575**、`WINDOW_OK sum=658,100`（+9,720 B）；改动 lua 非 ASCII 计数 0。
 - 2026-11-01: **M2 补上 PC 侧画面测试**（口径见 §18）。`CraftOS-PC 2.8.3` 没有 `term.getLine`，此前所有启动链套件都用 `frame` 桩，只证明首帧被调用、不证明画了什么。新增 `tests/screen.lua`：屏幕缓冲 harness，实现启动链用到的 term 子集、以 `_G.term` 替换让 ROM 的 `print`/`write` 落进缓冲（`S.install` / `S.with_term` 保证还原），语义按实测写死（`write` 不折行不夹光标、`clear` 不动光标、`blit` 推进光标、`scroll` 上移并清底、`print` 在底部 `write → setCursorPos(1,h) → scroll(1)`）。新增 `tests/t_bios_screen.lua`（6 组 **141** 断言）：normal 首帧（在 `frame` 返回瞬间快照：`Pyroet OS 0.2.0` / `kernel ok` / `normal journal none`，第 4–19 行空、光标 (20,3)、1 次 clear、帧前那屏是 boot 日志且无 banner、帧后日志从第 3 行第 20 列续写）、trial 首帧（`trial journal applied`，全屏无 `normal journal none`）、无 `/system` 的 fatal 屏（5 行 `BOOT_NO_SYSTEM`/`BOOT_FATAL`/`BOOT_ACTION`/`STARTUP_PLAN`/`STARTUP_FATAL`，无 banner）、根 starter 的三行失败文案（`Pyroet OS: cannot load /system/startup.lua`、`Pyroet OS: disk fault`、提示折成两行）、10x4 小屏截断、harness 自检。`tests/run.lua` 的 FILES 追加 `t_bios_screen`（`run-tests.ps1` 已按 `tests/*.lua` 整体 stage，**未改**）。离线 **4,138 pass / 0 fail / 201 groups**（T4 基线 3,997/195，**+141 断言 / +6 组**）；`install.set` 与 `sizecheck` 未动（28 条 / 458,100 B / MARGIN 108,575 / `WINDOW_OK sum=658,100`）；新增文件非 ASCII 计数 0。
+- 2026-11-01: **O3 落地 `input` / `terminal` 两个 UI capability**（口径见 §19）。`kernel/apps.lua`：`A.CAPS` 7 → **9**（追加在表尾，旧决策文件按前缀解析不受影响）；`build_api` 新增 `api.input = { pullEvent = <受控函数>, keys = <受控表> }` 与 `api.terminal`（受控表，授予时就是宿主句柄本身），复用既有 `gate` / `tree` 桩形态，拒绝时形状不变、只回 `nil, "capability denied: <cap>"`；宿主经 `apps.new({ input = ..., terminal = ... })` 注入；`record.denied_caps` 逐 cap 记账并进 `status().apps[i].denied_caps`（日志仍用 `APP_CAP_DENIED` / `APP_CAP_UNAVAILABLE`，不新增 tag）。`kernel/permissions.lua`：`P.CAPS` 同步 9 项；文档写死"文件里没有的 cap = 未授予，不静默扩权、不在运行时追问，要重问用 `permissions.reset(app)`"。`system/startup.lua`：新增 `P.default_input()`（包装 `os.pullEvent` + `keys` 表）并在 3 步注入 `input` / `terminal`（`opts.input` / `opts.terminal` 可覆盖）。**兼容策略**：manifest 不写 `capabilities` = 空列表 = 全拒绝，无隐式授权（`api.input`/`api.terminal` 是新增字段，旧包不是回退）；manifest 是上限、决策文件只能收紧。新增 `tests/t_caps.lua`（9 组 **101** 断言，含 `startup.run` 端到端），`tests/t_apps.lua` 的 `cap_count` 7 → 9、`tests/run.lua` 的 FILES 追加 `t_caps`。离线 **4,239 pass / 0 fail / 210 groups**（M2 4,138/201，**+101 断言 / +9 组**）；`install.set` 仍 28 条、TOTAL **461,860 B / SIZE_WARN / MARGIN 112,335**、`WINDOW_OK sum=661,860`（+3,760 B）；改动 lua 非 ASCII 计数 0。

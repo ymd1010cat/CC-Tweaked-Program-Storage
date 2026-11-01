@@ -34,7 +34,7 @@ H.report_path = "/offline-report.txt"
 H.rmrf(H.root)
 H.mkdirp(H.root)
 
-local FILES = { "t_boot", "t_kernel", "t_apps", "t_startup",
+local FILES = { "t_boot", "t_kernel", "t_apps", "t_caps", "t_startup",
     "t_net_hosts", "t_net_service", "t_net_app",
     "t_permissions", "t_launcher", "t_settings", "t_desktop",
     "t_installer", "t_installer_app", "t_installer_bridge", "t_ota", "t_ota_server",

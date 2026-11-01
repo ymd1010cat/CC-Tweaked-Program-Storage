@@ -606,8 +606,10 @@ end
         H.eq("status_starts", status.apps[1].starts, 0)
         H.ascii_check("status_ascii", H.joined(lines))
         H.table("caps_list", apps.CAPS)
-        H.eq("cap_count", #apps.CAPS, 7)
+        H.eq("cap_count", #apps.CAPS, 9)
         H.eq("cap_known", apps.cap_known("http"), true)
+        H.eq("cap_input", apps.cap_known("input"), true)
+        H.eq("cap_terminal", apps.cap_known("terminal"), true)
         H.eq("cap_unknown", apps.cap_known("root"), false)
     end
 end

@@ -14,12 +14,16 @@ turns the declaration into a decision:
     4. a line for a capability the manifest no longer declares is stale, not
        corrupt: it is ignored with PERMS_PRUNE. A line naming a capability that
        does not exist at all IS corrupt (see 3).
+    5. a capability the file does not mention is not granted: the runtime denies
+       it (fail closed). A file is never extended behind the user's back --
+       permissions.reset(app) is how a newly declared capability gets asked.
 
 The prompt is split into a pure line builder (`P.prompt_lines`, 26x20 aware, all
-items merged onto one screen) and an `ask` callback. The P2 runtime has no
-keyboard capability at all (DECISIONS.md 9.7), so the answer has to be supplied
-by the caller: `P.new({ ask = function(app, cap, info) return true end })`.
-The default answers `false` -- fail closed, never grant what nobody approved.
+items merged onto one screen) and an `ask` callback. Prompting happens during
+boot, before any app (and therefore before any `input` capability) is reachable,
+so the answer has to be supplied by the caller:
+`P.new({ ask = function(app, cap, info) return true end })`. The default answers
+`false` -- fail closed, never grant what nobody approved.
 
 Log lines (ASCII, one line each, greppable):
 
@@ -53,8 +57,11 @@ P.VIEW = { cols = 26, rows = 20 }
 
 -- Kept in sync with kernel/apps.lua A.CAPS; tests assert the two lists match,
 -- and apps.lua hands its own list in through `known`, so a drift here can only
--- show up as a refused line, never as an invented capability.
-P.CAPS = { "fs.read", "fs.write", "net.rpv", "net.rednet", "redstone", "peripheral", "http" }
+-- show up as a refused line, never as an invented capability. The last two were
+-- appended (O3) so existing decision files, which list a prefix of this order,
+-- keep parsing and keep their meaning.
+P.CAPS = { "fs.read", "fs.write", "net.rpv", "net.rednet", "redstone", "peripheral",
+    "http", "input", "terminal" }
 
 local function short(value, max)
     local s = tostring(value == nil and "nil" or value)

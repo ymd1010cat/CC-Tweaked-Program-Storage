@@ -61,9 +61,9 @@ Usage under test (returns the module instead of booting):
 Options accepted by run(opts): fs, root (boot state prefix), boot, kernel, apps,
 boot_path, kernel_path, apps_path, apps_root, system_root, log, now, term,
 frame, loop, reboot, version, services, rpv, rednet, redstone, peripheral, http,
-write_limit, permissions, permissions_path, perms_root, ask, launcher,
-net, net_path, net_config, net_hosts, installer, installer_path, media_root,
-packages, sha.
+input, terminal, write_limit, permissions, permissions_path, perms_root, ask,
+launcher, net, net_path, net_config, net_hosts, installer, installer_path,
+media_root, packages, sha.
 
 No non-ASCII bytes in this file.
 ]]
@@ -149,6 +149,22 @@ function P.default_frame(opts)
         end)
         return ok
     end
+end
+
+-- O3: the production input host. `input` is a capability now, so an app that
+-- declares it gets the ROM's blocking event pull (api.input.pullEvent) and the
+-- key-name table (api.input.keys). The table is built here instead of handing
+-- the runtime `os` itself, so the host is one explicit object and tests can
+-- replace it without touching a global.
+function P.default_input()
+    local osx = rawget(_G, "os")
+    local keysx = rawget(_G, "keys")
+    local host = {}
+    if type(osx) == "table" and type(osx.pullEvent) == "function" then
+        host.pullEvent = function(...) return osx.pullEvent(...) end
+    end
+    if type(keysx) == "table" then host.keys = keysx end
+    return host
 end
 
 -- ---------------------------------------------------------------------------
@@ -339,12 +355,12 @@ end
 -- permissions and the desktop
 -- ---------------------------------------------------------------------------
 
--- Boot has no keyboard: the P2 app runtime ships seven fixed capabilities and
--- none of them is input (DECISIONS.md 9.7). So the answer to "does this app get
--- this capability" is a policy rather than a question: a package that arrived
--- with the system image is granted exactly what its manifest declares, and
--- anything else is denied until an input service can actually ask. Whichever way
--- it goes, the permission table logs the prompt and every decision.
+-- Boot has no event loop of its own, so "does this app get this capability" is
+-- a policy rather than a question: a prompt would have to own the keyboard
+-- through the runtime, and nothing is started yet at this point. A package that
+-- arrived with the system image is granted exactly what its manifest declares,
+-- and anything else is denied until an input-owning UI can ask. Whichever way it
+-- goes, the permission table logs the prompt and every decision.
 function P.default_ask(log)
     return function(app, cap, info)
         local dir = type(info) == "table" and tostring(info.dir or "") or ""
@@ -602,6 +618,8 @@ function P.run(opts)
             redstone = o.redstone,
             peripheral = o.peripheral,
             http = o.http,
+            input = o.input or P.default_input(),
+            terminal = o.terminal or rawget(_G, "term"),
             sys = sys_for,
         })
         ctx.rt:scan()
