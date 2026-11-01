@@ -182,7 +182,7 @@ return function(H)
         H.contains("settings_move", slog, "key=down action=move item=2")
         H.contains("settings_change", slog, "key=enter action=change item=2 detail=top")
         H.contains("settings_saved", slog, "saved iface_side=top")
-        H.contains("settings_quit", slog, "quit key=escape")
+        H.contains("settings_quit", slog, "quit key=q")
         -- the file: one line replaced, everything else byte-identical
         local cfg = H.read("/etc/network.conf") or ""
         H.contains("settings_cfg_side", cfg, "iface_side=top")
@@ -191,6 +191,62 @@ return function(H)
         H.contains("settings_cfg_keep", cfg, "keep=1")
         H.absent("settings_cfg_old_side", cfg, "iface_side=back")
         H.ascii_check("settings_logs_ascii", H.joined(lines))
+        H.rmrf("/etc/network.conf")
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("apps_ui.settings_exit")
+    -- The real machine sends `key` (raw code) and `char` for the same press, and
+    -- the ROM has no keys.escape: every shape has to leave the app.
+    do
+        H.mkdirp("/etc")
+        H.write("/etc/network.conf", "# hand written\nprefix=24\niface_side=back\n")
+        local K = rawget(_G, "keys")
+        local qcode = (type(K) == "table" and type(K.q) == "number") and K.q or 16
+        local shapes = {
+            { name = "name_q", events = { { "key", "q" } } },
+            { name = "name_Q", events = { { "key", "Q" } } },
+            { name = "char_q", events = { { "char", "q" } } },
+            { name = "char_Q", events = { { "char", "Q" } } },
+            { name = "code_q", events = { { "key", qcode } } },
+            { name = "name_escape", events = { { "key", "escape" } } },
+            { name = "code_escape", events = { { "key", 256 } } },
+            { name = "terminate", events = { { "terminate" } } },
+        }
+        for i = 1, #shapes do
+            local case = shapes[i]
+            local buf = S.buffer(51, 19)
+            local api = app_api({ terminal = buf, input = host(case.events) })
+            local result = run_body("settings_exit_" .. case.name, SETTINGS, api, buf)
+            H.eq("settings_exit_" .. case.name, result, "quit")
+        end
+        H.rmrf("/etc/network.conf")
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("apps_ui.settings_fresh")
+    -- A fresh machine has no /etc/network.conf at all. That is the state the demo
+    -- disk is in, and a settings screen that shows nothing and answers every key
+    -- with "none" looks exactly like a frozen app.
+    do
+        H.rmrf("/etc/network.conf")
+        local buf = S.buffer(51, 19)
+        local api, lines = app_api({
+            terminal = buf,
+            input = host({ { "key", "down" }, { "key", "enter" }, { "key", "q" } }),
+        })
+        local result = run_body("settings_fresh", SETTINGS, api, buf)
+        H.eq("fresh_result", result, "quit")
+        local frame = snap(buf)
+        -- the two documented defaults are offered even with no file (the final
+        -- frame: the marker moved to the second row, whose value was changed)
+        H.eq("fresh_row2", frame[2]:sub(1, 12), "  prefix 24 ")
+        H.eq("fresh_row3", frame[3]:sub(1, 14), "> iface top   ")
+        -- down + enter changed the second row and CREATED the file
+        H.contains("fresh_moved", H.joined(lines), "key=down action=move item=2")
+        H.contains("fresh_saved", H.joined(lines), "saved iface_side=top")
+        local cfg = H.read("/etc/network.conf") or ""
+        H.contains("fresh_cfg", cfg, "iface_side=top")
         H.rmrf("/etc/network.conf")
     end
 
@@ -225,13 +281,16 @@ return function(H)
         -- enter and `r` both refreshed (the one real operation net has)
         H.eq("net_refreshes", H.count(lines, "refresh hosts=1"), 2)
         H.contains("net_ready", H.joined(lines), "ready health=ok ip=10.0.0.5")
-        H.contains("net_quit", H.joined(lines), "quit key=escape")
+        H.contains("net_quit", H.joined(lines), "quit key=q")
         H.ascii_check("net_logs_ascii", H.joined(lines))
     end
 
     -- -----------------------------------------------------------------
     H.group("apps_ui.installer")
     do
+        -- the scan reads the real /apps too: keep it empty so the list is the
+        -- three image packages (other suites create fixtures there)
+        H.rmrf("/apps")
         local buf = S.buffer(51, 19)
         -- no source medium and no bridge: the app must say so, not fake an install
         local api, lines = app_api({
@@ -258,7 +317,7 @@ return function(H)
         -- the selected row is a system package: pressing enter says it is locked
         -- (a real answer, not a fake install)
         H.contains("installer_locked", logtext, "key=enter action=locked")
-        H.contains("installer_quit", logtext, "quit key=escape")
+        H.contains("installer_quit", logtext, "quit key=q")
         -- the screen shows what is installed and that there is no source medium
         local text = table.concat(frame, "\n")
         H.contains("installer_list_launcher", text, "launcher")

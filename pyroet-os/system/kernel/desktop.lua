@@ -87,6 +87,10 @@ D.LOAN_SECONDS = 15
 -- fallback bound for a machine whose event source cannot start a timer: after
 -- this many events the loan ends anyway (never a dead end)
 D.LOAN_EVENTS = 40
+-- hard caps (D1-fix round 5): whatever happens, a loan ends. Hitting one of these
+-- is a bug-worthy event, so it gets its own line: DESKTOP_LOAN_ABORT.
+D.LOAN_ABORT_EVENTS = 200
+D.LOAN_ABORT_SECONDS = 60
 
 local function short(value, max)
     local s = tostring(value == nil and "nil" or value)
@@ -165,6 +169,9 @@ function D.new(opts)
     self.loan_events = o.loan_events
     if self.loan_seconds == nil then self.loan_seconds = D.LOAN_SECONDS end
     self.start_timer = o.startTimer
+    self.clock = o.clock
+    self.loan_abort_events = o.loan_abort_events
+    self.loan_abort_seconds = o.loan_abort_seconds
     self.reason = nil
     self.exited = false
     return self
@@ -339,6 +346,19 @@ end
 -- `desk_focus` event (`display only: <name>`), so it repaints immediately
 -- instead of waiting for a key that no app is going to give it.
 
+-- wall clock for the hard loan cap (injectable: tests drive it)
+function D:now()
+    local clock = self.clock
+    if clock == nil then
+        local osx = rawget(_G, "os")
+        clock = type(osx) == "table" and osx.clock or nil
+    end
+    if type(clock) ~= "function" then return nil end
+    local ok, value = pcall(clock)
+    if ok and type(value) == "number" then return value end
+    return nil
+end
+
 function D:park_one(name, reason)
     if name == nil or self.parked[name] then return false end
     self.parked[name] = true
@@ -352,7 +372,7 @@ function D:loan_start(name)
     if self.loan ~= nil then self:loan_end("replaced") end
     local all = self:running_all()
     local entry = all[name]
-    self.loan = { name = name, timer = nil, events = 0 }
+    self.loan = { name = name, timer = nil, events = 0, started = self:now() }
     self.loans = self.loans + 1
     self:log("DESKTOP_LOAN app=" .. short(name, 24) .. " reason=no_input"
         .. " caps=" .. tostring(#((entry and entry.capabilities) or {})))
@@ -361,15 +381,30 @@ function D:loan_start(name)
     -- not stuck on a frame nobody can leave
     if type(self.start_timer) == "function" and (self.loan_seconds or 0) > 0 then
         local called, id = pcall(self.start_timer, self.loan_seconds)
-        if called then
+        if called and id ~= nil then
             self.loan.timer = id
             self:log("DESKTOP_LOAN_TIMER id=" .. short(id, 12)
                 .. " seconds=" .. tostring(self.loan_seconds))
+        elseif called then
+            -- the source answered "no timer": no bounded loan is possible
+            self:log("DESKTOP_LOAN_TIMER_SKIP reason=no_timer")
         else
             self:log("DESKTOP_LOAN_TIMER_FAIL err=" .. short(id, 40))
         end
     else
         self:log("DESKTOP_LOAN_TIMER_SKIP reason=no_timer")
+    end
+    if self.loan.timer == nil then
+        -- no timer means no bounded loan: parking the app (and telling the
+        -- desktop why) is the only guaranteed way back to a usable screen
+        self:log("DESKTOP_LOAN_ABORT app=" .. short(name, 24) .. " reason=no_timer")
+        self.loan = nil
+        self.loan_ends = self.loan_ends + 1
+        self:park_one(name, "no_timer")
+        self.foreground = self.name
+        self:deliver("desk_focus", "display only: " .. name)
+        self:tick()
+        return false
     end
     -- draw the app's first frame now: "started" on the launcher's hint row is
     -- not the same as the app being visible
@@ -540,6 +575,25 @@ function D:dispatch(event, p1, p2, p3)
         self.loan.events = (self.loan.events or 0) + 1
         if self.loan.events >= (self.loan_events or D.LOAN_EVENTS) then
             self:loan_end("events")
+            return false
+        end
+        -- hard caps: steps or wall clock. A loan that hits one of these was not
+        -- ending on its own, which is exactly what DESKTOP_LOAN_ABORT records.
+        local abort = nil
+        if self.loan.events >= (self.loan_abort_events or D.LOAN_ABORT_EVENTS) then
+            abort = "events"
+        elseif self.loan.started ~= nil then
+            local now = self:now()
+            if now ~= nil
+                and (now - self.loan.started) >= (self.loan_abort_seconds
+                    or D.LOAN_ABORT_SECONDS) then
+                abort = "clock"
+            end
+        end
+        if abort ~= nil then
+            self:log("DESKTOP_LOAN_ABORT app=" .. short(self.loan.name, 24)
+                .. " reason=" .. abort .. " steps=" .. tostring(self.loan.events))
+            self:loan_end("abort")
         end
         return false
     end

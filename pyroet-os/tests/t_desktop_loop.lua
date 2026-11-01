@@ -720,6 +720,133 @@ end
     end
 
     -- -----------------------------------------------------------------
+    H.group("desktop_loop.loan_abort")
+    -- Whatever happens, a loan has to end (round 5): stopped / timeout / abort.
+    -- These cases drive the abort path (hard step cap, and "no timer at all"),
+    -- then prove the launcher is back on screen and the next key works -- while
+    -- the kernel services were never touched by the loan.
+    do
+        local function painter(name, text)
+            return {
+                manifest = 'return { name = "' .. name .. '", version = "0.1.0",'
+                    .. ' capabilities = { "fs.read" } }',
+                main = string.format([[
+return function(manifest, api)
+    local t = rawget(_G, "term")
+    for y = 1, 19 do
+        t.setCursorPos(1, y)
+        t.write(%q .. " " .. tostring(y) .. string.rep(" ", 40))
+    end
+    while true do api.yield() end
+end
+]], text),
+            }
+        end
+
+        local function once(tag, events, opts)
+            H.rmrf("/apps")
+            H.app_package("/apps/aaforever.app", painter("aaforever", "forever ui"))
+            H.rmrf("/etc/perms")
+            local dir = H.case_dir("loop", "abort_" .. tag)
+            bootable(dir)
+            local host = new_host()
+            host.keys = KEYS
+            local log, lines = H.logger()
+            local buf = S.buffer(51, 19)
+            local frames, pulls = {}, 0
+            local function snap()
+                local out = {}
+                for y = 1, 19 do out[y] = buf.row(y) end
+                return out
+            end
+            local pull = function()
+                frames[pulls + 1] = snap()
+                pulls = pulls + 1
+                local event = events[pulls]
+                if event == nil then return "terminate" end
+                return event[1], event[2]
+            end
+            local result = nil
+            local saved = rawget(_G, "PYROET_APP_NOPAINT")
+            rawset(_G, "PYROET_APP_NOPAINT", nil)
+            local okrun, why = pcall(function()
+                local okw, value = S.with_term(buf, function()
+                    return startup.run({
+                        fs = F,
+                        root = dir,
+                        log = log,
+                        apps_root = "/apps",
+                        input = host,
+                        pull_event = pull,
+                        terminal = buf,
+                        start_timer = opts.start_timer,
+                        loan_seconds = 15,
+                        loan_events = opts.loan_events or 1000,
+                        loan_abort_events = opts.loan_abort_events,
+                        reboot = function() error("rebooted unexpectedly") end,
+                        frame = function() return true end,
+                    })
+                end)
+                result = value
+                return okw
+            end)
+            rawset(_G, "PYROET_APP_NOPAINT", saved)
+            return { result = result, lines = lines, frames = frames,
+                pulls = pulls, ok = okrun and why == true }
+        end
+
+        -- 1) the loan timer is armed but never fires, so the hard step cap ends
+        --    the loan: DESKTOP_LOAN_ABORT reason=events -> back to the launcher
+        local run1 = once("events", {
+            { "key", 14 },   -- launch aaforever (index 1)
+            { "key", 11 },
+            { "key", 11 },
+            { "key", 11 },
+            { "key", 11 },   -- 4 events: the 4th hits loan_abort_events = 4
+        }, {
+            start_timer = function() return 99 end,
+            loan_events = 1000,
+            loan_abort_events = 4,
+        })
+        H.check("abort_run_ok", run1.ok, tostring(run1.result))
+        H.has(run1.lines, "DESKTOP_LOAN app=aaforever reason=no_input caps=1")
+        H.has(run1.lines, "DESKTOP_LOAN_ABORT app=aaforever reason=events")
+        H.has(run1.lines, "DESKTOP_LOAN_END app=aaforever reason=abort")
+        H.has(run1.lines, "DESKTOP_PARK app=aaforever reason=loan_over")
+        H.has(run1.lines, "DESKTOP_FOREGROUND app=launcher reason=loan_end")
+        H.has(run1.lines, "APP_LOG app=launcher msg=focus msg=display only: aaforever")
+        -- the launcher is back on screen: its list, not the app's frame
+        local back = run1.frames[6]
+        local joined = table.concat(back or {}, "\n")
+        H.absent("abort_launcher_list", joined, "forever ui")
+        H.contains("abort_launcher_status", joined, "apps sel")
+        -- the loan never starved the kernel: every service is still running
+        local status = run1.result and run1.result.kernel:status()
+        H.eq("abort_kernel_health", status and status.health, "ok")
+        H.check("abort_services_running",
+            status ~= nil and (status.counts.running or 0) >= 1,
+            "running=" .. tostring(status and status.counts.running))
+
+        -- 2) no timer at all: a loan cannot be started, the app is parked and
+        --    the desktop says why (never a frame that cannot be left)
+        local run2 = once("notimer", {
+            { "key", 14 },   -- launch aaforever
+            { "key", 11 },   -- the launcher handles this one right away
+        }, {
+            start_timer = function() return nil end,
+        })
+        H.check("notimer_run_ok", run2.ok, tostring(run2.result))
+        H.has(run2.lines, "DESKTOP_LOAN_TIMER_SKIP reason=no_timer")
+        H.has(run2.lines, "DESKTOP_LOAN_ABORT app=aaforever reason=no_timer")
+        H.has(run2.lines, "DESKTOP_PARK app=aaforever reason=no_timer")
+        H.has(run2.lines, "APP_LOG app=launcher msg=focus msg=display only: aaforever")
+        -- the next key moved the launcher's own marker (keyboard is back)
+        local after = table.concat(run2.frames[3] or {}, "\n")
+        H.contains("notimer_marker", after, "> launcher")
+        H.rmrf("/apps")
+    end
+
+    -- -----------------------------------------------------------------
     H.group("desktop_loop.terminate")
     do
         H.rmrf("/etc/perms")

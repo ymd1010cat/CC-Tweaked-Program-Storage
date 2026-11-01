@@ -802,18 +802,51 @@ function M.paint_once(state, api, term, opts)
     return lines
 end
 
+-- D1-fix round 5: one quit vocabulary, for keys and for the event loop.
+-- The real machine delivers `char` for a typed letter but `key` (a raw code) for
+-- the same press, and `keys.escape` does not exist in the CraftOS-PC ROM, so:
+--   * a key *name* ("q", "Q", "escape") quits,
+--   * a raw keycode is resolved through the ROM keys table first (CraftOS-PC
+--     sends q=16, CC:Tweaked sends 81 -- both resolve to the same name),
+--   * 256 is accepted as escape even when the ROM has no keys.escape entry.
+M.ESCAPE_CODE = 256
+-- the two codes a quit can arrive as when the ROM's keys table has no name for
+-- them: CraftOS-PC sends q=16, CC:Tweaked sends the GLFW code 81, and 256 is
+-- escape on both (the ROM has no keys.escape entry at all)
+M.QUIT_CODES = { [16] = true, [81] = true, [256] = true }
+
+function M.quit_key(key, api)
+    if type(key) == "number" then
+        if M.QUIT_CODES[key] then return true end
+        local name = M.code_name(key, api)
+        if name ~= nil then
+            key = name
+        elseif key == M.ESCAPE_CODE then
+            key = "escape"
+        else
+            return false
+        end
+    end
+    if type(key) ~= "string" then return false end
+    key = key:lower()
+    return key == "q" or key == "escape" or key == "quit"
+end
+
 -- `enter` runs the real action for the selected row (install / remove / locked),
 -- `c` cancels a pending confirmation, `q`/escape leaves. `state.unavailable`
 -- (no installer bridge, no source medium) is shown, never faked.
 function M.dispatch_event(state, event, p1, api, opts)
     if event == "key" then
+        -- the raw value is checked for quit FIRST: a keycode with no name in
+        -- this ROM (escape is 256 and has no keys.escape entry) must still leave
+        if M.quit_key(p1, api) then return "quit", tostring(p1) end
         local key = p1
         if type(key) == "number" then
             key = M.code_name(key, api)
             if key == nil then return "none" end
         end
         key = tostring(key == nil and "" or key)
-        if key == "escape" or key == "q" then return "quit", "escape" end
+        if M.quit_key(key, api) then return "quit", tostring(key) end
         local action, detail = M.handle_key(state, key, api, opts)
         M.note(api, "key=" .. key .. " action=" .. tostring(action)
             .. " index=" .. tostring(state.index or 0)
@@ -836,6 +869,7 @@ function M.dispatch_event(state, event, p1, api, opts)
         return "none"
     end
     if event == "desk_focus" or event == "term_resize" then return "repaint" end
+    if event == "terminate" or event == "shutdown" then return "quit", event end
     return "none"
 end
 

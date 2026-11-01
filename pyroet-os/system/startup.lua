@@ -649,6 +649,10 @@ function P.start_desktop_loop(ctx, o, log)
         startTimer = o.start_timer or (type(rawget(_G, "os")) == "table"
             and rawget(_G, "os").startTimer or nil),
         loan_seconds = o.loan_seconds,
+        loan_events = o.loan_events,
+        loan_abort_events = o.loan_abort_events,
+        loan_abort_seconds = o.loan_abort_seconds,
+        clock = o.clock,
     })
     if not okn or type(desktop) ~= "table" then
         log("STARTUP_DESKTOP_FAIL err=" .. short(desktop))

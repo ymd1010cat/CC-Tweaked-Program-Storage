@@ -289,6 +289,7 @@ function M.refresh(state, api, opts)
     state.apps_error = apps_error
     local conf, bad, conf_error = M.read_conf(api, state.conf_path or o.conf_path)
     state.conf = conf
+    state.conf_missing = (#conf == 0)
     state.bad_conf = bad or 0
     state.conf_error = conf_error
     state.install_entries = M.read_install_set(api)
@@ -486,14 +487,21 @@ function M.items(state)
     for i = 1, #M.ITEMS do
         local item = M.ITEMS[i]
         local value = have[item.key]
-        if value ~= nil then
-            out[#out + 1] = {
-                key = item.key,
-                label = item.label,
-                value = value,
-                choices = item.choices,
-            }
+        local default = false
+        if value == nil then
+            -- no line yet: offer the first choice. A fresh machine has no
+            -- /etc/network.conf at all, and a settings screen that can show
+            -- nothing is not a settings screen.
+            value = item.choices[1]
+            default = true
         end
+        out[#out + 1] = {
+            key = item.key,
+            label = item.label,
+            value = value,
+            default = default,
+            choices = item.choices,
+        }
     end
     return out
 end
@@ -531,7 +539,14 @@ function M.save_item(api, path, key, value)
     local called, text, err = pcall(fsx.read, path)
     if not called then text, err = nil, text end
     if type(text) ~= "string" then
-        return nil, tostring(err or "cannot read " .. tostring(path))
+        -- a fresh machine has no config yet: the first change creates it
+        text = ""
+    end
+    local parent = tostring(path):match("^(.*)/[^/]+$")
+    if parent and parent ~= "" and type(fsx.exists) == "function"
+        and type(fsx.makeDir) == "function" then
+        local ok, here = pcall(fsx.exists, parent)
+        if not (ok and here) then pcall(fsx.makeDir, parent) end
     end
     local wanted = tostring(key) .. "=" .. tostring(value)
     local out, done = {}, false
@@ -690,17 +705,50 @@ function M.paint_once(state, api, term)
     return lines
 end
 
+-- D1-fix round 5: one quit vocabulary, for keys and for the event loop.
+-- The real machine delivers `char` for a typed letter but `key` (a raw code) for
+-- the same press, and `keys.escape` does not exist in the CraftOS-PC ROM, so:
+--   * a key *name* ("q", "Q", "escape") quits,
+--   * a raw keycode is resolved through the ROM keys table first (CraftOS-PC
+--     sends q=16, CC:Tweaked sends 81 -- both resolve to the same name),
+--   * 256 is accepted as escape even when the ROM has no keys.escape entry.
+M.ESCAPE_CODE = 256
+-- the two codes a quit can arrive as when the ROM's keys table has no name for
+-- them: CraftOS-PC sends q=16, CC:Tweaked sends the GLFW code 81, and 256 is
+-- escape on both (the ROM has no keys.escape entry at all)
+M.QUIT_CODES = { [16] = true, [81] = true, [256] = true }
+
+function M.quit_key(key, api)
+    if type(key) == "number" then
+        if M.QUIT_CODES[key] then return true end
+        local name = M.code_name(key, api)
+        if name ~= nil then
+            key = name
+        elseif key == M.ESCAPE_CODE then
+            key = "escape"
+        else
+            return false
+        end
+    end
+    if type(key) ~= "string" then return false end
+    key = key:lower()
+    return key == "q" or key == "escape" or key == "quit"
+end
+
 -- one delivered event -> one action. Returns "quit" when the app has to end,
 -- otherwise "move" | "change" | "denied" | "none" | "repaint".
 function M.dispatch_event(state, event, p1, api)
     if event == "key" then
+        -- the raw value is checked for quit FIRST: a keycode with no name in
+        -- this ROM (escape is 256 and has no keys.escape entry) must still leave
+        if M.quit_key(p1, api) then return "quit", tostring(p1) end
         local key = p1
         if type(key) == "number" then
             key = M.code_name(key, api)
             if key == nil then return "none" end
         end
         key = tostring(key == nil and "" or key)
-        if key == "escape" or key == "q" then return "quit", "escape" end
+        if M.quit_key(key, api) then return "quit", tostring(key) end
         local action, detail = M.handle_key(state, key, api)
         M.note(api, "key=" .. key .. " action=" .. tostring(action)
             .. " item=" .. tostring(state.item or 1)
@@ -714,6 +762,7 @@ function M.dispatch_event(state, event, p1, api)
     end
     if event == "desk_focus" then return "repaint" end
     if event == "term_resize" then return "repaint" end
+    if event == "terminate" or event == "shutdown" then return "quit", event end
     return "none"
 end
 

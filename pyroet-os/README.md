@@ -588,7 +588,7 @@ python tools/build_release.py --project pyroet-os --out dist/release
 | 系统应用 | launcher 0.2.0（D1：+5,209 B；D1-fix 第二轮：+2,476 B，两种按键形态；第三轮：+403 B，desk_focus）/ settings 0.2.0（T14：20,548→31,350 B，可键盘编辑并落盘）/ installer 0.2.0（T14：33,774→38,907 B，交接即可操作）/ net 0.2.0（T14：15,493→20,319 B，刷新/滚动） |
 | `installer.app`（T1/T4） | 0.1.0，34,853 B（main.lua 33,774 + manifest.lua 1,079） |
 | OTA 服务端（`ota/server.lua`） | 1.0，27,927 B（不进镜像） |
-| 镜像 | 29 条 / 509,303 B / `SIZE_WARN` / `WINDOW_OK sum=709303` |
+| 镜像 | 29 条 / 540,181 B / `SIZE_WARN` / `WINDOW_OK sum=740181` |
 
 设计口径以 [`DECISIONS.md`](DECISIONS.md)（架构、门禁、发布）与 [`P6-design.md`](P6-design.md)
 （文件集更新、journal、崩溃窗口、bootloader 决策表）为准；本文是面向使用者的入口，

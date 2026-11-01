@@ -72,6 +72,12 @@ for i = 1, #FILES do
                 H.group(name .. ".crash")
                 H.check("completed", false, tostring(reason))
             end
+            -- CraftOS-PC's "too long without yielding" watchdog counts the wall
+            -- time of ONE event-loop turn, and this whole file runs as one turn:
+            -- the bigger the suite, the closer it gets. Hand control back to the
+            -- ROM between files so the watchdog measures a single suite.
+            os.queueEvent("PYROET_SUITE_YIELD")
+            os.pullEvent("PYROET_SUITE_YIELD")
         end
     end
 end

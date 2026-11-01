@@ -72,7 +72,9 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
    The three system apps are keyboard-operable (T14): enter on settings /
    installer / net hands them the keyboard and the screen.
      settings   up/down pick a row, left/right/enter cycle its value and
-                write that one line of /etc/network.conf, q back
+                write that one line of /etc/network.conf (a machine without the
+                file gets the two documented defaults and the first change
+                creates it), q back
      net        up/down scroll the hosts, enter or r refresh (rpv status,
                 hosts, probe target), q back
      installer  up/down (or a digit) pick a package, enter installs /
@@ -80,8 +82,8 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 q back. No source medium shows "disk none", no bridge
                 shows "unavailable" -- it never pretends to install.
    A third-party package that declares no "input" still gets the screen
-   loan (visible frame, DESKTOP_LOAN, ends on its own stop or the loan
-   timer). The desktop owns the console, so from STARTUP_DESKTOP_QUIET on
+   loan (visible frame, DESKTOP_LOAN, ends on its own stop, the loan timer, or
+   a hard cap logged as DESKTOP_LOAN_ABORT -- a loan always ends). The desktop owns the console, so from STARTUP_DESKTOP_QUIET on
    the boot log only goes to /kernel.log -- that is normal, not a hang.
 3. Check: cat /boot.ok ; tail /kernel.log
    /boot.ok is one line:
