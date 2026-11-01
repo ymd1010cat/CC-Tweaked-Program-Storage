@@ -30,6 +30,16 @@ Log tags worth watching (all lines are ASCII)
   STANDBY_DHCP_OFF HA_SYNC_TX HA_SYNC_MISS HA_SYNC_REPLY HA_SYNC_BAD
   SYNCED_DHCP_CONFIG TAKEOVER_ACTIVE TAKEOVER_ABORT HA_TAKEOVER_HOLD
   HA_ARP_ANNOUNCE HA_DHCP_STOP STANDBY_MODE FIREWALL_DROP HA_MODE
+  HA_DHCP_POOL_OFF_SUBNET HA_DHCP_POOL_ON_IFACE
+
+Cross-subnet pools
+  A synced pool outside the VIP wire (the 10.100.0.0/16 plan) is served only
+  when this node really owns a second interface inside that subnet: a pool
+  interface created by apps/core_router.lua M.enable_pool_iface (or an extra
+  role.txt `iface=` line). Without one the takeover is refused with
+  HA_DHCP_POOL_OFF_SUBNET ... hint=needs_pool_iface and
+  TAKEOVER_ABORT reason=pool_off_subnet, because rpv would otherwise hand the
+  clients a gateway and a lease prefix that belong to the VIP wire.
 
 Wire format (ASCII, one UDP datagram per message)
   request : RPV1-HA/1 SYNC id=<computer id> nonce=<n>
@@ -789,6 +799,30 @@ function M.evaluate(rt, now)
     return ((now or now_of(rt)) - anchor) >= rt.opt.takeover_after
 end
 
+-- The local interface (other than the VIP wire) whose subnet contains the whole
+-- pool, or nil. This is what a cross-subnet pool needs: a pool interface created
+-- by apps/core_router.lua M.enable_pool_iface, or an extra role.txt iface line.
+-- rpv only routes to the pool if the address is connected somewhere, and the
+-- gateway it hands out comes from that interface (see takeover()).
+function M.pool_iface_for(node, cfg, public_iface)
+    if type(node) ~= "table" or type(node.ifaces) ~= "table" or type(cfg) ~= "table" then
+        return nil
+    end
+    local lo = cfg.pool_start_int or M.parse_ipv4(cfg.pool_start)
+    local hi = cfg.pool_end_int or M.parse_ipv4(cfg.pool_end)
+    if not lo or not hi then return nil end
+    for _, iface in ipairs(node.ifaces) do
+        if type(iface) == "table" and iface ~= public_iface
+            and type(iface.net) == "number" and type(iface.prefix) == "number" then
+            if M.in_subnet(lo, iface.net, iface.prefix)
+                and M.in_subnet(hi, iface.net, iface.prefix) then
+                return iface
+            end
+        end
+    end
+    return nil
+end
+
 function M.takeover(rt, why)
     if type(rt) ~= "table" or rt.role ~= "standby" or rt.mode == "ACTIVE" then return false end
     local node = rt.node
@@ -815,11 +849,38 @@ function M.takeover(rt, why)
         log(node, "TAKEOVER_ABORT reason=dhcp_port_collision port=%d", cfg.dhcp_port)
         return false
     end
-    if rt.public_iface.net and rt.public_iface.prefix
-        and not M.in_subnet(cfg.pool_start_int or M.parse_ipv4(cfg.pool_start),
-            rt.public_iface.net, rt.public_iface.prefix) then
-        log(node, "HA_DHCP_POOL_OFF_SUBNET pool=%s-%s subnet=%s/%d",
-            cfg.pool_start, cfg.pool_end, M.int2ip(rt.public_iface.net), rt.public_iface.prefix)
+    -- A pool outside the VIP wire is not refused as such: it is refused unless
+    -- this node owns an interface inside that subnet. rpv takes the lease prefix
+    -- from node.ifaces[1] and the gateway we write into node.cfg, so serving a
+    -- 10.100 pool from a 10.200-only box would hand out a gateway no client can
+    -- reach. The fix is a pool interface (core_router.M.enable_pool_iface, or a
+    -- second role.txt iface), never a relaxed check.
+    local pool_lo = cfg.pool_start_int or M.parse_ipv4(cfg.pool_start)
+    local pool_hi = cfg.pool_end_int or M.parse_ipv4(cfg.pool_end)
+    local on_vip = false
+    if rt.public_iface.net and rt.public_iface.prefix and pool_lo and pool_hi then
+        on_vip = M.in_subnet(pool_lo, rt.public_iface.net, rt.public_iface.prefix)
+            and M.in_subnet(pool_hi, rt.public_iface.net, rt.public_iface.prefix)
+    end
+    if not on_vip and pool_lo and pool_hi then
+        local pool_iface = M.pool_iface_for(node, cfg, rt.public_iface)
+        if type(pool_iface) == "table" then
+            log(node, "HA_DHCP_POOL_ON_IFACE pool=%s-%s iface=%s cidr=%s",
+                cfg.pool_start, cfg.pool_end, tostring(pool_iface.name),
+                tostring(pool_iface.cidr))
+        else
+            rt.pool_off_subnet = true
+            rt.stats.takeover_aborts = (rt.stats.takeover_aborts or 0) + 1
+            log(node, "HA_DHCP_POOL_OFF_SUBNET pool=%s-%s subnet=%s/%d hint=needs_pool_iface",
+                cfg.pool_start, cfg.pool_end, M.int2ip(rt.public_iface.net),
+                rt.public_iface.prefix)
+            log(node, "TAKEOVER_ABORT reason=pool_off_subnet pool=%s-%s (add a pool interface)",
+                cfg.pool_start, cfg.pool_end)
+            return false
+        end
+        rt.pool_off_subnet = nil
+    else
+        rt.pool_off_subnet = nil
     end
     if rt.public_iface.prefix and cfg.prefix and cfg.prefix ~= rt.public_iface.prefix then
         log(node, "HA_DHCP_PREFIX_SYNCED synced=%d iface=%d (rpv serves the interface prefix)",
@@ -1074,6 +1135,7 @@ function M.start_router(node, rpv, opts)
         pending_nonce = nil, pending_sent = nil,
         synced_dhcp_config = nil, config_text = "",
         dhcp_server = nil, socket = nil, started = false,
+        pool_off_subnet = nil,
         stats = {
             sync_tx = 0, sync_rx = 0, sync_replies = 0, sync_bad = 0,
             sync_stale = 0, sync_tx_fail = 0, takeovers = 0, takeover_aborts = 0,

@@ -4,7 +4,7 @@
 #
 # Stages rpv/, tests/, tools/ and the pure app-layer modules (apps/http_*.lua,
 # hosts.lua, wan_acl.lua, router.lua, rhtp_server.lua, backup_router.lua,
-# core_router.lua) on a single headless computer: no role.txt,
+# core_router.lua, ha_ctl.lua) on a single headless computer: no role.txt,
 # no running apps, no modems, no second computer, no topology. node2/startup.lua is
 # staged under node2/ so the router tests can exercise its app loader. The tests
 # exercise the pure logic (codecs, route table, crypto KATs, WAN AEAD state machine,
@@ -35,6 +35,7 @@ Copy-Item (Join-Path $root "poc\apps\router.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\rhtp_server.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\backup_router.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\core_router.lua") (Join-Path $dir "apps") -Force
+Copy-Item (Join-Path $root "poc\apps\ha_ctl.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\tests\startup.lua") (Join-Path $dir "startup.lua") -Force
 # the bootstrap is staged under node2/ so tests/t_router.lua can load its app loader
 # (RPV_BOOT_TEST hook) without booting: same relative path as in the repo

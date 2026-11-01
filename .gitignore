@@ -15,3 +15,7 @@ logs/
 users.db
 psk.txt
 /dist/
+# 可重建产物：psh-cjk-font.zip 由 pyromputer-os/tools/respack 生成，不入库
+/psh-cjk-font.zip
+# 会话交接文档（HANDOFF-YYYYMMDD.md，属会话产物，不入库）
+/HANDOFF-*.md

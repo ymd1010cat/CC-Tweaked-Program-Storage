@@ -21,7 +21,14 @@ What this file is
      10.200.0.0/24 and whose DESTINATION is in the internal zone
      192.168.1.0/24. The hook then chains to the original rpv NAT hook, so
      normal NAT translation keeps working.
-   5. HA configuration sync. After the lock the node binds UDP 6710 and answers
+   5. Pool interface (optional). When the DHCP pool does not live on the public
+      wire (10.100.0.0/16 instead of 10.200.0.0/24) the switch needs a second
+      address inside that pool subnet; M.enable_pool_iface() creates it, installs
+      the connected route and writes the pool/gateway keys. Without it rpv
+      answers DHCP with the first interface's gateway and prefix, so the leases
+      point at an unreachable router. setup_router() runs this step when
+      cfg.pool_iface is configured (or opts.pool_iface is passed).
+   6. HA configuration sync. After the lock the node binds UDP 6710 and answers
       the RPV1-HA/1 SYNC requests a hot-standby switch sends: the reply is the
       CFG datagram apps/backup_router.lua builds (master/to/nonce plus
       pool_start/pool_end/lease_time/gateway/dns/prefix/dhcp_port/uptime), so a
@@ -45,14 +52,47 @@ Usage
   core.setup_router(node, rpv, { ha_sync = false })   -- no HA responder
   core.setup_router(node, rpv, { ha_port = 6711 })     -- another sync port
   core.setup_router(node, rpv, { ha_primary_client = true }) -- log every reply
+  core.setup_router(node, rpv, { pool_iface = { side = "back", channel = 4200,
+      cidr = "10.100.0.1/16", mtu = 256 } })           -- pool on its own subnet
 
   The global setup_router(node[, rpv, opts]) is installed as a convenience so a
   startup script can call it without keeping the returned table.
+
+Pool interface (cfg.pool_iface / opts.pool_iface)
+  spec = { side = "back", channel = 4200, cidr = "10.100.0.1/16", mtu = 256,
+           name = "POOL", pool = "10.100.0.10-10.100.1.250" }
+  M.enable_pool_iface(node, rpv, spec) -> runtime table, or nil plus one of
+    "no_node" "no_spec" "bad_cidr" "bad_side" "bad_channel" "bad_mtu"
+    "no_ifaces" "no_route_table" "iface_in_use" "iface_overlap" "bad_pool"
+    "pool_off_subnet"
+  Every failure also logs CORE_ROUTER_POOL_IFACE_FAIL reason=<code> ...
+  The call is idempotent: the very same side/channel/cidr returns the runtime it
+  installed first (CORE_ROUTER_POOL_IFACE_REUSE) and the connected route is
+  refreshed, never duplicated. pool / pool_start+pool_end narrow the range; with
+  neither, the whole usable range of the interface subnet is used and the
+  interface address itself is skipped. The pool must be inside the interface
+  subnet, otherwise the call fails with "pool_off_subnet".
+
+  Limits worth knowing:
+    * rpv serves the lease prefix of node.ifaces[1] (rpv/services.lua:184), not
+      of the pool interface. A pool interface that is not iface[1] therefore
+      logs CORE_ROUTER_POOL_IFACE_PREFIX and the clients get that other prefix.
+      Keep the pool inside one /24 of the first interface, or make the pool
+      interface iface[1], when the client netmask matters.
+    * the interface is appended at runtime: the modem on spec.side must already
+      be attached, and this module only tries rpv.link_open() through pcall. A
+      failure logs CORE_ROUTER_POOL_IFACE_NOLINK and is not fatal, so the switch
+      keeps forwarding; it just cannot use that wire until it is rebooted.
+    * node.cfg.dhcp_pool / dhcp_gw / dhcp_dns are written unless spec.set_pool
+      or spec.set_gateway is false, so rpv's own boot path picks the same pool.
 
 HA log tags (all lines are ASCII)
   CORE_ROUTER_HA_READY CORE_ROUTER_HA_OFF CORE_ROUTER_HA_UNAVAILABLE
   CORE_ROUTER_HA_REPLY CORE_ROUTER_HA_SILENT CORE_ROUTER_HA_RATE
   CORE_ROUTER_HA_BAD CORE_ROUTER_HA_SEND_FAIL
+  CORE_ROUTER_POOL_IFACE_READY CORE_ROUTER_POOL_IFACE_REUSE
+  CORE_ROUTER_POOL_IFACE_FAIL CORE_ROUTER_POOL_IFACE_NOLINK
+  CORE_ROUTER_POOL_IFACE_PREFIX
 
 /disk/static_ip.conf
   ASCII, one `MAC,IP` pair per line, blank lines and `#` comments ignored:
@@ -91,6 +131,14 @@ M.HA_MAX_BYTES = 512           -- one datagram; larger packets are never parsed
 M.HA_MAX_TOKENS = 32           -- fields per datagram
 M.HA_RATE_LIMIT = 5            -- requests accepted per source per window
 M.HA_RATE_WINDOW = 1           -- seconds of that window
+
+-- optional pool interface: the address a DHCP pool outside the public wire needs
+M.POOL_IFACE_NAME = "POOL"     -- default interface name of that side
+M.POOL_IFACE_MTU = 256         -- same default as the other templates
+M.POOL_IFACE_MIN_MTU = 68      -- IPv4 minimum
+M.POOL_IFACE_MAX_MTU = 65535
+M.POOL_IFACE_PREFIX_MIN = 8    -- a pool subnet narrower than /30 has no hosts
+M.POOL_IFACE_PREFIX_MAX = 30
 
 -- what the switch reports when it has neither a DHCP server nor a pool spec
 M.DEFAULT_DHCP_CONFIG = {
@@ -662,6 +710,276 @@ local function find_rpv(node, explicit)
     return nil
 end
 
+-- ===== optional pool interface (cross-subnet DHCP pool) ====================
+-- A DHCP pool that is not inside the public wire -- the 10.100.0.0/16 plan is
+-- the example -- needs its own interface: an address inside that subnet, a modem
+-- channel and a connected route. rpv's DHCP server takes the gateway and the
+-- lease prefix from node.ifaces[1] (rpv/services.lua:181/184), so without this
+-- second address every lease would name a gateway the clients cannot reach and
+-- a standby would log HA_DHCP_POOL_OFF_SUBNET on every takeover attempt.
+
+-- "10.100.0.1/16" -> ip, prefix. nil, nil, reason when invalid.
+function M.parse_cidr(text)
+    if type(text) ~= "string" then return nil, nil, "cidr must be text" end
+    local ip_s, prefix_s = trim(text):match("^([%d%.]+)/(%d%d?)$")
+    if not ip_s then return nil, nil, "expected a.b.c.d/prefix" end
+    local ip = M.parse_ipv4(ip_s)
+    if not ip then return nil, nil, "bad IPv4 '" .. trim(ip_s) .. "'" end
+    local prefix = tonumber(prefix_s)
+    if not prefix or prefix < M.POOL_IFACE_PREFIX_MIN or prefix > M.POOL_IFACE_PREFIX_MAX then
+        return nil, nil, "prefix must be " .. M.POOL_IFACE_PREFIX_MIN .. ".." .. M.POOL_IFACE_PREFIX_MAX
+    end
+    return ip, prefix
+end
+
+-- network address of ip/prefix
+function M.masked_ip(ip, prefix)
+    local n = to_ip_int(ip)
+    local bits = tonumber(prefix)
+    if not n or not bits or bits < 0 or bits > 32 then return nil end
+    if bits == 0 then return 0 end
+    local size = 2 ^ (32 - bits)
+    return n - (n % size)
+end
+
+-- first and last usable host of a subnet, as integers
+function M.subnet_usable(net, prefix)
+    local base = to_ip_int(net)
+    local bits = tonumber(prefix)
+    if not base or not bits or bits < 1 or bits > 30 then return nil, nil end
+    local size = 2 ^ (32 - bits)
+    local lo, hi = base + 1, base + size - 2
+    if hi < lo then return nil, nil end
+    return lo, hi
+end
+
+-- install (or refresh) the connected route of an interface. The local copy is
+-- used when the caller has no rpv.route_upsert; both are idempotent on the
+-- prefix+net+kind triple, so calling this twice never piles up entries.
+function M.install_connected_route(routes, prefix, net, iface)
+    if type(routes) ~= "table" or type(routes.entries) ~= "table" then
+        return nil, "no_route_table"
+    end
+    for _, entry in ipairs(routes.entries) do
+        if entry.prefix == prefix and entry.net == net and entry.kind == "connected" then
+            entry.iface = iface
+            return entry, "existing"
+        end
+    end
+    local entry = { prefix = prefix, net = net, iface = iface, gw = nil, kind = "connected" }
+    routes.entries[#routes.entries + 1] = entry
+    return entry, "added"
+end
+
+-- the pool interface as a { ip, prefix, net, cidr, name, side } view. Accepts the
+-- runtime table enable_pool_iface() returned, an "a.b.c.d/prefix" string, or an
+-- interface name/side. nil when nothing matches.
+function M.pool_iface_view(node, spec)
+    if type(spec) == "table" then
+        if type(spec.ip) == "number" and type(spec.prefix) == "number" then return spec end
+        if type(spec.cidr) == "string" then return M.pool_iface_view(node, spec.cidr) end
+        return nil
+    end
+    if type(spec) ~= "string" then return nil end
+    local text = trim(spec)
+    if text == "" then return nil end
+
+    local ip, prefix = M.parse_cidr(text)
+    if ip then
+        if type(node) == "table" and type(node.ifaces) == "table" then
+            for _, iface in ipairs(node.ifaces) do
+                if type(iface) == "table" and iface.ip == ip and iface.prefix == prefix then return iface end
+            end
+        end
+        return { ip = ip, prefix = prefix, net = M.masked_ip(ip, prefix), cidr = text }
+    end
+
+    if type(node) == "table" and type(node.ifaces) == "table" then
+        for _, iface in ipairs(node.ifaces) do
+            if type(iface) == "table" and (iface.name == text or iface.side == text) then return iface end
+        end
+    end
+    return nil
+end
+
+local function pool_fail(node, reason, detail)
+    log(node, "CORE_ROUTER_POOL_IFACE_FAIL reason=%s%s",
+        tostring(reason), detail and (" " .. tostring(detail)) or "")
+    return nil, reason
+end
+
+-- One pool interface, validated as a whole before anything is mutated: node
+-- state, cfg keys and routes only change when every check passed. See the header
+-- for the spec fields and the failure codes.
+function M.enable_pool_iface(node, rpv, spec)
+    if type(node) ~= "table" then return nil, "no_node" end
+    if type(spec) ~= "table" then return pool_fail(node, "no_spec", "expected a spec table") end
+
+    local ip, prefix, cidr_err = M.parse_cidr(spec.cidr)
+    if not ip then
+        return pool_fail(node, "bad_cidr", "cidr=" .. tostring(spec.cidr) .. " err=" .. tostring(cidr_err))
+    end
+    local side = type(spec.side) == "string" and trim(spec.side) or ""
+    if side == "" then return pool_fail(node, "bad_side", "spec.side is required") end
+    local channel = tonumber(spec.channel)
+    if not channel or channel < 1 or channel > 65535 then
+        return pool_fail(node, "bad_channel", "channel=" .. tostring(spec.channel))
+    end
+    channel = floor(channel)
+    local mtu = tonumber(spec.mtu) or M.POOL_IFACE_MTU
+    if not mtu or mtu < M.POOL_IFACE_MIN_MTU or mtu > M.POOL_IFACE_MAX_MTU then
+        return pool_fail(node, "bad_mtu", "mtu=" .. tostring(spec.mtu))
+    end
+    mtu = floor(mtu)
+    local name = type(spec.name) == "string" and trim(spec.name) or M.POOL_IFACE_NAME
+    if name == "" then name = M.POOL_IFACE_NAME end
+
+    local net = M.masked_ip(ip, prefix)
+    local cidr = M.int_to_ip(ip) .. "/" .. prefix
+
+    -- 1. idempotent: the very same side/channel/cidr is already installed
+    local live = node.core_router_pool_iface
+    if type(live) == "table" and live.side == side and live.channel == channel
+        and live.cidr == cidr then
+        log(node, "CORE_ROUTER_POOL_IFACE_REUSE side=%s channel=%d cidr=%s",
+            side, channel, cidr)
+        return live
+    end
+
+    -- 2. interface conflicts. A different address on the same side/channel, or a
+    -- subnet that overlaps an existing one, is a configuration error: appending a
+    -- second interface there would make two addresses share one wire.
+    local ifaces = node.ifaces
+    if type(ifaces) ~= "table" then return pool_fail(node, "no_ifaces", "node.ifaces is missing") end
+    local by_side = type(node.by_side) == "table" and node.by_side or {}
+    local by_channel = type(node.by_channel) == "table" and node.by_channel or {}
+    local old_iface = type(live) == "table" and live.iface or nil
+
+    if type(by_side[side]) == "table" and by_side[side] ~= old_iface then
+        return pool_fail(node, "iface_in_use", "side=" .. side
+            .. " name=" .. tostring(by_side[side].name))
+    end
+    if type(by_channel[channel]) == "table" and by_channel[channel] ~= old_iface then
+        return pool_fail(node, "iface_in_use", "channel=" .. channel
+            .. " name=" .. tostring(by_channel[channel].name))
+    end
+    for _, iface in ipairs(ifaces) do
+        if type(iface) == "table" and iface ~= old_iface
+            and type(iface.net) == "number" and type(iface.prefix) == "number" then
+            if M.in_subnet(iface.net, net, prefix) or M.in_subnet(net, iface.net, iface.prefix) then
+                return pool_fail(node, "iface_overlap", "cidr=" .. cidr
+                    .. " existing=" .. tostring(iface.cidr))
+            end
+        end
+    end
+
+    -- 3. the pool: explicit (spec or cfg.dhcp_pool) or the usable subnet range
+    local pool_text = spec.pool
+    if pool_text == nil and spec.pool_start ~= nil and spec.pool_end ~= nil then
+        pool_text = tostring(spec.pool_start) .. "-" .. tostring(spec.pool_end)
+    end
+    if pool_text == nil and type(node.cfg) == "table" then pool_text = node.cfg.dhcp_pool end
+
+    local pool_lo, pool_hi
+    if pool_text ~= nil then
+        local text = tostring(pool_text)
+        local lo_s, hi_s = text:match("^%s*([%d%.]+)%s*%-%s*([%d%.]+)%s*$")
+        pool_lo, pool_hi = lo_s and M.parse_ipv4(lo_s), hi_s and M.parse_ipv4(hi_s)
+        if not pool_lo or not pool_hi then
+            return pool_fail(node, "bad_pool", "pool=" .. text)
+        end
+        if pool_lo > pool_hi then
+            return pool_fail(node, "bad_pool", "pool_start>pool_end pool=" .. text)
+        end
+    else
+        pool_lo, pool_hi = M.subnet_usable(net, prefix)
+        if not pool_lo then return pool_fail(node, "bad_pool", "cidr=" .. cidr) end
+        if pool_lo == ip then pool_lo = pool_lo + 1 end
+        if pool_hi == ip then pool_hi = pool_hi - 1 end
+        if pool_hi < pool_lo then return pool_fail(node, "bad_pool", "cidr=" .. cidr) end
+    end
+
+    -- the required rule: the pool must live inside the pool interface subnet
+    if not M.in_subnet(pool_lo, net, prefix) or not M.in_subnet(pool_hi, net, prefix) then
+        return pool_fail(node, "pool_off_subnet", "pool=" .. M.int_to_ip(pool_lo) .. "-"
+            .. M.int_to_ip(pool_hi) .. " cidr=" .. cidr)
+    end
+    if pool_lo <= net or pool_hi >= net + 2 ^ (32 - prefix) - 1 then
+        return pool_fail(node, "pool_off_subnet", "pool=network/broadcast cidr=" .. cidr)
+    end
+
+    -- a route table is not optional: without the connected route the DHCP
+    -- replies to that subnet are unroutable, which is the whole point of this
+    -- interface
+    if type(node.routes) ~= "table" or type(node.routes.entries) ~= "table" then
+        return pool_fail(node, "no_route_table", "node.routes is missing")
+    end
+
+    -- ===== everything checked: commit =====
+    local iface = {
+        side = side, name = name, channel = channel, mtu = mtu,
+        ip = ip, prefix = prefix, net = net, cidr = cidr,
+        linktype = tostring(spec.linktype or "wired"), wireless = false,
+        pool_iface = true,
+    }
+    ifaces[#ifaces + 1] = iface
+    if type(node.by_side) ~= "table" then node.by_side = {} end
+    if type(node.by_channel) ~= "table" then node.by_channel = {} end
+    node.by_side[side] = iface
+    node.by_channel[channel] = iface
+
+    local route_state = "none"
+    local target = type(rpv) == "table" and rpv or nil
+    if target and type(target.route_upsert) == "function" and type(node.routes) == "table" then
+        target.route_upsert(node.routes, prefix, net, iface, nil, "connected")
+        route_state = "upsert"
+    else
+        local entry, why = M.install_connected_route(node.routes, prefix, net, iface)
+        if entry then route_state = "added" else route_state = tostring(why) end
+    end
+
+    if type(node.cfg) ~= "table" then node.cfg = {} end
+    if spec.set_pool ~= false then
+        node.cfg.dhcp_pool = M.int_to_ip(pool_lo) .. "-" .. M.int_to_ip(pool_hi)
+    end
+    if spec.set_gateway ~= false then
+        if node.cfg.dhcp_gw == nil then node.cfg.dhcp_gw = M.int_to_ip(ip) end
+        if node.cfg.dhcp_dns == nil then node.cfg.dhcp_dns = tostring(node.cfg.dhcp_gw) end
+    end
+
+    local rt = {
+        ok = true, iface = iface, side = side, name = name, channel = channel,
+        cidr = cidr, ip = ip, ipstr = M.int_to_ip(ip), prefix = prefix, net = net,
+        mtu = mtu, route = route_state,
+        pool_start = pool_lo, pool_end = pool_hi,
+        pool_start_str = M.int_to_ip(pool_lo), pool_end_str = M.int_to_ip(pool_hi),
+        at = os.clock(),
+    }
+    node.core_router_pool_iface = rt
+
+    log(node, "CORE_ROUTER_POOL_IFACE_READY side=%s channel=%d cidr=%s mtu=%d pool=%s-%s route=%s",
+        side, channel, cidr, mtu, rt.pool_start_str, rt.pool_end_str, route_state)
+
+    -- the lease prefix rpv will actually serve comes from iface[1]
+    local first = ifaces[1]
+    if type(first) == "table" and first ~= iface and type(first.prefix) == "number"
+        and first.prefix ~= prefix then
+        log(node, "CORE_ROUTER_POOL_IFACE_PREFIX lease_prefix=%d pool_prefix=%d iface=%s hint=move_pool_iface_first",
+            first.prefix, prefix, tostring(first.name))
+    end
+
+    -- the modem on that side must already be attached; a missing one is loud but
+    -- not fatal, so a locked/broken wire never stops the switch from forwarding
+    if target and type(target.link_open) == "function" then
+        local ok, err = pcall(target.link_open, iface)
+        if not ok then
+            log(node, "CORE_ROUTER_POOL_IFACE_NOLINK side=%s channel=%d err=%s",
+                side, channel, tostring(err))
+        end
+    end
+    return rt
+end
+
 -- ===== HA configuration sync responder ======================================
 -- Wire-compatible subset of apps/backup_router.lua. A hot-standby switch sends
 --   RPV1-HA/1 SYNC id=<id> nonce=<n>
@@ -688,7 +1006,10 @@ end
 --   1. the live DHCP server (the truth: it is what clients are served now)
 --   2. the role.txt pool keys (a configured but not yet started server; using
 --      the live pool keeps both switches on one address range)
---   3. M.DEFAULT_DHCP_CONFIG verbatim. Like the backup, the defaults are used
+--   3. the cfg.pool_iface subnet (10.100.0.0/16 and friends): the pool is the
+--      usable range of that interface and the gateway is its address, because a
+--      client on that wire must route through the interface that owns the range
+--   4. M.DEFAULT_DHCP_CONFIG verbatim. Like the backup, the defaults are used
 --      as written; unlike it, the gateway is not replaced by the first
 --      interface address, because on the core switch that interface may be the
 --      LAN side, and a backup that takes over must inherit the public gateway.
@@ -710,19 +1031,50 @@ function M.ha_config_from_node(node)
     end
 
     local cfg = type(node.cfg) == "table" and node.cfg or {}
+    -- cfg.pool_iface names the interface, but a boot may have enabled it through
+    -- opts.pool_iface instead (role.txt is flat and cannot hold a spec table), so
+    -- the live runtime enable_pool_iface stored is the fallback
+    local pool_iface = M.pool_iface_view(node, cfg.pool_iface)
+        or (type(node.core_router_pool_iface) == "table" and node.core_router_pool_iface or nil)
+    local pool_iface_ip = type(pool_iface) == "table" and type(pool_iface.ip) == "number"
+        and M.int_to_ip(pool_iface.ip) or nil
+
     local pool = tostring(cfg.dhcp_pool or "")
     local lo, hi = pool:match("^%s*([%d%.]+)%s*%-%s*([%d%.]+)%s*$")
     if lo and M.parse_ipv4(lo) and M.parse_ipv4(hi) then
-        local gw = cfg.dhcp_gw or d.gateway
+        -- an explicit pool wins; the pool interface only supplies the gateway
+        -- and the prefix when role.txt did not name them
+        local gw = cfg.dhcp_gw or pool_iface_ip or d.gateway
         return {
             pool_start = lo,
             pool_end = hi,
             lease_time = tonumber(cfg.dhcp_lease) or d.lease_time,
             gateway = gw,
             dns = cfg.dhcp_dns or gw,
-            prefix = tonumber(cfg.dhcp_prefix) or d.prefix,
+            prefix = tonumber(cfg.dhcp_prefix)
+                or (pool_iface and pool_iface.prefix) or d.prefix,
             dhcp_port = tonumber(cfg.dhcp_port) or d.dhcp_port,
         }
+    end
+
+    if pool_iface then
+        local range_lo, range_hi = M.subnet_usable(pool_iface.net, pool_iface.prefix)
+        if range_lo then
+            if range_lo == pool_iface.ip then range_lo = range_lo + 1 end
+            if range_hi == pool_iface.ip then range_hi = range_hi - 1 end
+        end
+        if range_lo and range_hi >= range_lo then
+            local gw = cfg.dhcp_gw or pool_iface_ip
+            return {
+                pool_start = M.int_to_ip(range_lo),
+                pool_end = M.int_to_ip(range_hi),
+                lease_time = tonumber(cfg.dhcp_lease) or d.lease_time,
+                gateway = gw,
+                dns = cfg.dhcp_dns or gw,
+                prefix = tonumber(cfg.dhcp_prefix) or pool_iface.prefix,
+                dhcp_port = tonumber(cfg.dhcp_port) or d.dhcp_port,
+            }
+        end
     end
 
     return M.ha_copy_config(d)
@@ -997,8 +1349,23 @@ function M.setup_router(node, rpv, opts)
         log(node, "CORE_ROUTER_STATIC_WATCH_FAIL err=%s", tostring(watch_err))
     end
 
-    -- 4. isolation hook, chained in front of the real NAT hook when available
     local target = find_rpv(node, rpv)
+
+    -- 3b. optional pool interface: a DHCP pool outside the public wire needs an
+    -- address and a route of its own, before the HA responder starts reporting
+    -- the pool to a standby. cfg.pool_iface (role.txt is flat, so the bootstrap
+    -- never fills it) or opts.pool_iface both work; a spec table is required.
+    local pool_rt, pool_spec = nil, base.pool_iface
+    if pool_spec == nil and type(node.cfg) == "table" then pool_spec = node.cfg.pool_iface end
+    if type(pool_spec) == "table" then
+        local pool_err
+        pool_rt, pool_err = M.enable_pool_iface(node, target, pool_spec)
+        if not pool_rt then
+            log(node, "CORE_ROUTER_POOL_IFACE_SKIP err=%s", tostring(pool_err))
+        end
+    end
+
+    -- 4. isolation hook, chained in front of the real NAT hook when available
     local mode, hook_err = "none", nil
 
     if target then
@@ -1048,14 +1415,16 @@ function M.setup_router(node, rpv, opts)
         hook = mode,
         ha = ha,
         ha_port = ha_port,
+        pool_iface = pool_rt,
+        pool = pool_rt and (pool_rt.pool_start_str .. "-" .. pool_rt.pool_end_str) or nil,
     }
 
     node.core_router = M
     node.core_router_runtime = runtime
     node.core_router_started = true
 
-    log(node, "CORE_ROUTER_READY static_ip=%s mappings=%d hook=%s",
-        M.STATIC_IP_PATH, applied, mode)
+    log(node, "CORE_ROUTER_READY static_ip=%s mappings=%d hook=%s pool_iface=%s",
+        M.STATIC_IP_PATH, applied, mode, tostring(pool_rt and pool_rt.cidr or "none"))
     return runtime
 end
 
