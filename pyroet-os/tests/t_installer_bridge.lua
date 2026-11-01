@@ -161,9 +161,16 @@ return function(kit)
     -- -----------------------------------------------------------------
     H.group("installer_bridge.surface")
     do
-        H.eq("sys_function_count", #APPS.SYS_FUNCTIONS, 10)
+        -- 10 kernel entries + the three permission ones (kernel/permissions.lua
+        -- rule 6: answer a queued request, toggle it in Settings, list states)
+        H.eq("sys_function_count", #APPS.SYS_FUNCTIONS, 13)
         H.eq("sys_functions", table.concat(APPS.SYS_FUNCTIONS, ","),
-            "status,apps,perms,launch,install,uninstall,list,ota_list,ota_apply,rescan")
+            "status,apps,perms,launch,install,uninstall,list,ota_list,ota_apply,rescan,"
+            .. "perms_answer,perms_set,perms_list")
+        H.eq("perm_answer_method", APPS.SYS_PERMS.perms_answer.method, "sys_perms_answer")
+        H.eq("perm_set_method", APPS.SYS_PERMS.perms_set.method, "sys_perms_set")
+        H.eq("perm_list_method", APPS.SYS_PERMS.perms_list.method, "sys_perms_list")
+        H.eq("perm_no_cap", APPS.SYS_PERMS.perms_answer.cap, nil)
         H.eq("install_cap", APPS.SYS_INSTALLER.install.cap, "fs.write")
         H.eq("install_method", APPS.SYS_INSTALLER.install.method, "sys_install")
         H.eq("uninstall_cap", APPS.SYS_INSTALLER.uninstall.cap, "fs.write")

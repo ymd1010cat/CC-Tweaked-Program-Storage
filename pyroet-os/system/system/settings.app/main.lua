@@ -389,6 +389,7 @@ function M.render(state, cols, rows)
     if cols < M.MIN_COLS or rows < M.MIN_ROWS then
         return { M.compact_line(state, cols, rows) }
     end
+    if state.perms then return M.perms_lines(state, cols, rows) end
     local out = {}
     local function add(text)
         if #out >= rows then return false end
@@ -443,6 +444,162 @@ function M.render(state, cols, rows)
     return out
 end
 
+-- ---------------------------------------------------------------------------
+-- Permissions (permissions rule 6): the Android app-permissions screen
+-- ---------------------------------------------------------------------------
+--
+-- Level 1 lists every scanned package; level 2 its capabilities with the state on
+-- disk -- `granted`, `denied`, or `ask` (no line yet). Enter toggles
+-- granted/denied through api.sys.perms_set (an `ask` becomes granted: the same act
+-- as answering A); `q` goes back one level and leaves Settings at level 1.
+M.PERMS_TITLE = "Permissions"
+M.PERMS_OPEN_HINT = "enter=open q=back"
+M.PERMS_CAP_HINT = "enter=toggle q=back"
+
+-- level 1: read the package list (api.sys.perms_list) and keep it in the state
+function M.perms_refresh(state, api)
+    local p = state.perms
+    local sysax = type(api) == "table" and api.sys or nil
+    local list = type(sysax) == "table" and sysax.perms_list or nil
+    if type(list) ~= "function" then
+        p.message = "no permission bridge"
+        return nil
+    end
+    local called, ok, apps = pcall(list)
+    if not called or ok ~= true then
+        p.message = "permissions unavailable"
+        M.note(api, "perms list failed err=" .. M.fit(tostring(called and apps or ok), 40))
+        return nil
+    end
+    p.apps = {}
+    for i = 1, #(apps or {}) do p.apps[#p.apps + 1] = apps[i] end
+    return p.apps
+end
+
+function M.perms_open(state, api)
+    state.perms = { level = 1, index = 1, apps = {}, caps = {}, message = "" }
+    M.perms_refresh(state, api)
+    M.note(api, "perms open apps=" .. tostring(#(state.perms.apps or {})))
+    return "repaint"
+end
+
+function M.perms_close(state, api)
+    state.perms = nil
+    state.message = ""
+    M.note(api, "perms close")
+    return "repaint"
+end
+
+-- the row the arrow keys act on, for the current level
+function M.perms_count(state)
+    local p = state.perms
+    if type(p) ~= "table" then return 0 end
+    if p.level == 1 then return #(p.apps or {}) end
+    return #(p.caps or {})
+end
+
+function M.perms_move(state, delta)
+    local count = M.perms_count(state)
+    if count == 0 then return "none" end
+    local index = (state.perms.index or 1) + delta
+    if index < 1 then index = count end
+    if index > count then index = 1 end
+    state.perms.index = index
+    state.perms.message = ""
+    return "move"
+end
+
+function M.perms_enter(state, api)
+    local p = state.perms
+    if type(p) ~= "table" then return "none" end
+    if p.level == 1 then
+        local app = (p.apps or {})[p.index or 1]
+        if app == nil then return "none" end
+        p.app = app
+        p.caps = {}
+        for i = 1, #(app.caps or {}) do
+            local cap = app.caps[i]
+            p.caps[i] = { cap = cap, state = (app.states or {})[cap] or "ask" }
+        end
+        p.level, p.index, p.message = 2, 1, ""
+        M.note(api, "perms app=" .. tostring(app.name) .. " caps=" .. tostring(#p.caps))
+        return "repaint"
+    end
+    local cap = (p.caps or {})[p.index or 1]
+    if cap == nil then return "none" end
+    local sysax = type(api) == "table" and api.sys or nil
+    local set = type(sysax) == "table" and sysax.perms_set or nil
+    if type(set) ~= "function" then
+        p.message = "no permission bridge"
+        return "denied"
+    end
+    local want = (cap.state == "granted") and "denied" or "granted"
+    local called, ok, err = pcall(set, p.app.name, cap.cap, want)
+    if not called or ok ~= true then
+        p.message = "save failed"
+        M.note(api, "perms set failed app=" .. tostring(p.app.name) .. " cap="
+            .. tostring(cap.cap) .. " err=" .. M.fit(tostring(called and err or ok), 40))
+        return "denied"
+    end
+    cap.state = want
+    p.message = tostring(cap.cap) .. " " .. want
+    M.note(api, "perms set app=" .. tostring(p.app.name) .. " cap=" .. tostring(cap.cap)
+        .. " state=" .. want)
+    return "change"
+end
+
+function M.perms_back(state, api)
+    local p = state.perms
+    if type(p) ~= "table" then return "none" end
+    if p.level == 2 then
+        local name = p.app and p.app.name or nil
+        p.level, p.caps, p.app = 1, {}, nil
+        -- re-read the file so level 1 shows what was written, not what we hoped
+        M.perms_refresh(state, api)
+        for i = 1, #(p.apps or {}) do
+            if p.apps[i].name == name then p.index = i break end
+        end
+        return "repaint"
+    end
+    return M.perms_close(state, api)
+end
+
+function M.perms_lines(state, cols, rows)
+    local p = state.perms or {}
+    local out = {}
+    local function add(text)
+        if #out >= rows then return false end
+        out[#out + 1] = M.fit(text, cols)
+        return true
+    end
+    add(M.PERMS_TITLE)
+    if p.level == 1 then
+        local apps = p.apps or {}
+        if #apps == 0 then add("no apps") end
+        for i = 1, #apps do
+            local app = apps[i]
+            local marker = (i == (p.index or 1)) and ">" or " "
+            add(marker .. " " .. tostring(app.name) .. " " .. tostring(app.version or "?"))
+        end
+    else
+        add(tostring(p.app and p.app.name or "?"))
+        local caps = p.caps or {}
+        if #caps == 0 then add("no capabilities") end
+        for i = 1, #caps do
+            local cap = caps[i]
+            local marker = (i == (p.index or 1)) and ">" or " "
+            add(marker .. " " .. tostring(cap.cap) .. " " .. tostring(cap.state))
+        end
+    end
+    if p.message and p.message ~= "" then
+        add("")
+        add(p.message)
+    end
+    while #out < rows - 1 do add("") end
+    add(M.fit(p.level == 2 and M.PERMS_CAP_HINT or M.PERMS_OPEN_HINT, cols))
+    return out
+end
+
 function M.paint(lines, term_api)
     local t = term_api or rawget(_G, "term")
     if type(t) ~= "table" or type(t.setCursorPos) ~= "function"
@@ -494,7 +651,8 @@ function M.conf_path(state, opts)
 end
 
 -- the editable rows: a key is offered only when the config file actually has it,
--- so a machine without /etc/network.conf says so instead of inventing defaults
+-- so a machine without /etc/network.conf says so instead of inventing defaults.
+-- The permission screen is one more row at the bottom (Android keeps it here too).
 function M.items(state)
     local out = {}
     local conf = (state and state.conf) or {}
@@ -519,6 +677,13 @@ function M.items(state)
             choices = item.choices,
         }
     end
+    out[#out + 1] = {
+        key = "permissions",
+        label = "permissions",
+        value = tostring(#((state and state.apps) or {})) .. " apps",
+        choices = {},
+        perms = true,
+    }
     return out
 end
 
@@ -581,10 +746,17 @@ function M.save_item(api, path, key, value)
     return true
 end
 
--- one key in, one action out: "move"|"change"|"denied"|"none". `left`/`right`
--- and `enter` all change the selected value (enter confirms the next choice).
+-- one key in, one action out: "move"|"change"|"repaint"|"denied"|"none".
+-- `left`/`right` and `enter` all change the selected value (enter confirms the
+-- next choice). The permission screen has its own two levels and its own keys.
 function M.handle_key(state, key, api)
     if type(key) ~= "string" then return "none" end
+    if state.perms then
+        if key == "up" or key == "left" then return M.perms_move(state, -1) end
+        if key == "down" or key == "right" then return M.perms_move(state, 1) end
+        if key == "enter" or key == "return" then return M.perms_enter(state, api) end
+        return "none"
+    end
     local items = M.items(state)
     local count = #items
     if key == "up" or key == "left" then
@@ -608,6 +780,8 @@ function M.handle_key(state, key, api)
         return M.change_item(state, api, 1)
     end
     if key == "enter" or key == "return" then
+        local item = items[state.item or 1]
+        if item ~= nil and item.perms then return M.perms_open(state, api) end
         return M.change_item(state, api, 1)
     end
     return "none"
@@ -620,6 +794,7 @@ function M.change_item(state, api, step)
         state.message = "nothing to edit"
         return "none"
     end
+    if item.perms then return "none" end
     local value = M.cycle(item.choices, item.value, step)
     local ok, err = M.save_item(api, M.conf_path(state), item.key, value)
     if not ok then
@@ -754,6 +929,25 @@ end
 -- one delivered event -> one action. Returns "quit" when the app has to end,
 -- otherwise "move" | "change" | "denied" | "none" | "repaint".
 function M.dispatch_event(state, event, p1, api)
+    -- the permission screen owns `q`: it goes back one level, it never leaves the
+    -- app from inside a list the user is in the middle of
+    if state.perms and event == "key" then
+        if M.quit_key(p1, api) then return M.perms_back(state, api) end
+        local key = p1
+        if type(key) == "number" then
+            key = M.code_name(key, api)
+            if key == nil then return "none" end
+        end
+        local action, detail = M.handle_key(state, tostring(key == nil and "" or key), api)
+        M.note(api, "perms key=" .. tostring(key) .. " action=" .. tostring(action)
+            .. (detail ~= nil and (" detail=" .. tostring(detail)) or ""))
+        return action, detail
+    end
+    if state.perms and event == "char" then
+        local ch = tostring(p1 == nil and "" or p1)
+        if ch == "q" or ch == "Q" then return M.perms_back(state, api) end
+        return "none"
+    end
     if event == "key" then
         -- the raw value is checked for quit FIRST: a keycode with no name in
         -- this ROM (escape is 256 and has no keys.escape entry) must still leave
@@ -826,104 +1020,10 @@ function M.body(manifest, api)
     end
 end
 
--- ---------------------------------------------------------------------------
--- DECISIONS.md 7.2 self test: no terminal, no fs, pure layout rules
--- ---------------------------------------------------------------------------
-
-function M.sample_state()
-    return {
-        cols = M.VIEW.cols,
-        rows = M.VIEW.rows,
-        version = "1.0.0",
-        sha256 = string.rep("ef", 32),
-        net = "ok",
-        free = 26214,
-        apps = {
-            {
-                name = "net", version = "0.1.0",
-                capabilities = { "net.rpv", "fs.read" },
-                grants = { ["net.rpv"] = true, ["fs.read"] = false },
-            },
-        },
-        conf = {
-            { key = "ip", value = "10.0.0.5" },
-            { key = "psk", value = "***" },
-        },
-        bad_conf = 0,
-        install_entries = 19,
-    }
-end
-
-function M.selftest()
-    local problems = {}
-    local state = M.sample_state()
-    local function in_bounds(lines, cols, rows, where)
-        if #lines ~= rows then
-            problems[#problems + 1] = where .. " rows=" .. tostring(#lines)
-        end
-        for i = 1, #lines do
-            if #lines[i] > cols then
-                problems[#problems + 1] = where .. " row " .. tostring(i)
-                    .. " width " .. tostring(#lines[i])
-            end
-        end
-    end
-    local full = M.render(state, M.VIEW.cols, M.VIEW.rows)
-    in_bounds(full, M.VIEW.cols, M.VIEW.rows, "26x20")
-    if not (full[1] or ""):find("Settings 0.1.0", 1, true) then
-        problems[#problems + 1] = "title row lost"
-    end
-    local joined = table.concat(full, "\n")
-    if not joined:find("=== apps ===", 1, true) then
-        problems[#problems + 1] = "apps block lost"
-    end
-    -- the slot era is gone: no row may carry the word again
-    for i = 1, #full do
-        if full[i]:find("slot", 1, true) then
-            problems[#problems + 1] = "row " .. tostring(i) .. " still mentions a slot"
-        end
-    end
-    if not (full[#full] or ""):find("ro 1 apps 26x20", 1, true) then
-        problems[#problems + 1] = "status row lost"
-    end
-    -- a tall view shows the whole body, and the +N more line appears when not
-    local tall = M.render(state, M.VIEW.cols, 40)
-    in_bounds(tall, M.VIEW.cols, 40, "26x40")
-    if not table.concat(tall, "\n"):find("install.set 19 entries", 1, true) then
-        problems[#problems + 1] = "storage block missing"
-    end
-    -- degenerate views collapse to one status line
-    for _, size in ipairs({ { 10, 20 }, { 26, 4 }, { 1, 1 } }) do
-        local cols, rows = size[1], size[2]
-        local lines = M.render(state, cols, rows)
-        if #lines ~= 1 then
-            problems[#problems + 1] = tostring(cols) .. "x" .. tostring(rows)
-                .. " expected a single status row, got " .. tostring(#lines)
-        end
-        if #(lines[1] or "") > cols then
-            problems[#problems + 1] = tostring(cols) .. "x" .. tostring(rows)
-                .. " status row too wide"
-        end
-    end
-    -- nothing readable at all: still a screen, never an error
-    local empty = M.build(nil, { cols = M.VIEW.cols, rows = M.VIEW.rows })
-    local empty_lines = M.render(empty, M.VIEW.cols, M.VIEW.rows)
-    in_bounds(empty_lines, M.VIEW.cols, M.VIEW.rows, "empty")
-    local empty_text = table.concat(empty_lines, "\n")
-    if not empty_text:find("conf n/a", 1, true) then
-        problems[#problems + 1] = "empty machine did not degrade to conf n/a"
-    end
-    if not empty_text:find("apps n/a", 1, true) then
-        problems[#problems + 1] = "empty machine did not degrade to apps n/a"
-    end
-    if not empty_text:find("install.set n/a", 1, true) then
-        problems[#problems + 1] = "empty machine did not degrade to install.set n/a"
-    end
-    return #problems == 0, problems
-end
-
-M.layout_selftest = M.selftest
-
+-- The DECISIONS 7.2 self test this app used to carry (sample_state/selftest, ~95
+-- lines) is gone: nothing in the image or the suite called it, and t_settings
+-- renders 26x20, 26x40, 8-row, 20-col and 1x1 frames with cell assertions, which
+-- is the same rule checked harder. It was the first thing cut for the size cap.
 local function body(manifest, api)
     return M.body(manifest, api)
 end

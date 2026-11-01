@@ -176,6 +176,9 @@ function D.new(opts)
     self.loan_abort_seconds = o.loan_abort_seconds
     self.reason = nil
     self.exited = false
+    -- the last permission request delivered to the launcher ("app/cap"), so one
+    -- queued question is asked exactly once
+    self.perm_key = nil
     return self
 end
 
@@ -212,6 +215,7 @@ function D:state()
         loans = self.loans,
         loan_ends = self.loan_ends,
         loan = self.loan and self.loan.name or nil,
+        perm = self.perm_key,
         reason = self.reason,
         exited = self.exited,
     }
@@ -570,6 +574,28 @@ function D:settle(before)
     return false
 end
 
+-- An undecided capability the runtime queued (permissions rule 6): handed to the
+-- launcher as a `perm_request` event, once per request. The app was deferred, so
+-- nothing else is running to answer it and the desktop is the only keyboard.
+function D:perm_wake()
+    if self.foreground ~= self.name or self.loan ~= nil then return false end
+    local rt = self.rt
+    if type(rt) ~= "table" or type(rt.perm_pending) ~= "function" then return false end
+    local ok, req = pcall(rt.perm_pending, rt)
+    if not ok or type(req) ~= "table" then
+        self.perm_key = nil
+        return false
+    end
+    local key = tostring(req.app) .. "/" .. tostring(req.cap)
+    if key == self.perm_key then return false end
+    self.perm_key = key
+    self:log("DESKTOP_PERM_REQUEST app=" .. short(req.app, 24)
+        .. " cap=" .. short(req.cap, 20))
+    self:deliver("perm_request", req.app, req.cap)
+    self:tick()
+    return true
+end
+
 function D:dispatch(event, p1, p2, p3)
     if event == nil then
         -- a pull source that answers nothing is not an event: no delivery, no
@@ -687,6 +713,8 @@ function D:dispatch(event, p1, p2, p3)
     -- an app started during this tick either takes the keyboard (handover) or
     -- the screen (loan); the launcher is never left thinking it still owns it
     self:launched(before_all)
+    -- a start that was deferred for an undecided capability: ask, now
+    self:perm_wake()
     return self:settle(before)
 end
 
@@ -707,6 +735,8 @@ function D:run()
     if self.ready_paint ~= false then
         self:deliver("desk_focus", "")
         self:tick()
+        -- a request can already be queued at handover (an app asked during boot)
+        self:perm_wake()
         self:log("DESKTOP_READY app=" .. short(self.foreground, 24))
     end
     while not self.exited do

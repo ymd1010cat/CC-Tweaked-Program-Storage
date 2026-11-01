@@ -79,10 +79,6 @@ return function(H)
         end
         H.eq("default_root", PERMS.ROOT, "/etc/perms")
         H.eq("file_header", PERMS.FILE_HEADER, "# PYROET-PERMS-1")
-        local lines = PERMS.prompt_lines("probe", { "fs.read" }, 26, 20)
-        H.eq("fit_pads", PERMS.fit("ab", 4), "ab  ")
-        H.eq("prompt_first", lines[1]:sub(1, 18), "Permission request")
-        H.ascii_check("prompt_ascii", H.joined(lines))
     end
 
     -- -----------------------------------------------------------------
@@ -319,34 +315,70 @@ return function(H)
     end
 
     -- -----------------------------------------------------------------
-    H.group("perms.prompt_screen")
+    H.group("perms.queue")
+    -- rule 6: the policy answers "ask", the capability is queued, and the answer
+    -- is the only thing that writes a line. That is the whole Android contract.
     do
-        local lines = PERMS.prompt_lines("net", { "net.rpv", "fs.read" }, 26, 20)
-        H.eq("screen_rows", #lines, 20)
-        for i = 1, #lines do
-            H.eq("screen_width_" .. tostring(i), #lines[i], 26)
-        end
-        H.contains("screen_title", lines[1], "Permission request")
-        H.contains("screen_app", lines[2], "app net")
-        H.contains("screen_cap1", lines[3], "[y/N] net.rpv")
-        H.contains("screen_cap2", lines[4], "[y/N] fs.read")
-        H.contains("screen_default", lines[20], "[y/N] default N")
+        local dir = H.case_dir("perms", "queue")
+        local root = dir .. "/etc/perms"
+        local log, lines = H.logger()
+        local p = PERMS.new({ fs = H.real_fs(), log = log, root = root,
+            ask = function() return "ask" end })
 
-        -- more capabilities than lines: the list is merged, the tail summarised
-        local many = PERMS.prompt_lines("fat", {
-            "fs.read", "fs.write", "net.rpv", "net.rednet",
-            "redstone", "peripheral", "http",
-        }, 26, 8)
-        H.eq("merged_rows", #many, 8)
-        H.contains("merged_more", H.joined(many), "more")
-        for i = 1, #many do H.eq("merged_width_" .. tostring(i), #many[i], 26) end
+        local decisions, info = p:ensure("demo", { "fs.read", "fs.write" })
+        H.eq("no_decisions", decisions, nil)
+        H.eq("ask_source", info.source, "ask")
+        H.eq("ask_cap", info.pending_cap, "fs.read")
+        H.eq("ask_pending", info.pending, 2)
+        H.has(lines, "PERM_ASK app=demo cap=fs.read")
+        H.eq("no_file_yet", H.exists(root .. "/demo.cfg"), false)
 
-        -- a tiny screen still shows one question instead of blowing up
-        local tiny = PERMS.prompt_lines("net", { "fs.read" }, 10, 3)
-        H.eq("tiny_rows", #tiny, 3)
-        for i = 1, #tiny do H.eq("tiny_width_" .. tostring(i), #tiny[i], 10) end
-        H.contains("tiny_cap", H.joined(tiny), "[y/N]")
-        H.ascii_check("screen_ascii", H.joined(lines) .. H.joined(many) .. H.joined(tiny))
+        -- one question at a time, and a retry before the answer does not stack
+        H.eq("retry_pending", p:ensure("demo", { "fs.read", "fs.write" }), nil)
+        H.eq("one_request", p:pending(), 1)
+        H.eq("queued_app", p:next_request().app, "demo")
+        H.eq("queued_cap", p:next_request().cap, "fs.read")
+
+        -- A: the line is written, the queue empties, the retry sees the file
+        H.eq("answer_ok", p:answer("demo", "fs.read", "allowed"), true)
+        H.has(lines, "PERM_ANSWER app=demo cap=fs.read verdict=allowed by=user")
+        H.eq("queue_empty", p:pending(), 0)
+        H.contains("granted_line", H.read(root .. "/demo.cfg") or "", "fs.read=granted")
+
+        -- the next start asks for the next undecided capability only
+        local d2, i2 = p:ensure("demo", { "fs.read", "fs.write" })
+        H.eq("second_pending", d2, nil)
+        H.eq("second_cap", i2.pending_cap, "fs.write")
+        H.has(lines, "PERM_ASK app=demo cap=fs.write")
+        H.eq("answer_deny", p:answer("demo", "fs.write", "denied"), true)
+        H.contains("denied_line", H.read(root .. "/demo.cfg") or "", "fs.write=denied")
+
+        -- a file with both lines is never asked about again
+        local asks = p:count("PERM_ASK")
+        local d3, i3 = p:ensure("demo", { "fs.read", "fs.write" })
+        H.table("decided_table", d3)
+        H.eq("decided_source", i3.source, "file")
+        H.eq("decided_read", d3 and d3["fs.read"], true)
+        H.eq("decided_write", d3 and d3["fs.write"], false)
+        H.eq("no_new_ask", p:count("PERM_ASK"), asks)
+
+        -- Settings toggle: the same write, without a request
+        H.eq("set_denied", p:set("demo", "fs.read", false), true)
+        H.has(lines, "PERM_SET app=demo cap=fs.read verdict=denied by=user")
+        local states = p:states("demo", { "fs.read", "fs.write", "input" })
+        H.eq("state_read", states["fs.read"], "denied")
+        H.eq("state_write", states["fs.write"], "denied")
+        H.eq("state_undecided", states.input, "ask")
+        H.eq("set_granted", p:set("demo", "fs.write", true), true)
+        H.eq("state_granted", p:states("demo", { "fs.write" })["fs.write"], "granted")
+
+        -- nothing is queued for a cap that already has a line, and an injected
+        -- policy (the image pre-grant) still answers without a queue
+        local pregrant = PERMS.new({ fs = H.real_fs(), log = log, root = root,
+            ask = function() return true end })
+        local d4 = pregrant:ensure("img", { "fs.read" })
+        H.eq("pregrant_read", d4 and d4["fs.read"], true)
+        H.eq("pregrant_no_queue", pregrant:pending(), 0)
     end
 
     -- -----------------------------------------------------------------

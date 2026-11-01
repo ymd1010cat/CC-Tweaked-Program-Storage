@@ -71,6 +71,12 @@ M.POWER_ITEMS = {
 -- kernel owns the medium, the meta parser and the installer
 M.OTA_TITLE = "Updates"
 M.POWER_TITLE = "Power"
+-- the permission dialog (permissions rule 6): one question, two buttons, and the
+-- keyboard belongs to it until one of them is pressed (this machine's "tap").
+M.PERM_TITLE = "Permission request"
+M.PERM_ALLOW = "[Allow]"
+M.PERM_DENY = "[Deny]"
+M.PERM_HINT = "A=allow D=deny"
 -- tests replace these instead of really shutting the machine down
 M.POWER_HOOKS = {}
 M.SCAN_INTERVAL = 10
@@ -639,6 +645,79 @@ function M.power_lines(state, cols, rows)
     return out
 end
 
+-- The permission dialog: the runtime deferred an app's start because one declared
+-- capability has no decision yet (permissions rule 6); this is the one screen that
+-- can turn it into one. The first three rows are the question, as Android asks it.
+function M.perm_open(state, api, app, cap)
+    state.power, state.ota = nil, nil
+    state.perm = {
+        app = tostring(app == nil and "?" or app),
+        cap = tostring(cap == nil and "?" or cap),
+    }
+    state.message = ""
+    M.note(api, "perm open app=" .. state.perm.app .. " cap=" .. state.perm.cap)
+    return "repaint"
+end
+
+-- A = allowed, D = denied. The kernel does the write (and only that write makes
+-- the app startable), then the deferred start is retried: an allow starts the app
+-- with the capability, a deny starts it with the capability refused -- exactly
+-- what a package denied once already gets.
+function M.perm_answer(state, api, verdict)
+    local perm = state.perm
+    if type(perm) ~= "table" then return "none" end
+    local sysax = type(api) == "table" and api.sys or nil
+    local answer = type(sysax) == "table" and sysax.perms_answer or nil
+    if type(answer) ~= "function" then
+        state.message = "no permission bridge"
+        return "denied"
+    end
+    local called, ok, err = pcall(answer, perm.app, perm.cap, verdict)
+    if not called or ok ~= true then
+        state.message = "answer refused"
+        M.note(api, "perm answer app=" .. perm.app .. " cap=" .. perm.cap
+            .. " err=" .. M.fit(tostring(called and err or ok), 40))
+        return "error"
+    end
+    M.note(api, "perm answer app=" .. perm.app .. " cap=" .. perm.cap
+        .. " verdict=" .. tostring(verdict))
+    state.message = tostring(verdict) .. " " .. perm.cap
+    state.perm = nil
+    local launch = type(sysax) == "table" and sysax.launch or nil
+    if type(launch) == "function" then
+        local again, started, rerr = pcall(launch, perm.app)
+        if again and started then
+            state.launched = perm.app
+            state.message = "started " .. perm.app
+            M.note(api, "perm retry app=" .. perm.app .. " started=true")
+        else
+            M.note(api, "perm retry app=" .. perm.app .. " started=false err="
+                .. M.fit(tostring(started or rerr), 40))
+        end
+    end
+    return "repaint"
+end
+
+function M.perm_lines(state, cols, rows)
+    local perm = state.perm or {}
+    local out = {}
+    local function add(text)
+        if #out >= rows then return false end
+        out[#out + 1] = M.fit(text, cols)
+        return true
+    end
+    add(M.PERM_TITLE)
+    add(tostring(perm.app or "?") .. " wants " .. tostring(perm.cap or "?"))
+    add(M.PERM_ALLOW .. "  " .. M.PERM_DENY)
+    if state.message and state.message ~= "" then
+        add("")
+        add(state.message)
+    end
+    while #out < rows - 1 do add("") end
+    add(M.fit(M.PERM_HINT, cols))
+    return out
+end
+
 function M.hint_line(state)
     if state.message and state.message ~= "" then return state.message end
     if #(state.entries or {}) == 0 then return "no apps installed" end
@@ -668,6 +747,7 @@ function M.render(state, cols, rows)
     if cols < M.MIN_COLS or rows < M.MIN_ROWS then
         return { M.compact_line(state, cols, rows) }
     end
+    if state.perm then return M.perm_lines(state, cols, rows) end
     if state.ota then return M.ota_lines(state, cols, rows) end
     if state.power then return M.power_lines(state, cols, rows) end
     local out = {}
@@ -960,6 +1040,25 @@ end
 -- Returns "quit" when the desktop has to end, otherwise the handle_key action
 -- ("move" | "select" | "launch" | "error" | "denied" | "repaint" | "none").
 function M.dispatch_event(state, event, p1, p2, api)
+    -- the permission dialog owns the keyboard while it is open: A allows, D
+    -- denies, everything else is ignored (a question has no "dismiss")
+    if state.perm then
+        local ch = nil
+        if event == "char" then
+            ch = p1
+        elseif event == "key" then
+            local key = p1
+            if type(key) == "number" then key = M.code_name(key, api) end
+            ch = key
+        end
+        ch = tostring(ch == nil and "" or ch):lower()
+        if ch == "a" then return M.perm_answer(state, api, "allowed") end
+        if ch == "d" then return M.perm_answer(state, api, "denied") end
+        return "none"
+    end
+    -- the runtime deferred a start for an undecided capability: the desktop
+    -- delivered it here, and it is a system-modal question (it closes a menu)
+    if event == "perm_request" then return M.perm_open(state, api, p1, p2) end
     -- the OTA screen: up/down move, enter applies, q cancels (no Esc: the ROM
     -- does not deliver it, see DECISIONS.md)
     if state.ota then

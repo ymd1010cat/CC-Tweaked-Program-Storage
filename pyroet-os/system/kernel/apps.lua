@@ -299,19 +299,29 @@ function A:set_permissions(perms)
 end
 
 -- Ask the permission table about one record and fold the answers into its cap
--- set. Runs before the entry file is loaded, so the app's api is built from the
--- granted set and nothing has to be re-gated later.
+-- set, before the entry file is loaded so the api is built from the granted set.
+--
+-- -> true when the start may go ahead, nil + reason when it may not. The one "not
+-- a denial" refusal is `permission pending: <cap>`: the table queued it for the
+-- user (permissions rule 6), so the app is deferred, not refused -- and
+-- `perms_applied` is cleared so the retry after the answer re-asks.
 function A:apply_permissions(record)
     if not self.perms then return true end
     if record.perms_applied then return true end
     record.perms_applied = true
-    local called, decisions = pcall(self.perms.ensure, self.perms, record.name,
+    local called, decisions, info = pcall(self.perms.ensure, self.perms, record.name,
         record.manifest.capabilities, { dir = record.dir, known = A.CAPS })
     if not called then
         self:log("APP_PERMS_FAIL app=" .. record.name .. " err=" .. short(decisions, 40))
         decisions = nil
     end
     if type(decisions) ~= "table" then
+        if called and type(info) == "table" and info.source == "ask" then
+            local cap = tostring(info.pending_cap or "?")
+            record.perms_applied = false
+            self:log("APP_PERM_PENDING app=" .. record.name .. " cap=" .. short(cap, 24))
+            return nil, "permission pending: " .. cap
+        end
         -- fail closed: an app whose decisions could not be established runs with
         -- every capability denied, exactly like a denial (never like a grant)
         self:log("APP_PERMS_FAIL app=" .. record.name .. " err=undecided")
@@ -338,7 +348,10 @@ end
 -- ---------------------------------------------------------------------------
 
 A.SYS_FUNCTIONS = { "status", "apps", "perms", "launch", "install", "uninstall",
-    "list", "ota_list", "ota_apply", "rescan" }
+    "list", "ota_list", "ota_apply", "rescan",
+    -- Android-style permission surface (kernel/permissions.lua rules 6): the
+    -- launcher answers a queued request, Settings lists and toggles decisions
+    "perms_answer", "perms_set", "perms_list" }
 -- the three installer entries above are served by this runtime (see the
 -- installer bridge section); the four before them come from the host table
 A.SYS_INSTALLER = {
@@ -362,6 +375,14 @@ A.OTA_INTERNAL = "/pkgs"
 A.SYS_RUNTIME = {
     launch = { cap = nil, method = "sys_launch" },
     rescan = { cap = "fs.read", method = "sys_rescan" },
+}
+-- The permission surface. Capability free (no capability means "may decide
+-- permissions"), gated like every bridge: only a package the host gave a system
+-- surface reaches it, so a user package can never grant itself anything.
+A.SYS_PERMS = {
+    perms_answer = { cap = nil, method = "sys_perms_answer" },
+    perms_set = { cap = nil, method = "sys_perms_set" },
+    perms_list = { cap = nil, method = "sys_perms_list" },
 }
 -- same ceiling as kernel/installer.lua's NAME_MAX
 A.APP_NAME_MAX = 40
@@ -396,6 +417,7 @@ function A:sys_api(record)
         local bridge = A.SYS_INSTALLER[name]
         if bridge == nil then bridge = A.SYS_OTA[name] end
         if bridge == nil then bridge = A.SYS_RUNTIME[name] end
+        if bridge == nil then bridge = A.SYS_PERMS[name] end
         if bridge then
             -- the installer bridge is the runtime's own function: it has to ask
             -- this record's cap set before anything reaches the installer. It
@@ -496,6 +518,69 @@ function A:sys_uninstall(record, name)
     self:log(label .. " ok=" .. tostring(ok == true))
     if ok ~= true then return nil, tostring(info) end
     return true, info
+end
+
+-- ---------------------------------------------------------------------------
+-- the permission surface: ask once (rule 6), then manage it in Settings
+-- ---------------------------------------------------------------------------
+
+-- the question the desktop has to put on screen, or nil when nothing is queued
+function A:perm_pending()
+    if not self.perms or type(self.perms.next_request) ~= "function" then return nil end
+    local ok, item = pcall(self.perms.next_request, self.perms)
+    if not ok or type(item) ~= "table" then return nil end
+    return item
+end
+
+-- The launcher's answer to a queued request (A = allowed, D = denied). The write
+-- happens in kernel/permissions.lua; this only records who did it.
+function A:sys_perms_answer(record, app, cap, verdict)
+    if not self.perms then return nil, "no permission table" end
+    local ok, err = self.perms:answer(app, cap, verdict)
+    self:log("APP_PERM_ANSWER app=" .. short(app, 24) .. " cap=" .. short(cap, 24)
+        .. " by=" .. short(record.name, 24) .. " ok=" .. tostring(ok == true))
+    if not ok then return nil, tostring(err) end
+    return true
+end
+
+-- The Settings toggle. Only a capability the package declares may be written: the
+-- manifest stays the ceiling, exactly as it is for a grant.
+function A:sys_perms_set(record, app, cap, verdict)
+    if not self.perms then return nil, "no permission table" end
+    local target = self.index[tostring(app)]
+    if target == nil then return nil, "no such app" end
+    local caps = target.manifest.capabilities or {}
+    local declared = false
+    for i = 1, #caps do
+        if caps[i] == cap then declared = true break end
+    end
+    if not declared then return nil, "not declared" end
+    local granted = (verdict == true or verdict == "granted" or verdict == "allowed")
+    local ok, err = self.perms:set(target.name, cap, granted)
+    if not ok then return nil, tostring(err) end
+    -- the next start re-reads the file; a running app keeps the set it started with
+    target.perms_applied = false
+    return true
+end
+
+-- Every scanned package with its declared capabilities and their current state
+-- ("granted" | "denied" | "ask"), read from /etc/perms, never from a cache.
+function A:sys_perms_list(record)
+    if not self.perms then return nil, "no permission table" end
+    local out = {}
+    for i = 1, #self.records do
+        local rec = self.records[i]
+        local caps = rec.manifest.capabilities or {}
+        out[#out + 1] = {
+            name = rec.name,
+            version = rec.manifest.version,
+            dir = rec.dir,
+            state = rec.state,
+            caps = caps,
+            states = self.perms:states(rec.name, caps),
+        }
+    end
+    return true, out
 end
 
 -- ---------------------------------------------------------------------------
@@ -1045,7 +1130,12 @@ function A:start(name)
     end
     -- declared is not granted: ask the permission table before the entry is
     -- loaded, so the api below is built from the granted set
-    self:apply_permissions(record)
+    local allowed, deny_reason = self:apply_permissions(record)
+    if allowed == nil then
+        self:log("APP_START_DENIED name=" .. record.name
+            .. " reason=" .. short(deny_reason, 40))
+        return nil, deny_reason
+    end
     local ok, chunk, err = pcall(self.loadfile, record.entry_path)
     if not ok or not chunk then
         self:log("APP_START_FAIL app=" .. name .. " err=" .. short(err or chunk))

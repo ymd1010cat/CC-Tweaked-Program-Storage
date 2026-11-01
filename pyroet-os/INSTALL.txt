@@ -51,10 +51,16 @@ C. Manual edit: fine for /startup.lua, /etc/*.conf and one test .app, not for
 Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
 
 3. FIRST BOOT
-1. reboot. Expect a first frame like:
+1. reboot. Expect a splash first (logo, "Pyroet OS 0.2.0", a progress bar and the
+   step name: checking system / starting services / desktop, ~0.2 s in total),
+   then a first frame like:
      Pyroet OS 0.2.0
      kernel ok
      normal journal none
+   The splash is measured by SPLASH_BEGIN / SPLASH_DONE ms=.. in /kernel.log. It
+   is skipped on a headless run and when the boot plan is fatal (the FATAL lines
+   own the screen instead) -- if you see a logo over a BOOT_FATAL line, the
+   startup.lua on the machine is older than the kernel.
 2. The desktop then takes the screen: a launcher with the version line, the net
    line, the app list and "<n> apps sel 1/<n>" at the bottom. It stays there and
    the desktop is complete before you touch anything: the app list, the marker
@@ -71,6 +77,23 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
    and says "no updates" with a reason when there is nothing to apply (q
    goes back; no Esc needed). Inside an app Ctrl+T leaves that app first (back to the
    desktop); press it again on the desktop to get the menu.
+2b. PERMISSION DIALOG (Android style). The first time a user package in /apps
+   asks for a capability nobody has decided yet (no line in
+   /etc/perms/<app>.cfg), the launcher shows:
+     Permission request
+     <app> wants <capability>
+     [Allow]  [Deny]
+   A = Allow (writes "granted"), D = Deny (writes "denied"); any other key does
+   nothing (a question cannot be dismissed with q). After the answer the start is
+   retried: Allow starts the app with the capability, Deny starts it with that
+   capability refused ("capability denied: <cap>" on use). Image packages under
+   /system are pre-granted and never ask, and a capability that already has a
+   line is never asked about again. Headless boots (loop=false, the offline
+   suite) have nobody to ask and keep the old policy. Settings has a
+   "permissions" row: enter lists the apps, enter again lists the capabilities
+   with granted/denied/ask, enter toggles and writes, q goes back one level.
+   Log lines: PERM_ASK app=.. cap=.. and PERM_ANSWER app=.. cap=..
+   verdict=allowed|denied by=user.
    If it returns to the shell right away, or if keys do nothing while the screen
    stays put, grep /kernel.log for STARTUP_DESKTOP_SKIP: input_denied /
    terminal_denied means the capability was refused (from the shell run
@@ -200,6 +223,12 @@ parse errors include the line number. Check modem, iface_side, ip.
 "capability denied: <cap>": /etc/perms/<app>.cfg denies it (or the app is not
 a system package). A corrupt decision file denies everything and is never
 rewritten; delete it to be asked again.
+"permission pending: <cap>" / APP_PERM_PENDING: the desktop is asking you (look
+for PERM_ASK and the Permission request dialog). Answer with A or D; if no
+dialog appeared, /kernel.log DESKTOP_PERM_REQUEST says whether the request was
+delivered -- a launcher without "input"/"terminal" granted cannot draw it.
+"PERMS_PREGRANT" never appears for a user package: only image packages under
+/system are pre-granted, so a package in /apps always gets the dialog once.
 "No such program": run recovery programs by path, e.g.
 "recovery/flash.lua --host=12".
 Storage: "df" shows free space; keep >= 601,778 B free before an update

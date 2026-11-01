@@ -26,13 +26,19 @@ turns the declaration into a decision:
        absent line can be treated as "never decided" without losing a decision.
        `ensure(..., { prompt = false })` (the boot chain's read-only pass) never
        migrates and never writes.
+    6. the policy may answer `"ask"`: that boot cannot decide for itself, so the
+       capability is queued (`PERM_ASK`) and `ensure` answers `nil` -- nothing
+       cached, nothing written. `answer(app, cap, verdict)` writes the line
+       (`PERM_ANSWER ... by=user`) and drops the request, so the retry finds an
+       ordinary file. Android's rule: asked once, remembered; a line that already
+       exists is never asked again. `set(app, cap, granted)` is the same write
+       without a request (`PERM_SET`, the Settings toggle).
 
-The prompt is split into a pure line builder (`P.prompt_lines`, 26x20 aware, all
-items merged onto one screen) and an `ask` callback. Prompting happens during
-boot, before any app (and therefore before any `input` capability) is reachable,
-so the answer has to be supplied by the caller:
+The question itself is an `ask` callback, supplied by the caller:
 `P.new({ ask = function(app, cap, info) return true end })`. The default answers
-`false` -- fail closed, never grant what nobody approved.
+`false` -- fail closed, never grant what nobody approved. The line the user reads
+is drawn by the launcher (pyroet-os/system/system/launcher.app), which owns the
+keyboard; this module only owns the queue and the file.
 
 Log lines (ASCII, one line each, greppable):
 
@@ -45,13 +51,17 @@ Log lines (ASCII, one line each, greppable):
     PERMS_PRUNE app=<name> cap=<cap>
     PERMS_ASK_FAIL app=<name> cap=<cap> err=<reason>
     PERMS_RESET app=<name> path=<path> existed=true|false
+    PERM_ASK app=<name> cap=<cap>                  (queued for the desktop, rule 6)
+    PERM_ANSWER app=<name> cap=<cap> verdict=allowed|denied by=user
+    PERM_SET app=<name> cap=<cap> verdict=allowed|denied by=user
 
 Usage:
 
     local perms = dofile("/system/kernel/permissions.lua")
     local p = perms.new({ fs = fs, log = print, root = "/etc/perms" })
     local decisions, info = p:ensure("net", { "net.rpv", "fs.read" })
-    decisions["net.rpv"]   -- true / false
+    decisions["net.rpv"]   -- true / false, nil when info.source == "ask"
+    p:answer("net", "net.rpv", "allowed")   -- write granted, drop the request
     perms.reset("net", { fs = fs })   -- forget the file, ask again next start
 
 No non-ASCII bytes in this file.
@@ -59,11 +69,9 @@ No non-ASCII bytes in this file.
 
 local P = {}
 
-P.VERSION = "1.0"
+P.VERSION = "1.1"
 P.ROOT = "/etc/perms"
 P.FILE_HEADER = "# PYROET-PERMS-1"
-P.MIN_COLS = 12
-P.VIEW = { cols = 26, rows = 20 }
 
 -- Kept in sync with kernel/apps.lua A.CAPS; tests assert the two lists match,
 -- and apps.lua hands its own list in through `known`, so a drift here can only
@@ -85,19 +93,6 @@ end
 
 local function trim(text)
     return (tostring(text):gsub("^%s+", ""):gsub("%s+$", ""))
-end
-
--- printable ASCII only, truncated or padded to exactly `cols` columns
-function P.fit(text, cols)
-    cols = math.floor(tonumber(cols) or P.VIEW.cols)
-    if cols < 1 then cols = 1 end
-    local s = tostring(text == nil and "" or text):gsub("[^\32-\126]", "?")
-    if #s > cols then
-        s = s:sub(1, cols)
-    elseif #s < cols then
-        s = s .. string.rep(" ", cols - #s)
-    end
-    return s
 end
 
 local function cap_set(list)
@@ -131,6 +126,8 @@ function P.new(opts)
     self.ask = o.ask
     self.now = o.now
     self.cache = {}
+    -- rule 6: capabilities this boot has to ask the user about, oldest first
+    self.requests = {}
     self.known_list = o.caps or P.CAPS
     self.known = cap_set(self.known_list)
     return self
@@ -357,11 +354,115 @@ function P:list()
 end
 
 -- ---------------------------------------------------------------------------
+-- rule 6: the request queue and the one write an answer makes
+-- ---------------------------------------------------------------------------
+
+-- Queue one question. A capability is queued at most once: a start retried before
+-- the user answered must not stack duplicates.
+function P:enqueue(app, cap, info)
+    local key = tostring(app) .. "/" .. tostring(cap)
+    for i = 1, #self.requests do
+        if self.requests[i].key == key then return false end
+    end
+    local item = {
+        app = tostring(app),
+        cap = tostring(cap),
+        dir = type(info) == "table" and info.dir or nil,
+        key = key,
+    }
+    self.requests[#self.requests + 1] = item
+    self:log("PERM_ASK app=" .. item.app .. " cap=" .. item.cap)
+    return true
+end
+
+-- the oldest unanswered question, or nil
+function P:next_request()
+    return self.requests[1]
+end
+
+function P:pending()
+    return #self.requests
+end
+
+function P:take(app, cap)
+    local key = tostring(app) .. "/" .. tostring(cap)
+    for i = 1, #self.requests do
+        if self.requests[i].key == key then
+            return table.remove(self.requests, i)
+        end
+    end
+    return nil
+end
+
+-- Write exactly one decision over the file's existing decisions, keeping every
+-- other line, and drop the cache: an answer can only be *seen* through a re-read.
+function P:store(app, cap, granted)
+    local decisions = self:load(app)
+    local merged = {}
+    if type(decisions) == "table" then
+        for key, value in pairs(decisions) do merged[key] = value end
+    end
+    merged[tostring(cap)] = (granted == true)
+    self.cache[app] = nil
+    local ok, err = self:save(app, merged, { order = self.known_list })
+    if not ok then return nil, err end
+    return true
+end
+
+local function allowed_by(verdict)
+    return verdict == true or verdict == "allowed" or verdict == "allow"
+        or verdict == "granted"
+end
+
+-- The user answered a queued request (A = allowed, D = denied). This is the only
+-- path that turns a question into a line, and it always logs the vote.
+function P:answer(app, cap, verdict, by)
+    local denied = not allowed_by(verdict)
+    self:take(app, cap)
+    local ok, err = self:store(app, cap, not denied)
+    self:log("PERM_ANSWER app=" .. tostring(app) .. " cap=" .. tostring(cap)
+        .. " verdict=" .. (denied and "denied" or "allowed")
+        .. " by=" .. tostring(by or "user"))
+    if not ok then return nil, err end
+    return true
+end
+
+-- Settings toggle: the same write, no queue involved.
+function P:set(app, cap, granted)
+    local ok, err = self:store(app, cap, granted == true)
+    if not ok then return nil, err end
+    self:log("PERM_SET app=" .. tostring(app) .. " cap=" .. tostring(cap)
+        .. " verdict=" .. (granted == true and "allowed" or "denied") .. " by=user")
+    return true
+end
+
+-- cap -> "granted" | "denied" | "ask", read from the file (never the cache): the
+-- Settings screen shows what is on disk, not what a past start saw.
+function P:states(app, caps)
+    local decisions = self:load(app)
+    local out = {}
+    for i = 1, #caps do
+        local cap = caps[i]
+        if type(decisions) == "table" and decisions[cap] == true then
+            out[cap] = "granted"
+        elseif type(decisions) == "table" and decisions[cap] == false then
+            out[cap] = "denied"
+        else
+            out[cap] = "ask"
+        end
+    end
+    return out
+end
+
+-- ---------------------------------------------------------------------------
 -- the decision itself
 -- ---------------------------------------------------------------------------
 
 -- one question per capability; `ask` is the caller's input channel, and an ask
--- that raises is a denial (fail closed), never a prompt loop or a crash
+-- that raises is a denial (fail closed). An ask that answers `"ask"` cannot be
+-- decided on this boot: the capability is queued and the loop stops (nil
+-- decisions, the queued capability as third value), so nothing half-decided is
+-- ever returned, cached or written.
 function P:decide(app, caps, ctx)
     local o = ctx or {}
     local ask = o.ask or self.ask or P.deny_all
@@ -374,6 +475,10 @@ function P:decide(app, caps, ctx)
             self:log("PERMS_ASK_FAIL app=" .. tostring(app) .. " cap=" .. cap
                 .. " err=" .. short(answer, 32))
             answer = false
+        end
+        if answer == "ask" then
+            self:enqueue(app, cap, o)
+            return nil, order, cap
         end
         local granted = (answer == true or answer == "granted"
             or answer == "y" or answer == "yes")
@@ -393,12 +498,15 @@ local function tally(decisions, caps)
 end
 
 -- ensure(app, caps, { dir=, known=, ask=, prompt=false, force=false })
--- -> decisions, info { source = "cache"|"file"|"bad"|"prompt"|"none", prompted,
---                     granted, denied, path, pending, migrated }
+-- -> decisions, info { source = "cache"|"file"|"bad"|"prompt"|"none"|"ask",
+--                     prompted, granted, denied, path, pending, pending_cap,
+--                     migrated }
 -- `prompt = false` reads the table only: used by the boot chain to show what is
 -- decided before anything asks a question (it never migrates and never writes).
 -- `pending` counts the declared caps the file does not mention; a real start
 -- resolves them (rule 5 above) and reports how many it migrated.
+-- `source == "ask"` means the decisions are nil on purpose: the capability named
+-- by `pending_cap` is queued (rule 6), so the caller must not start the app.
 function P:ensure(app, caps, ctx)
     local o = ctx or {}
     local known = o.known and cap_set(o.known) or self.known
@@ -450,7 +558,17 @@ function P:ensure(app, caps, ctx)
         if #missing > 0 and o.prompt ~= false then
             self:log("PERMS_STALE app=" .. tostring(app)
                 .. " caps=" .. table.concat(missing, ","))
-            local decided = self:decide(app, missing, o)
+            local decided, _, asked = self:decide(app, missing, o)
+            if decided == nil then
+                -- rule 6: the new capability is a question for the user, so this
+                -- start cannot be decided. Nothing is written or cached; the retry
+                -- after the answer re-reads the file and migrates the rest.
+                info.source = "ask"
+                info.pending = #missing
+                info.pending_cap = tostring(asked)
+                info.granted, info.denied = tally(filtered, list)
+                return nil, info
+            end
             for i = 1, #missing do
                 filtered[missing[i]] = decided[missing[i]]
             end
@@ -485,8 +603,16 @@ function P:ensure(app, caps, ctx)
     end
     self:log("PERMS_PROMPT app=" .. tostring(app)
         .. " caps=" .. table.concat(list, ","))
-    local decided, order = self:decide(app, list, o)
+    local decided, order, asked = self:decide(app, list, o)
     info.prompted = true
+    if decided == nil then
+        -- rule 6: queue only. nil decisions is what the runtime turns into
+        -- "permission pending" and the desktop turns into a dialog.
+        info.source = "ask"
+        info.pending = #list
+        info.pending_cap = tostring(asked)
+        return nil, info
+    end
     info.source = "prompt"
     local saved, err = self:save(app, decided, { order = order })
     if not saved then info.save_error = tostring(err) end
@@ -523,51 +649,6 @@ end
 
 function P:decisions_for(app)
     return self.cache[app]
-end
-
--- ---------------------------------------------------------------------------
--- the prompt screen (pure: no terminal, no fs)
--- ---------------------------------------------------------------------------
-
--- One screen for the whole list: the P2 terminal is 26x20, so "ask each item on
--- its own screen" would be four separate 20-row screens; merging them is both
--- cheaper and what the design asks for.
-function P.prompt_lines(app, caps, cols, rows)
-    cols = math.floor(tonumber(cols) or P.VIEW.cols)
-    rows = math.floor(tonumber(rows) or P.VIEW.rows)
-    if cols < 1 then cols = 1 end
-    if rows < 1 then rows = 1 end
-    local list = type(caps) == "table" and caps or {}
-    local out = {}
-    local function add(text)
-        if #out >= rows then return false end
-        out[#out + 1] = P.fit(text, cols)
-        return true
-    end
-    add("Permission request")
-    if add("app " .. tostring(app)) == false then return out end
-    if rows < 4 then
-        while #out < rows do add("") end
-        out[#out] = P.fit("[y/N] " .. tostring(list[1] or "-"), cols)
-        return out
-    end
-    local budget = rows - 3
-    local shown = 0
-    if #list <= budget then
-        for i = 1, #list do
-            add("[y/N] " .. tostring(list[i]))
-            shown = shown + 1
-        end
-    else
-        for i = 1, budget - 1 do
-            add("[y/N] " .. tostring(list[i]))
-            shown = shown + 1
-        end
-        add("+" .. tostring(#list - shown) .. " more")
-    end
-    while #out < rows - 1 do add("") end
-    add("[y/N] default N")
-    return out
 end
 
 return P

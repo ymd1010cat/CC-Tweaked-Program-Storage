@@ -230,7 +230,8 @@ return function(H)
         H.eq("settings_running", rt:app("settings").state, "running")
         H.has(lines, "APP_START name=settings")
         rt:tick()
-        H.has(lines, "APP_LOG app=settings msg=ready item=1 items=2")
+        -- three rows now: prefix, iface and the Permissions screen (rule 6)
+        H.has(lines, "APP_LOG app=settings msg=ready item=1 items=3")
         H.eq("still_running", rt:app("settings").state, "running")
 
         -- and the whole frame loop does the same from a key sequence

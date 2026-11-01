@@ -3,6 +3,9 @@
 This is the only file CraftOS runs (via the tiny /startup.lua stub), so it stays
 a thin sequence and pushes every real decision into the modules it loads:
 
+    0. splash            logo + version + a progress bar over the steps below
+                         (`SPLASH_BEGIN` / `SPLASH_DONE ms=..`), skipped when
+                         headless, in the offline suite, or by `opts.splash=false`
     1. boot.begin()      decide from /system + update journal + /boot.ok
     2. kernel.new()      build the service manager
     3. apps.new()        build the app runtime, scan <apps_root> for *.app
@@ -82,7 +85,14 @@ boot_path, kernel_path, apps_path, apps_root, system_root, log, now, term,
 frame, loop, reboot, version, services, rpv, rednet, redstone, peripheral, http,
 input, terminal, write_limit, permissions, permissions_path, perms_root, ask,
 launcher, net, net_path, net_config, net_hosts, installer, installer_path,
-media_root, packages, sha, desktop, desktop_path, desktop_events, pull_event.
+media_root, packages, sha, desktop, desktop_path, desktop_events, pull_event,
+splash, headless, clock, sleep, perms_interactive.
+
+`splash = true` forces the boot splash on in a headless run (the splash suite
+needs that); `splash = false` opts out. `headless = true` and `loop = false` are
+headless boots and never draw it; `clock`/`sleep` are the injected time source the
+`ms=` figure and the ~50 ms step waits come from. `perms_interactive` forces the
+Android ask policy on or off (see `P.perms_interactive`).
 
 `pull_event` is the desktop loop's one blocking event source (a function, like
 os.pullEvent); supplying it is what turns the resident loop on under test, and
@@ -193,6 +203,173 @@ function P.default_frame(opts)
         end)
         return ok
     end
+end
+
+-- ---------------------------------------------------------------------------
+-- the boot splash: logo, version, progress bar, step name
+-- ---------------------------------------------------------------------------
+--
+-- Drawn once the plan is known good, cleared again before the first frame: a
+-- splash can never become a second, wrong frame. A fatal plan never reaches it,
+-- a headless boot and the offline suite skip it, and each step waits ~50 ms.
+local function fit(text, cols)
+    if cols < 1 then cols = 1 end
+    local s = tostring(text == nil and "" or text):gsub("[^\32-\126]", "?")
+    if #s > cols then return s:sub(1, cols) end
+    return s .. string.rep(" ", cols - #s)
+end
+
+P.SPLASH_COLS = 26
+P.SPLASH_ROWS = 20
+P.SPLASH_LOGO = {
+    "    .----------.",
+    "    |  PYROET  |",
+    "    |    OS    |",
+    "    '----------'",
+}
+P.SPLASH_STEPS = { "checking system", "starting services", "desktop" }
+P.SPLASH_BAR = 12
+P.SPLASH_SLEEP = 0.05
+
+-- "[####        ]  33%": `width` cells, then the percentage, 0..100
+function P.splash_bar(pct, width)
+    width = math.floor(tonumber(width) or P.SPLASH_BAR)
+    if width < 1 then width = 1 end
+    local p = math.floor(tonumber(pct) or 0)
+    if p < 0 then p = 0 elseif p > 100 then p = 100 end
+    local filled = math.floor((p * width) / 100 + 0.5)
+    return "[" .. string.rep("#", filled) .. string.rep(" ", width - filled)
+        .. "] " .. string.format("%3d", p) .. "%"
+end
+
+-- the whole screen, exactly `rows` lines of `cols` columns. The logo sits four
+-- rows down on a 20 row console; a screen shorter than 12 rows drops it.
+function P.splash_lines(info, cols, rows)
+    cols = math.floor(tonumber(cols) or P.SPLASH_COLS)
+    rows = math.floor(tonumber(rows) or P.SPLASH_ROWS)
+    if cols < 1 then cols = 1 end
+    if rows < 1 then rows = 1 end
+    local i = info or {}
+    local out = {}
+    for y = 1, rows do out[y] = fit("", cols) end
+    local function put(y, text)
+        if y >= 1 and y <= rows then out[y] = fit(text, cols) end
+    end
+    local top, logo = 1, {}
+    if rows >= 12 then
+        logo = P.SPLASH_LOGO
+        top = math.floor((rows - 10) / 2)
+        if top < 1 then top = 1 elseif top > 4 then top = 4 end
+    end
+    for n = 1, #logo do put(top + n - 1, logo[n]) end
+    local base = top + #logo
+    put(base + 1, "Pyroet OS " .. tostring(i.version or P.VERSION))
+    put(base + 4, P.splash_bar(i.pct, P.SPLASH_BAR))
+    put(base + 5, tostring(i.step or ""))
+    return out
+end
+
+function P.splash_enabled(o)
+    if o.splash == false then return false, "disabled" end
+    -- the one override the splash suite uses: force it on in a headless run
+    if o.splash == true then return true, "forced" end
+    if o.headless == true or o.loop == false then return false, "headless" end
+    if rawget(_G, "PYROET_DESKTOP_TEST") then return false, "test" end
+    return true, "auto"
+end
+
+-- elapsed milliseconds from the injected clock, or nil when there is none
+function P.splash_ms(s)
+    if type(s.clock) ~= "function" or type(s.start) ~= "number" then return nil end
+    local ok, value = pcall(s.clock)
+    if not ok or type(value) ~= "number" then return nil end
+    return math.floor((value - s.start) * 1000 + 0.5)
+end
+
+function P.splash_paint(s)
+    local t = s.term
+    local cols, rows = P.SPLASH_COLS, P.SPLASH_ROWS
+    if type(t.getSize) == "function" then
+        local ok, w, h = pcall(t.getSize)
+        if ok and type(w) == "number" and type(h) == "number" then cols, rows = w, h end
+    end
+    local lines = P.splash_lines({ version = s.version, pct = s.pct, step = s.step },
+        cols, rows)
+    pcall(t.clear)
+    for y = 1, #lines do
+        pcall(t.setCursorPos, 1, y)
+        pcall(t.write, lines[y])
+    end
+    s.paints = (s.paints or 0) + 1
+    return lines
+end
+
+function P.splash_wait(s)
+    if type(s.sleep) ~= "function" then return end
+    s.waits = (s.waits or 0) + 1
+    pcall(s.sleep, P.SPLASH_SLEEP)
+end
+
+-- -> splash object, or nil when the splash is off (a `SPLASH_SKIP` line says why;
+-- the suite's own skip is silent so the boot log stays the one tests count)
+function P.splash_begin(o, log)
+    local enabled, why = P.splash_enabled(o)
+    if not enabled then
+        if why ~= "test" then log("SPLASH_SKIP reason=" .. short(why, 16)) end
+        return nil
+    end
+    local term = o.term or rawget(_G, "term")
+    if type(term) ~= "table" or type(term.clear) ~= "function"
+        or type(term.write) ~= "function" or type(term.setCursorPos) ~= "function" then
+        log("SPLASH_SKIP reason=no_terminal")
+        return nil
+    end
+    local osx = rawget(_G, "os")
+    local clock, sleep = o.clock, o.sleep
+    if type(clock) ~= "function" and type(osx) == "table" then clock = osx.clock end
+    if type(sleep) ~= "function" and type(osx) == "table" then sleep = osx.sleep end
+    local s = {
+        term = term, clock = clock, sleep = sleep, log = log,
+        version = o.version or P.VERSION,
+        steps = P.SPLASH_STEPS, index = 0, pct = 0, step = P.SPLASH_STEPS[1],
+    }
+    if type(clock) == "function" then
+        local ok, value = pcall(clock)
+        if ok and type(value) == "number" then s.start = value end
+    end
+    log("SPLASH_BEGIN version=" .. tostring(s.version))
+    P.splash_paint(s)
+    P.splash_wait(s)
+    return s
+end
+
+function P.splash_step(s, name)
+    if s == nil then return nil end
+    s.index = s.index + 1
+    s.pct = math.floor((s.index * 100) / math.max(1, #s.steps))
+    s.step = name or s.steps[s.index] or s.step
+    local lines = P.splash_paint(s)
+    P.splash_wait(s)
+    return lines
+end
+
+-- clear the screen and hand it to the next phase: the boot log, then the frame
+function P.splash_done(s)
+    if s == nil then return nil end
+    local ms = P.splash_ms(s)
+    pcall(s.term.clear)
+    pcall(s.term.setCursorPos, 1, 1)
+    s.log("SPLASH_DONE ms=" .. tostring(ms == nil and "?" or ms))
+    return ms
+end
+
+-- a fatal plan outranks the splash: it is cleared, never repainted
+function P.splash_abort(s, reason)
+    if s == nil then return false end
+    pcall(s.term.clear)
+    pcall(s.term.setCursorPos, 1, 1)
+    s.log("SPLASH_ABORT reason=" .. short(reason, 24))
+    return true
 end
 
 -- O3: the production input host. `input` is a capability now, so an app that
@@ -447,21 +624,29 @@ end
 -- permissions and the desktop
 -- ---------------------------------------------------------------------------
 
--- Boot has no event loop of its own, so "does this app get this capability" is
--- a policy rather than a question: a prompt would have to own the keyboard
--- through the runtime, and nothing is started yet at this point. A package that
--- arrived with the system image is granted exactly what its manifest declares,
--- and anything else is denied until an input-owning UI can ask. Whichever way it
--- goes, the permission table logs the prompt and every decision.
-function P.default_ask(log)
+-- Boot has no event loop of its own, so "does this app get this capability" is a
+-- policy, not a question: an image package is granted what its manifest declares,
+-- an interactive boot answers `"ask"` (kernel/permissions.lua queues it and the
+-- launcher asks), and everything else is denied until a UI can ask.
+function P.default_ask(log, interactive)
     return function(app, cap, info)
         local dir = type(info) == "table" and tostring(info.dir or "") or ""
         if dir:sub(1, #P.SYSTEM_ROOT + 1) == P.SYSTEM_ROOT .. "/" then
             log("PERMS_PREGRANT app=" .. tostring(app) .. " cap=" .. tostring(cap))
             return true
         end
+        if interactive then return "ask" end
         return false
     end
+end
+
+-- Is this boot allowed to ask the user? A real boot that ends in the desktop --
+-- or `opts.perms_interactive`, which is how the suite drives it. A headless boot
+-- has nobody to ask, so it keeps the pre-grant/deny policy.
+function P.perms_interactive(o)
+    if o.perms_interactive ~= nil then return o.perms_interactive == true end
+    local enabled, why = P.desktop_enabled(o)
+    return enabled and why == "auto"
 end
 
 -- Step 3c, before anything starts: declared is not granted, so the table has to
@@ -472,11 +657,13 @@ function P.attach_permissions(ctx, o, log)
         perms_mod = load_module(o.permissions_path or P.PERMISSIONS_PATH)
     end
     if ctx.rt and type(perms_mod) == "table" and type(perms_mod.new) == "function" then
+        local ask = o.ask
+        if ask == nil then ask = P.default_ask(log, P.perms_interactive(o)) end
         ctx.perms = perms_mod.new({
             fs = ctx.fs,
             log = log,
             root = o.perms_root,
-            ask = o.ask or P.default_ask(log),
+            ask = ask,
         })
         ctx.rt:set_permissions(ctx.perms)
         log("STARTUP_PERMS_READY root=" .. short(ctx.perms.root, 40))
@@ -725,6 +912,8 @@ end
 -- ---------------------------------------------------------------------------
 
 local function reboot(ctx, reason)
+    -- a reboot path keeps no splash: the screen is cleared and the reason printed
+    P.splash_abort(ctx.splash, reason)
     ctx.log("STARTUP_REBOOT reason=" .. short(reason))
     local ok, err = pcall(ctx.reboot)
     if not ok then
@@ -786,9 +975,17 @@ function P.run(opts)
         .. " journal=" .. tostring(type(plan.journal) == "table" and plan.journal.state or "none")
         .. " tries=" .. tostring(plan.tries or 0))
     if plan.action == "fatal" then
+        -- no splash on a fatal plan: the FATAL lines are the screen, so nothing
+        -- is drawn before them (`P.splash_begin` is below this return)
         log("STARTUP_FATAL reason=" .. short(plan.error))
         return { ok = false, fatal = true, plan = plan, error = tostring(plan.error) }
     end
+
+    -- 1b. the splash: drawn after the plan is known good, so a fatal boot never
+    -- has to clear it. `P.splash_step(nil, ..)` is a no-op when it is off.
+    local splash = P.splash_begin(o, log)
+    ctx.splash = splash
+    P.splash_step(splash, "checking system")
 
     -- 2/3. kernel and app runtime -----------------------------------------
     local k = kernel_mod.new({ log = log })
@@ -869,6 +1066,7 @@ function P.run(opts)
     end
 
     -- 5. start -------------------------------------------------------------
+    P.splash_step(splash, "starting services")
     local status = k:start_all()
     log("STARTUP_KERNEL health=" .. tostring(status.health)
         .. " running=" .. tostring(status.counts.running)
@@ -888,6 +1086,10 @@ function P.run(opts)
     end
 
     -- 7. first frame -------------------------------------------------------
+    -- the last splash step is drawn, then the splash clears itself: the frame
+    -- below draws on an empty screen, exactly as it did before the splash existed
+    P.splash_step(splash, "desktop")
+    P.splash_done(splash)
     local frame = o.frame or P.default_frame(o)
     local okf, fret = pcall(frame, plan, status, ctx.rt)
     if not okf then

@@ -139,6 +139,9 @@ pyroet-os/
 /startup.lua（starter，1,070 B）
   └─ pcall(loadfile, "/system/startup.lua") 并调用它；失败就打印 ASCII 错误并退回 ROM shell
        ├─ 1. boot.begin()       读 /system、journal、/boot.ok；必要时先回滚，再决定 normal/trial/fatal
+       ├─ 1b. 启动画面          logo + 版本 + 三步进度条（checking system / starting services / desktop，
+                                每步 ~50 ms，`SPLASH_BEGIN` / `SPLASH_DONE ms=`）；**fatal 计划不画**，
+                                headless / `loop=false` / 离线套件跳过，收尾清屏把屏交给首帧
        ├─ 2. kernel.new()       构建服务管理器
        ├─ 3. apps.new()         扫描 /apps 与 /system/system/*.app
        ├─ 3c. permissions       在**任何 app 启动之前**挂上权限表（声明 ≠ 授权）
@@ -222,6 +225,20 @@ manifest 的 `capabilities` 只是**声明**：首启时 `PERMS_PROMPT app=.. ca
 非法值、空文件）→ `PERMS_BAD_FILE` + **全部拒绝**，且**不重写**（坏决策绝不静默变授权）；
 manifest 已不再声明的陈旧行忽略并记 `PERMS_PRUNE`（陈旧 ≠ 损坏）。
 
+**Android 式询问（DECISIONS §43）**：真机启动（控制台最终交给桌面）时，用户包声明一个还没有决策行的
+capability **不会**被静默拒绝或放行——运行时把请求入队（`PERM_ASK`），launcher 弹模态对话框：
+
+```
+Permission request
+<app> wants <capability>
+[Allow]  [Deny]
+```
+
+`A` = Allow（写 `granted`）、`D` = Deny（写 `denied`），回答后立刻重试启动（Deny 时应用照常起来，
+但该 cap 被拒，`capability denied: <cap>`）；除了 A/D 之外任何键都不关闭对话框（`q`/`enter` 也不行）。
+镜像包（`/system/`）**预授权、永不弹窗**；已经写过 `granted`/`denied` 的行永不再问；headless / `loop=false`
+/ 离线套件没有可问的人，仍按旧策略（镜像预授权、用户包拒绝）。日志 `PERM_ASK` / `PERM_ANSWER ... by=user`。
+
 ```
 # PYROET-PERMS-1 app=net
 net.rpv=granted
@@ -237,18 +254,21 @@ fs.read=granted
 - 持久化失败只记 `PERMS_SAVE_FAIL`，不阻断启动。
 
 `api.sys`（`status()` / `apps()` / `perms(app)` / `launch(name)` / `install(name)` /
-`uninstall(name)` / `list()`）**不是 cap**，而是宿主注入的只读内省面，且只交给 `/system/`
-下的系统包；用户包拿到桩，`launch` 按**目录**而不是按 cap 授权。后三个由**运行时自己**实现
-（只有它知道调用方 record 的 cap 集合）：`install`/`uninstall` 需 `fs.write`、`list` 需 `fs.read`，
-未授权仍是 `nil, "capability denied: <cap>"` + `APP_CAP_DENIED`；目标对象由启动链构造并以
-`apps.new({ installer = inst })` 注入，缺失时返回 `nil, "installer unavailable"`。详见 §5.5。
+`uninstall(name)` / `list()` / `ota_list()` / `ota_apply(name)` / `rescan()` /
+`perms_answer(app, cap, verdict)` / `perms_set(app, cap, verdict)` / `perms_list()`）**不是 cap**，
+而是宿主注入的只读内省面，且只交给 `/system/`
+下的系统包；用户包拿到桩，`launch` 按**目录**而不是按 cap 授权。后六个由**运行时自己**实现
+（只有它知道调用方 record 的 cap 集合）：`install`/`uninstall`/`perms_answer`/`perms_set` 需系统面，
+`list`/`perms_list` 同；未授权仍是 `nil, "capability denied: <cap>"` + `APP_CAP_DENIED`；目标对象由启动链
+构造并以 `apps.new({ installer = inst })` 注入，缺失时返回 `nil, "installer unavailable"`。详见 §5.5。
 
 ### 4.3 键盘与屏幕这两条边界
 
 `input` / `terminal` 是**新增的 opt-in 能力**（DECISIONS §19）：包不声明就拿不到，且两者互不蕴含。
-"询问"仍然是**注入的回调**（`startup.P.default_ask`）：启动时还没有任何 app、也没有事件派发器，所以
-`/system/` 下的系统镜像包按 manifest 原样授权（`PERMS_PREGRANT`），其它包一律拒绝；要重新询问某包，
-删掉它的决策文件（`permissions.reset(app)`）。launcher 现在**两条路都在**：常驻 entry 用
+权限询问现在是**真交互**（DECISIONS §43）：真机启动时用户包上未决策的 cap 由 launcher 弹模态框问
+（`A`/`D`），答案落盘后重试启动；镜像包预授权、headless 无询问，要重新询问某包就删掉它的决策文件
+（`permissions.reset(app)`）。设置里也有 **Permissions** 页（应用 → 能力 → `enter` 在 granted/denied 间
+切换，`q` 逐级返回）。launcher 现在**两条路都在**：常驻 entry 用
 `api.input.pullEvent()` 拿事件（声明了 `input` + `terminal`），而纯函数 `M.handle_key(state, key)`
 与 `opts.keys` 驱动的 `M.run` 仍是离线套件用的那条路；Net app 的 probe 目标仍从 `/etc/net.target` 读一行。
 
