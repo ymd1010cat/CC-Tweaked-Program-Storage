@@ -2,13 +2,13 @@
 
 What it does, and nothing else:
 
-  1. scan the source medium /disk/apps for `<name>.app` packages -- a machine
-     with no drive simply has no medium, which is a normal state and not an
-     error -- and the two installed roots: /apps (user packages) and
+  1. scan the internal package directory /pkgs for `<name>.app` packages -- a
+     pocket computer has no drive, so this computer's own disk is the only local
+     source -- and the two installed roots: /apps (user packages) and
      /system/system (the image's own packages, which can never be removed);
-  2. show one list of tagged rows: `d` package on the medium, `i` installed
-     under /apps, `s` shipped with the image;
-  3. Enter on a `d` row installs it, Enter on an `i` row removes it, Enter on an
+  2. show one list of tagged rows: `p` package in /pkgs, `i` installed under
+     /apps, `s` shipped with the image;
+  3. Enter on a `p` row installs it, Enter on an `i` row removes it, Enter on an
      `s` row is refused on screen (system packages only move through a system
      OTA, DECISIONS.md 1.2(c));
   4. print the outcome on the hint row: `installed <name> <version>`,
@@ -41,7 +41,7 @@ function of the state -- `M.handle_key(state, key, api, opts)` -- and `M.run`
 pulls them from `opts.keys`. Up/down (or left/right) move, a digit jumps, enter
 or return applies, escape or q or c cancels the line on screen.
 
-Layout (DECISIONS.md 7.2): row 1 the app version, row 2 the medium and the
+Layout (DECISIONS.md 7.2): row 1 the app version, row 2 the source and the
 installed count, rows 3..n-2 the list, row n-1 the hint (or one message), row n
 the counters. Every line is padded or truncated to the view width and never
 wider. Under 16 columns or 6 rows the view collapses to a single status line --
@@ -59,14 +59,12 @@ M.VERSION = "0.2.0"
 M.VIEW = { cols = 26, rows = 20 }
 M.MIN_COLS = 16
 M.MIN_ROWS = 6
-M.INTERNAL = "/pkgs"            -- packages on this computer's own disk (T7)
-M.MEDIUM = "/disk/apps"         -- packages on an optional source disk
-M.DISK = "/disk"                -- the mount point that may not exist
+M.INTERNAL = "/pkgs"           -- packages on this computer's own disk
 M.APPS = "/apps"               -- installed user packages
 M.SYSTEM = "/system/system"    -- packages that ship with the image
 M.HINT = "up/dn enter apply"
 M.SCAN_INTERVAL = 10
-M.SOURCES = { "disk", "apps", "system" }
+M.SOURCES = { "internal", "apps", "system" }
 
 -- ---------------------------------------------------------------------------
 -- small pure helpers
@@ -107,7 +105,7 @@ function M.read_file(api, path)
 end
 
 -- Peek at a package's declared version without running anything from the
--- medium: executing a package's manifest before the installer validated it is
+-- source: executing a package's manifest before the installer validated it is
 -- exactly the thing a package manager must not do. A value this cannot read is
 -- "?" and nothing else happens.
 function M.manifest_version(api, dir)
@@ -126,7 +124,6 @@ end
 
 function M.tag_of(entry)
     if type(entry) ~= "table" then return "?" end
-    if entry.source == "disk" then return "d" end
     if entry.source == "internal" then return "p" end
     if entry.source == "system" then return "s" end
     return "i"
@@ -135,7 +132,7 @@ end
 -- what Enter means on this row
 function M.action_of(entry)
     if type(entry) ~= "table" then return "none" end
-    if entry.source == "disk" or entry.source == "internal" then return "install" end
+    if entry.source == "internal" then return "install" end
     if entry.source == "system" then return "locked" end
     return "remove"
 end
@@ -192,12 +189,12 @@ local function has_manifest(api, dir)
 end
 
 -- Every row the screen can show, in one pass. Returns entries, problems and
--- whether a medium was readable: a missing drive is `disk_ok=false`, a refused
--- fs.read is a problem line, and neither one raises.
+-- whether the local source (/pkgs) was readable: a missing directory is
+-- `source_ok=false` (a normal pocket computer state), a refused fs.read is a
+-- problem line, and neither one raises.
 function M.scan(api, opts)
     local o = opts or {}
     local internal = o.internal or M.INTERNAL
-    local disk = o.medium or M.MEDIUM
     local roots = {
         { root = o.apps or M.APPS, source = "apps" },
         { root = o.system or M.SYSTEM, source = "system" },
@@ -209,58 +206,39 @@ function M.scan(api, opts)
     end
     local index = M.versions(api)
 
-    -- T7: /pkgs first (it is on this computer's own disk), then /disk/apps only
-    -- when a disk is actually mounted: a pocket computer has no drive, and that
-    -- is not an error.
-    local sources, source_text_parts = { { root = internal, source = "internal" } }, {}
-    local mounted = false
-    do
-        local exists = type(fsx.exists) == "function" and fsx.exists(M.DISK)
-        local is_dir = exists and type(fsx.isDir) == "function" and fsx.isDir(disk)
-        mounted = (exists and is_dir) == true
-    end
-    -- the disk root is always *probed*, never required: an absent drive simply
-    -- lists nothing (and adds no problem line)
-    sources[#sources + 1] = { root = disk, source = "disk" }
+    -- the local source: /pkgs is on this computer's own disk. It is always
+    -- probed, never required: a missing directory simply lists nothing.
+    local source_parts = {}
     local readable = 0
-    for s = 1, #sources do
-        local root, source = sources[s].root, sources[s].source
-        local names = listing(api, root)
-        if names == nil then
-            -- a source that is not there is not a problem (a pocket computer has
-            -- no disk drive at all); a source that IS there but unreadable is
-            -- reported, so a broken medium is not silent
-            if source == "internal" and o.internal ~= nil then
-                problems[#problems + 1] = "no internal source " .. tostring(root)
-            end
-        else
-            readable = readable + 1
-            local used = false
-            for i = 1, #names do
-                local dir_name = names[i]
-                if dir_name:sub(-4) == ".app" then
-                    local app = dir_name:sub(1, #dir_name - 4)
-                    local dir = root .. "/" .. dir_name
-                    if not has_manifest(api, dir) then
-                        problems[#problems + 1] = "no manifest " .. app
-                    else
-                        used = true
-                        if seen[app] and source == "disk" then
-                            problems[#problems + 1] = "duplicate " .. app
-                        elseif not seen[app] then
-                            seen[app] = true
-                            entries[#entries + 1] = {
-                                name = app, dir = dir, root = root, source = source,
-                                version = M.manifest_version(api, dir),
-                            }
-                        end
-                    end
+    local names = listing(api, internal)
+    if names == nil then
+        -- an explicit root that is there but unreadable is worth a line
+        if o.internal ~= nil then
+            problems[#problems + 1] = "no internal source " .. tostring(internal)
+        end
+    else
+        readable = readable + 1
+        local used = false
+        for i = 1, #names do
+            local dir_name = names[i]
+            if dir_name:sub(-4) == ".app" then
+                local app = dir_name:sub(1, #dir_name - 4)
+                local dir = internal .. "/" .. dir_name
+                if not has_manifest(api, dir) then
+                    problems[#problems + 1] = "no manifest " .. app
+                elseif not seen[app] then
+                    used = true
+                    seen[app] = true
+                    entries[#entries + 1] = {
+                        name = app, dir = dir, root = internal, source = "internal",
+                        version = M.manifest_version(api, dir),
+                    }
                 end
             end
-            if used then source_text_parts[#source_text_parts + 1] = source end
         end
+        if used then source_parts[#source_parts + 1] = "internal" end
     end
-    local disk_ok = readable > 0
+    local source_ok = readable > 0
 
     for r = 1, #roots do
         local root, source = roots[r].root, roots[r].source
@@ -290,18 +268,18 @@ function M.scan(api, opts)
         end
     end
 
-    -- medium first, then the user root, then the image: the on-screen order is
+    -- source first, then the user root, then the image: the on-screen order is
     -- the order of the three questions a user actually asks
-    local RANK = { internal = 0, disk = 1, apps = 2, system = 3 }
+    local RANK = { internal = 0, apps = 1, system = 2 }
     table.sort(entries, function(a, b)
         local ra, rb = RANK[a.source] or 9, RANK[b.source] or 9
         if ra ~= rb then return ra < rb end
         if a.name ~= b.name then return a.name < b.name end
         return tostring(a.dir) < tostring(b.dir)
     end)
-    local source_text = #source_text_parts > 0
-        and table.concat(source_text_parts, "+") or "none"
-    return entries, problems, disk_ok, source_text
+    local source_text = #source_parts > 0
+        and table.concat(source_parts, "+") or "none"
+    return entries, problems, source_ok, source_text
 end
 
 -- ---------------------------------------------------------------------------
@@ -318,13 +296,13 @@ function M.build(api, opts)
         problems = {},
         message = "",
         version = o.version or "?",
-        medium = o.medium or M.MEDIUM,
+        internal = o.internal or M.INTERNAL,
         apps_root = o.apps or M.APPS,
         system_root = o.system or M.SYSTEM,
         scan_interval = o.scan_interval or M.SCAN_INTERVAL,
-        disk_ok = false,
+        source_ok = false,
         source_text = "none",
-        disk_count = 0,
+        internal_count = 0,
         apps_count = 0,
         sys_count = 0,
         scanned = 0,
@@ -351,10 +329,10 @@ function M.refresh(state, api, opts)
             local current = M.selected(state)
             keep = current and M.key_of(current) or nil
         end
-        local entries, problems, disk_ok, source_text = M.scan(api, o)
+        local entries, problems, source_ok, source_text = M.scan(api, o)
         state.entries = entries
         state.problems = problems or {}
-        state.disk_ok = disk_ok == true
+        state.source_ok = source_ok == true
         state.source_text = source_text or "none"
         state.scanned = (state.scanned or 0) + 1
         local index = nil
@@ -369,11 +347,11 @@ function M.refresh(state, api, opts)
         state.index = position
         local selected = entries[position]
         state.selected_key = selected and M.key_of(selected) or nil
-        state.disk_count, state.apps_count, state.sys_count = 0, 0, 0
+        state.internal_count, state.apps_count, state.sys_count = 0, 0, 0
         for i = 1, #entries do
             local source = entries[i].source
-            if source == "disk" then
-                state.disk_count = state.disk_count + 1
+            if source == "internal" then
+                state.internal_count = state.internal_count + 1
             elseif source == "system" then
                 state.sys_count = state.sys_count + 1
             else
@@ -453,10 +431,10 @@ function M.install_selected(state, api, opts)
         state.message = "nothing selected"
         return "none"
     end
-    -- an installable row is an *uninstalled* package: the source medium (a disk)
-    -- or the internal /pkgs directory (a pocket computer has no disk drive).
-    -- Anything else (already in /apps, or an image package) is not installable.
-    if entry.source ~= "disk" and entry.source ~= "internal" then
+    -- an installable row is an *uninstalled* package on this computer's own
+    -- disk (/pkgs). Anything else (already in /apps, or an image package) is not
+    -- installable.
+    if entry.source ~= "internal" then
         state.message = "already installed"
         return "none"
     end
@@ -477,7 +455,7 @@ function M.install_selected(state, api, opts)
             or tostring(entry.version or "?")
         state.message = "installed " .. entry.name .. " " .. version
         state.installed = entry.name
-        M.refresh(state, api, { force_scan = true, medium = state.medium,
+        M.refresh(state, api, { force_scan = true, internal = state.internal,
             apps = state.apps_root, system = state.system_root,
             scan_interval = state.scan_interval })
         return "install", entry.name
@@ -518,7 +496,7 @@ function M.remove_selected(state, api, opts)
     if ok then
         state.message = "removed " .. entry.name
         state.removed = entry.name
-        M.refresh(state, api, { force_scan = true, medium = state.medium,
+        M.refresh(state, api, { force_scan = true, internal = state.internal,
             apps = state.apps_root, system = state.system_root,
             scan_interval = state.scan_interval })
         return "remove", entry.name
@@ -597,8 +575,8 @@ function M.hint_line(state)
                 return M.plain(problems[i], 26)
             end
         end
-        if not state.disk_ok then
-            return "no source: checked " .. tostring(state.internal or M.INTERNAL) .. ",/disk"
+        if not state.source_ok then
+            return "no source: checked " .. tostring(state.internal or M.INTERNAL)
         end
         return "no apps to install"
     end
@@ -612,12 +590,12 @@ function M.hint_line(state)
 end
 
 function M.status_line(state, cols)
-    local disk = state.disk_count or 0
+    local internal = state.internal_count or 0
     local apps = state.apps_count or 0
     local sys = state.sys_count or 0
-    local total = disk + apps + sys
+    local total = internal + apps + sys
     local index = total == 0 and 0 or (state.index or 0)
-    return M.fit("d" .. disk .. " i" .. apps .. " s" .. sys
+    return M.fit("p" .. internal .. " i" .. apps .. " s" .. sys
         .. " sel " .. index .. "/" .. total, cols)
 end
 
@@ -875,7 +853,7 @@ end
 
 -- `enter` runs the real action for the selected row (install / remove / locked),
 -- `c` cancels a pending confirmation, `q`/escape leaves. `state.unavailable`
--- (no installer bridge, no source medium) is shown, never faked.
+-- (no installer bridge, no local source) is shown, never faked.
 function M.dispatch_event(state, event, p1, api, opts)
     if event == "key" then
         -- the raw value is checked for quit FIRST: a keycode with no name in
@@ -969,7 +947,7 @@ function M.sample_state()
         cols = M.VIEW.cols,
         rows = M.VIEW.rows,
         entries = {
-            { name = "box", source = "disk", version = "0.2.0" },
+            { name = "box", source = "internal", version = "0.2.0" },
             { name = "launcher", source = "apps", version = "0.1.0" },
             { name = "settings", source = "system", version = "0.1.0" },
         },
@@ -977,9 +955,9 @@ function M.sample_state()
         message = "",
         problems = {},
         version = "0.1.0",
-        disk_ok = true,
-        source_text = "internal+disk",
-        disk_count = 1,
+        source_ok = true,
+        source_text = "internal",
+        internal_count = 1,
         apps_count = 1,
         sys_count = 1,
     }
@@ -1004,22 +982,22 @@ function M.selftest()
     if not (full[1] or ""):find("installer 0.1.0", 1, true) then
         problems[#problems + 1] = "row 1 lost the version"
     end
-    if not (table.concat(full, "\n")):find("source internal+disk", 1, true) then
-        problems[#problems + 1] = "row 2 lost the source or the installed count"
+    if not (table.concat(full, "\n")):find("source internal", 1, true) then
+        problems[#problems + 1] = "row 2 lost the source"
     end
-    if (full[3] or ""):sub(1, 4) ~= "> d " then
-        problems[#problems + 1] = "row 3 is not the selected medium row"
+    if (full[3] or ""):sub(1, 4) ~= "> p " then
+        problems[#problems + 1] = "row 3 is not the selected source row"
     end
     if not (full[19] or ""):find("enter install", 1, true) then
         problems[#problems + 1] = "the hint row lost the install action"
     end
-    if not (full[20] or ""):find("d1 i1 s1 sel 1/3", 1, true) then
+    if not (full[20] or ""):find("p1 i1 s1 sel 1/3", 1, true) then
         problems[#problems + 1] = "the counter row lost the selection"
     end
     -- the three tags are distinct, so the row kinds are readable without colour
     local tags = (full[3] or ""):sub(3, 3) .. (full[4] or ""):sub(3, 3)
         .. (full[5] or ""):sub(3, 3)
-    if tags ~= "dis" then
+    if tags ~= "pis" then
         problems[#problems + 1] = "row tags are " .. tostring(tags)
     end
     -- narrow: the version column is dropped, not truncated mid-name
@@ -1047,15 +1025,15 @@ function M.selftest()
     -- an empty machine still renders, and says which kind of empty it is
     local empty = {
         cols = M.VIEW.cols, rows = M.VIEW.rows, entries = {}, index = 1,
-        problems = {}, message = "", version = "0.1.0", disk_ok = false,
-        disk_count = 0, apps_count = 0, sys_count = 0,
+        problems = {}, message = "", version = "0.1.0", source_ok = false,
+        internal_count = 0, apps_count = 0, sys_count = 0,
     }
     local empty_lines = M.render(empty, M.VIEW.cols, M.VIEW.rows)
     in_bounds(empty_lines, M.VIEW.cols, M.VIEW.rows, "empty")
     if not (empty_lines[19] or ""):find("no source: checked", 1, true) then
         problems[#problems + 1] = "an empty machine did not say why it is empty"
     end
-    if not (empty_lines[20] or ""):find("d0 i0 s0 sel 0/0", 1, true) then
+    if not (empty_lines[20] or ""):find("p0 i0 s0 sel 0/0", 1, true) then
         problems[#problems + 1] = "an empty machine did not report zero counters"
     end
     -- a machine with no runtime at all: the refusal is named, not a crash
@@ -1065,15 +1043,15 @@ function M.selftest()
     if not (denied_lines[19] or ""):find("capability denied", 1, true) then
         problems[#problems + 1] = "a refused fs.read was not named on screen"
     end
-    -- a disk with nothing installable on it
+    -- a readable source with nothing installable on it
     local bare = {
         cols = M.VIEW.cols, rows = M.VIEW.rows, entries = {}, index = 1,
-        problems = {}, message = "", version = "0.1.0", disk_ok = true,
-        disk_count = 0, apps_count = 0, sys_count = 0,
+        problems = {}, message = "", version = "0.1.0", source_ok = true,
+        internal_count = 0, apps_count = 0, sys_count = 0,
     }
     local bare_lines = M.render(bare, M.VIEW.cols, M.VIEW.rows)
     if not (bare_lines[19] or ""):find("no apps to install", 1, true) then
-        problems[#problems + 1] = "an empty medium did not say there is nothing to install"
+        problems[#problems + 1] = "an empty source did not say there is nothing to install"
     end
     return #problems == 0, problems
 end

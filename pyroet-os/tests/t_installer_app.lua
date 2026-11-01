@@ -26,11 +26,11 @@ rawset(_G, "PYROET_INSTALLER_TEST", nil)
 local manifest_raw = assert(loadfile("/tests/installer.app/manifest.lua"))()
 
 local BASE_FILES = {
-    ["/disk/apps/box.app/manifest.lua"] = 'return { name = "box", version = "0.2.0",'
+    ["/pkgs/box.app/manifest.lua"] = 'return { name = "box", version = "0.2.0",'
         .. ' capabilities = { "fs.read" } }\n',
-    ["/disk/apps/box.app/main.lua"] = "return function(manifest, api) end\n",
-    ["/disk/apps/zeta.app/manifest.lua"] = 'return { name = "zeta", version = "1.0.0" }\n',
-    ["/disk/apps/zeta.app/main.lua"] = "return function(manifest, api) end\n",
+    ["/pkgs/box.app/main.lua"] = "return function(manifest, api) end\n",
+    ["/pkgs/zeta.app/manifest.lua"] = 'return { name = "zeta", version = "1.0.0" }\n',
+    ["/pkgs/zeta.app/main.lua"] = "return function(manifest, api) end\n",
     ["/apps/notes.app/manifest.lua"] = 'return { name = "notes", version = "0.3.0" }\n',
     ["/apps/notes.app/main.lua"] = "return function(manifest, api) end\n",
     ["/system/system/launcher.app/manifest.lua"] = 'return { name = "launcher",'
@@ -42,8 +42,7 @@ local BASE_FILES = {
 }
 
 local BASE_DIRS = {
-    ["/disk"] = { "apps" },
-    ["/disk/apps"] = { "box.app", "zeta.app", "readme.txt" },
+    ["/pkgs"] = { "box.app", "zeta.app", "readme.txt" },
     ["/apps"] = { "notes.app" },
     ["/system/system"] = { "launcher.app", "settings.app" },
 }
@@ -180,10 +179,10 @@ return function(H)
         H.eq("view_rows", M.VIEW.rows, 20)
         H.eq("min_cols", M.MIN_COLS, 16)
         H.eq("min_rows", M.MIN_ROWS, 6)
-        H.eq("medium", M.MEDIUM, "/disk/apps")
+        H.eq("internal", M.INTERNAL, "/pkgs")
         H.eq("apps_root", M.APPS, "/apps")
         H.eq("system_root", M.SYSTEM, "/system/system")
-        H.eq("sources", table.concat(M.SOURCES, ","), "disk,apps,system")
+        H.eq("sources", table.concat(M.SOURCES, ","), "internal,apps,system")
         local src = H.read("/tests/installer.app/main.lua") or ""
         H.check("source_present", #src > 4000, "source too short: " .. tostring(#src))
         -- the app must never reach a kernel module by itself: the bridge is the
@@ -198,16 +197,16 @@ return function(H)
     H.group("installer.scan")
     do
         local api = machine()
-        local entries, problems, disk_ok = M.scan(api)
-        H.eq("disk_ok", disk_ok, true)
+        local entries, problems, source_ok = M.scan(api)
+        H.eq("source_ok", source_ok, true)
         H.eq("entry_count", #entries, 5)
         H.eq("problem_count", #problems, 0)
         H.eq("order", table.concat({
             entries[1].name, entries[2].name, entries[3].name,
             entries[4].name, entries[5].name }, ","), "box,zeta,notes,launcher,settings")
-        H.eq("first_source", entries[1].source, "disk")
-        H.eq("first_dir", entries[1].dir, "/disk/apps/box.app")
-        H.eq("first_root", entries[1].root, "/disk/apps")
+        H.eq("first_source", entries[1].source, "internal")
+        H.eq("first_dir", entries[1].dir, "/pkgs/box.app")
+        H.eq("first_root", entries[1].root, "/pkgs")
         H.eq("first_version", entries[1].version, "0.2.0")
         H.eq("second_version", entries[2].version, "1.0.0")
         H.eq("third_source", entries[3].source, "apps")
@@ -217,14 +216,14 @@ return function(H)
         local tags = M.tag_of(entries[1]) .. M.tag_of(entries[2])
             .. M.tag_of(entries[3]) .. M.tag_of(entries[4])
             .. M.tag_of(entries[5])
-        H.eq("tags", tags, "ddiss")
+        H.eq("tags", tags, "ppiss")
         H.eq("actions", M.action_of(entries[1]) .. "," .. M.action_of(entries[3])
             .. "," .. M.action_of(entries[5]), "install,remove,locked")
-        H.eq("readme_ignored", M.manifest_version(api, "/disk/apps/readme.txt"), "?")
+        H.eq("readme_ignored", M.manifest_version(api, "/pkgs/readme.txt"), "?")
 
         -- a package directory without a manifest is reported, not listed
         local ghost_dirs = copy_map(BASE_DIRS)
-        ghost_dirs["/disk/apps"] = { "box.app", "ghost.app" }
+        ghost_dirs["/pkgs"] = { "box.app", "ghost.app" }
         local ghost = machine({ dirs = ghost_dirs })
         local ghost_entries, ghost_problems = M.scan(ghost)
         H.eq("ghost_entries", #ghost_entries, 4)
@@ -233,15 +232,14 @@ return function(H)
         H.eq("ghost_not_listed", ghost_names.ghost, nil)
         H.contains("ghost_problem", H.joined(ghost_problems), "no manifest ghost")
 
-        -- no drive at all: one problem line, no crash, no medium
-        local no_disk_dirs = copy_map(BASE_DIRS)
-        no_disk_dirs["/disk"] = nil
-        no_disk_dirs["/disk/apps"] = nil
-        local no_disk = machine({ dirs = no_disk_dirs })
-        local disk_entries, disk_problems, has_disk = M.scan(no_disk)
-        H.eq("no_disk_ok", has_disk, false)
-        H.eq("no_disk_entries", #disk_entries, 3)
-        H.absent("no_disk_problem", H.joined(disk_problems), "no disk")
+        -- no /pkgs at all: no crash, no source, the two installed roots scan
+        local no_pkgs_dirs = copy_map(BASE_DIRS)
+        no_pkgs_dirs["/pkgs"] = nil
+        local no_pkgs = machine({ dirs = no_pkgs_dirs })
+        local pkg_entries, pkg_problems, has_pkgs = M.scan(no_pkgs)
+        H.eq("no_pkgs_ok", has_pkgs, false)
+        H.eq("no_pkgs_entries", #pkg_entries, 3)
+        H.absent("no_pkgs_problem", H.joined(pkg_problems), "no source")
 
         -- a refused fs.read is named as such, not as a missing directory
         local denied = fake_api({ list_denied = true })
@@ -266,7 +264,7 @@ return function(H)
         H.contains("missing_problem", H.joined(missing_problems), "no root /apps")
 
         -- an empty machine: no problems, nothing to install
-        local empty = fake_api({ dirs = { ["/disk/apps"] = {}, ["/apps"] = {},
+        local empty = fake_api({ dirs = { ["/pkgs"] = {}, ["/apps"] = {},
             ["/system/system"] = {} } })
         local empty_entries, empty_problems, empty_disk = M.scan(empty)
         H.eq("empty_entries", #empty_entries, 0)
@@ -296,15 +294,15 @@ return function(H)
         H.eq("rows", #lines, 20)
         for i = 1, #lines do H.eq("width_" .. tostring(i), #lines[i], 26) end
         H.contains("row1_version", lines[1], "installer 0.1.0")
-        H.contains("row2_disk", lines[2], "source disk")
-        H.contains("row2_installed", lines[2], "3 installed")
-        H.contains("row3_marker", lines[3], "> d box")
+        H.contains("row2_source", lines[2], "source internal")
+        H.contains("row2_installed", lines[2], "internal 3")
+        H.contains("row3_marker", lines[3], "> p box")
         H.contains("row3_version", lines[3], "0.2.0")
-        H.contains("row4_medium", lines[4], "d zeta")
+        H.contains("row4_pkgs", lines[4], "p zeta")
         H.contains("row5_apps", lines[5], "i notes")
         H.contains("row6_system", lines[6], "s launcher")
         H.contains("hint_install", lines[19], "enter install")
-        H.contains("status_row", lines[20], "d2 i1 s2 sel 1/5")
+        H.contains("status_row", lines[20], "p2 i1 s2 sel 1/5")
         H.eq("status_width", #lines[20], 26)
 
         -- narrow: the version column is dropped, names survive
@@ -349,12 +347,12 @@ return function(H)
         local big_dirs = copy_map(BASE_DIRS)
         local many = {}
         for i = 1, 20 do many[i] = string.format("app%02d.app", i) end
-        big_dirs["/disk/apps"] = many
+        big_dirs["/pkgs"] = many
         local big_files = copy_map(BASE_FILES)
         for i = 1, 20 do
-            big_files[string.format("/disk/apps/app%02d.app/manifest.lua", i)] =
+            big_files[string.format("/pkgs/app%02d.app/manifest.lua", i)] =
                 string.format('return { name = "app%02d", version = "0.1.0" }\n', i)
-            big_files[string.format("/disk/apps/app%02d.app/main.lua", i)] =
+            big_files[string.format("/pkgs/app%02d.app/main.lua", i)] =
                 "return function(manifest, api) end\n"
         end
         local big = machine({ files = big_files, dirs = big_dirs })
@@ -376,20 +374,20 @@ return function(H)
         H.eq("one_rows", #M.render(state, 1, 1), 1)
 
         -- the three "nothing here" lines are distinct ASCII prompts
-        local empty_state = M.build(fake_api({ dirs = { ["/disk/apps"] = {},
+        local empty_state = M.build(fake_api({ dirs = { ["/pkgs"] = {},
             ["/apps"] = {}, ["/system/system"] = {} } }), { version = "0.1.0" })
         H.contains("empty_hint", M.render(empty_state, 26, 20)[19], "no apps to install")
-        H.contains("empty_status", M.render(empty_state, 26, 20)[20], "d0 i0 s0 sel 0/0")
-        H.contains("empty_disk_text", M.render(empty_state, 26, 20)[2], "source ")
-        local no_disk_dirs = copy_map(BASE_DIRS)
-        no_disk_dirs["/disk/apps"] = nil
-        no_disk_dirs["/apps"] = {}
-        no_disk_dirs["/system/system"] = {}
-        local no_disk_state = M.build(machine({ dirs = no_disk_dirs }),
+        H.contains("empty_status", M.render(empty_state, 26, 20)[20], "p0 i0 s0 sel 0/0")
+        H.contains("empty_source_text", M.render(empty_state, 26, 20)[2], "source none")
+        local no_pkgs_dirs = copy_map(BASE_DIRS)
+        no_pkgs_dirs["/pkgs"] = nil
+        no_pkgs_dirs["/apps"] = {}
+        no_pkgs_dirs["/system/system"] = {}
+        local no_pkgs_state = M.build(machine({ dirs = no_pkgs_dirs }),
             { version = "0.1.0" })
-        H.contains("no_disk_hint", M.render(no_disk_state, 26, 20)[19],
-            "no source: checked ")
-        H.contains("no_disk_header", M.render(no_disk_state, 26, 20)[2], "source none")
+        H.contains("no_pkgs_hint", M.render(no_pkgs_state, 26, 20)[19],
+            "no source: checked /pkgs")
+        H.contains("no_pkgs_header", M.render(no_pkgs_state, 26, 20)[2], "source none")
         local denied_state = M.build(fake_api({ list_denied = true }),
             { version = "0.1.0" })
         H.contains("denied_hint", M.render(denied_state, 26, 20)[19],
@@ -401,7 +399,7 @@ return function(H)
         H.eq("fit_long", M.fit("abcdef", 3), "abc")
         H.eq("fit_control", M.fit("a\tb", 3), "a?b")
         H.eq("plain_newline", M.plain("a\nb"), "a b")
-        H.eq("key_of", M.key_of(state.entries[1]), "disk:box")
+        H.eq("key_of", M.key_of(state.entries[1]), "internal:box")
         H.eq("key_of_nil", M.key_of(nil), nil)
     end
 
@@ -478,7 +476,7 @@ return function(H)
         H.contains("raising_error", raising_state.last_error or "", "bridge-boom")
 
         -- nothing selected
-        local empty_state = M.build(fake_api({ dirs = { ["/disk/apps"] = {},
+        local empty_state = M.build(fake_api({ dirs = { ["/pkgs"] = {},
             ["/apps"] = {}, ["/system/system"] = {} } }), { version = "0.1.0" })
         H.eq("nothing_selected_action", M.activate(empty_state, nil), "none")
         H.eq("nothing_selected_message", empty_state.message, "nothing selected")
@@ -514,8 +512,8 @@ return function(H)
                 message = "capability denied: fs.write" },
             { name = "unavailable", detail = "installer unavailable",
                 action = "unavailable", message = "installer unavailable" },
-            { name = "unknown", detail = "copy failed /disk/apps", action = "error",
-                message = "failed: copy failed /disk/apps" },
+            { name = "unknown", detail = "copy failed /pkgs", action = "error",
+                message = "failed: copy failed /pkgs" },
         }
         for i = 1, #cases do
             local case = cases[i]
@@ -595,10 +593,10 @@ return function(H)
         H.contains("remove_raise_error", raising_state.last_error or "", "remove-boom")
 
         -- a medium row is not installed, so there is nothing to remove
-        local disk_state = M.build(machine(), { version = "0.1.0" })
-        H.eq("disk_remove_action", M.remove_selected(disk_state, machine()),
+        local pkg_state = M.build(machine(), { version = "0.1.0" })
+        H.eq("pkgs_remove_action", M.remove_selected(pkg_state, machine()),
             "missing")
-        H.eq("disk_remove_message", disk_state.message, "not installed")
+        H.eq("pkgs_remove_message", pkg_state.message, "not installed")
 
         -- no bridge
         local bare_state = M.build(machine({ sys = stub_sys({}) }), { version = "0.1.0" })
@@ -608,7 +606,7 @@ return function(H)
         H.eq("remove_no_bridge_message", bare_state.message, "installer unavailable")
 
         -- nothing selected
-        local empty_state = M.build(fake_api({ dirs = { ["/disk/apps"] = {},
+        local empty_state = M.build(fake_api({ dirs = { ["/pkgs"] = {},
             ["/apps"] = {}, ["/system/system"] = {} } }), { version = "0.1.0" })
         H.eq("remove_nothing", M.remove_selected(empty_state, nil), "none")
         H.eq("remove_nothing_message", empty_state.message, "nothing selected")
@@ -625,7 +623,7 @@ return function(H)
         H.eq("keys_index", state.index, 1)
         H.eq("down_action", M.handle_key(state, "down", api), "move")
         H.eq("down_index", state.index, 2)
-        H.eq("selected_key_after_down", state.selected_key, "disk:zeta")
+        H.eq("selected_key_after_down", state.selected_key, "internal:zeta")
         H.eq("up_action", M.handle_key(state, "up", api), "move")
         H.eq("up_index", state.index, 1)
         H.eq("up_wrap", M.handle_key(state, "up", api), "move")
@@ -676,7 +674,7 @@ return function(H)
         H.eq("enter_locked_calls", #lock_rec.installs + #lock_rec.removes, 0)
 
         -- an empty machine: no movement, no action, no crash
-        local empty_state = M.build(fake_api({ dirs = { ["/disk/apps"] = {},
+        local empty_state = M.build(fake_api({ dirs = { ["/pkgs"] = {},
             ["/apps"] = {}, ["/system/system"] = {} } }), { version = "0.1.0" })
         H.eq("empty_down", M.handle_key(empty_state, "down", nil), "none")
         H.eq("empty_enter", M.handle_key(empty_state, "enter", nil), "none")
@@ -717,11 +715,11 @@ return function(H)
         -- default interval keeps the next four frames from scanning again
         local throttled = machine()
         M.run(nil, throttled, { max_frames = 4, paint = false })
-        H.eq("scan_once", throttled.calls.list, 4)
+        H.eq("scan_once", throttled.calls.list, 3)
         -- interval 1 rescans on every frame: build + three loop frames
         local eager = machine()
         M.run(nil, eager, { max_frames = 3, scan_interval = 1, paint = false })
-        H.eq("scan_every_frame", eager.calls.list, 16)
+        H.eq("scan_every_frame", eager.calls.list, 12)
 
         -- keys as an iterator work the same way
         local iter_rec = recorder({ install_ok = true })
@@ -763,7 +761,7 @@ return function(H)
         H.eq("selftest_alias", M.layout_selftest, M.selftest)
         H.eq("selftest_sample_rows", #M.render(M.sample_state(), 26, 20), 20)
         H.eq("selftest_sample_status", M.render(M.sample_state(), 26, 20)[20]:find(
-            "d1 i1 s1 sel 1/3", 1, true) ~= nil, true)
+            "p1 i1 s1 sel 1/3", 1, true) ~= nil, true)
     end
 
     -- -----------------------------------------------------------------

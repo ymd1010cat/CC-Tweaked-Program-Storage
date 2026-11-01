@@ -92,6 +92,7 @@ return function(H)
         H.eq("pkgget_read", caps["fs.read"], true)
         H.eq("pkgget_input", caps.input, true)
         H.eq("pkgget_terminal", caps.terminal, true)
+        H.eq("pkgget_rednet", caps["net.rednet"], true)
     end
 
     -- -----------------------------------------------------------------
@@ -279,6 +280,386 @@ return function(H)
     end
 
     -- -----------------------------------------------------------------
+    -- -----------------------------------------------------------------
+    -- receiver: the other computer runs tools/pushpkg.lua; the rednet side is
+    -- scripted here and the file system is real, so a received package is
+    -- inspected on disk
+    -- -----------------------------------------------------------------
+    local function fake_rednet(opts)
+        local o = opts or {}
+        local net = { sent = {}, opened = {}, polls = 0, script = {} }
+        function net.push(sender, msg)
+            net.script[#net.script + 1] = { sender = sender, msg = msg }
+        end
+        net.receive = function(protocol, timeout)
+            net.polls = net.polls + 1
+            net.last_protocol = protocol
+            net.last_timeout = timeout
+            if o.denied then return nil, "capability denied: net.rednet" end
+            local item = table.remove(net.script, 1)
+            if item == nil then return nil end
+            return item.sender, item.msg
+        end
+        net.send = function(target, msg, protocol)
+            net.sent[#net.sent + 1] = { target = target, msg = msg,
+                protocol = protocol }
+            return true
+        end
+        net.open = function(name)
+            net.opened[#net.opened + 1] = name
+            return true
+        end
+        return net
+    end
+
+    local function recv_api(net, sysx)
+        local api, lines = api_with(nil, sysx)
+        api.net = { rednet = net }
+        return api, lines
+    end
+
+    local function begin_msg(name, files)
+        return { kind = "begin", name = name, version = "1.0.0", pkg = "app",
+            files = files }
+    end
+
+    local function poll(state, api, net, sender, msg)
+        net.push(sender, msg)
+        return P.recv_poll(state, api)
+    end
+
+    local MANIFEST = 'return { name = "demo", version = "1.0.0" }\n'
+    local MAIN = "return function(manifest, api) return nil end\n"
+
+    H.group("pkgget.recv.arm")
+    do
+        H.rmrf("/pkgs")
+        H.rmrf("/etc/pkg.recv")
+        local net = fake_rednet()
+        local api, lines = recv_api(net)
+        local state = P.new_state(api)
+        -- `l` arms; the config file is optional, so the defaults apply
+        H.eq("arm_via_key", P.dispatch_event(state, "key", "l", api), "repaint")
+        H.check("arm_state", type(state.recv) == "table", "receiver not armed")
+        H.eq("arm_channel", state.recv and state.recv.channel, 4101)
+        H.eq("arm_protocol", state.recv and state.recv.protocol, "PYROET-PKG/1")
+        H.contains("arm_status", state.status, "listening ch=4101")
+        H.eq("arm_default_protocol", P.RECV_PROTOCOL, "PYROET-PKG/1")
+        H.eq("arm_conf_path", P.RECV_CONF, "/etc/pkg.recv")
+        H.has(lines, "PKGGET_RECV_ARM ch=4101 protocol=PYROET-PKG/1")
+        -- the hint row switches to the receiver vocabulary
+        local frame = P.render(state, 51, 19)
+        H.eq("arm_rows", #frame, 19)
+        H.contains("arm_hint", frame[19] or "", "q stop listening")
+        H.absent("arm_hint_old", frame[19] or "", "up/dn enter")
+        -- arming twice is idempotent, and `q` only stops the receiver
+        H.eq("arm_twice", P.recv_arm(state, api), "repaint")
+        H.eq("stop_action", P.dispatch_event(state, "key", "q", api), "repaint")
+        H.eq("stop_state", state.recv, nil)
+        H.eq("stop_status", state.status, "receiver stopped")
+        H.has(lines, "PKGGET_RECV_STOP")
+        H.eq("arm_again", P.recv_arm(state, api), "repaint")
+        P.recv_stop(state, api)
+        -- a char event arms too
+        local api2 = recv_api(fake_rednet())
+        local state2 = P.new_state(api2)
+        H.eq("arm_char", P.dispatch_event(state2, "char", "l", api2), "repaint")
+        H.check("arm_char_state", type(state2.recv) == "table", "not armed")
+        P.recv_stop(state2, api2)
+        -- every attached modem is opened, so rednet hears the broadcast channel
+        local opened = fake_rednet()
+        local saved_per = rawget(_G, "peripheral")
+        rawset(_G, "peripheral",
+            { getNames = function() return { "top", "left" } end })
+        local count = P.open_modems(opened)
+        rawset(_G, "peripheral", saved_per)
+        H.eq("open_modems_count", count, 2)
+        H.eq("open_modems_names", table.concat(opened.opened, ","), "top,left")
+        -- no rednet capability: named on screen, no crash
+        local denied = fake_rednet({ denied = true })
+        local api3, lines3 = recv_api(denied)
+        local state3 = P.new_state(api3)
+        H.eq("no_rednet_action", P.recv_arm(state3, api3), "denied")
+        H.eq("no_rednet_status", state3.status, "no rednet")
+        H.eq("no_rednet_state", state3.recv, nil)
+        H.has(lines3, "PKGGET_RECV_ARM ok=false err=no_rednet")
+        -- a host with no rednet table at all
+        local saved_net = rawget(_G, "rednet")
+        rawset(_G, "rednet", nil)
+        local api4, lines4 = recv_api(nil)
+        local state4 = P.new_state(api4)
+        H.eq("no_net_table", P.recv_arm(state4, api4), "denied")
+        H.eq("no_rednet_table_state", state4.recv, nil)
+        H.has(lines4, "PKGGET_RECV_ARM ok=false err=no_rednet")
+        rawset(_G, "rednet", saved_net)
+    end
+
+    H.group("pkgget.recv.conf")
+    do
+        H.rmrf("/pkgs")
+        H.mkdirp("/etc")
+        H.write("/etc/pkg.recv",
+            "# receiver settings\nchannel=4200\nprotocol=PYROET-PKG/9\n")
+        local api, lines = recv_api(fake_rednet())
+        local state = P.new_state(api)
+        H.eq("conf_arm", P.recv_arm(state, api), "repaint")
+        H.eq("conf_channel", state.recv and state.recv.channel, 4200)
+        H.eq("conf_protocol", state.recv and state.recv.protocol, "PYROET-PKG/9")
+        H.contains("conf_status", state.status, "listening ch=4200")
+        H.has(lines, "PKGGET_RECV_ARM ch=4200 protocol=PYROET-PKG/9")
+        P.recv_stop(state, api)
+        -- bad values are ignored: the defaults stay
+        H.write("/etc/pkg.recv", "channel=0\nchannel=abc\nprotocol=two words\n")
+        local api2 = recv_api(fake_rednet())
+        local state2 = P.new_state(api2)
+        H.eq("conf_bad_arm", P.recv_arm(state2, api2), "repaint")
+        H.eq("conf_bad_channel", state2.recv and state2.recv.channel, 4101)
+        H.eq("conf_bad_protocol", state2.recv and state2.recv.protocol,
+            "PYROET-PKG/1")
+        P.recv_stop(state2, api2)
+        F.delete("/etc/pkg.recv")
+        H.eq("conf_removed", F.exists("/etc/pkg.recv"), false)
+    end
+
+    H.group("pkgget.recv.package")
+    do
+        H.rmrf("/pkgs")
+        local net = fake_rednet()
+        local installed = {}
+        local sysx = { install = function(name)
+            installed[#installed + 1] = name
+            return true, { version = "1.0.0" }
+        end }
+        local api, lines = recv_api(net, sysx)
+        local state = P.new_state(api)
+        H.eq("pkg_arm", P.recv_arm(state, api), "repaint")
+        H.eq("begin_action", poll(state, api, net, 12, begin_msg("demo", 2)),
+            "move")
+        H.eq("begin_ack_target", net.sent[1].target, 12)
+        H.eq("begin_ack_kind", net.sent[1].msg.kind, "ack")
+        H.eq("begin_ack_ok", net.sent[1].msg.ok, true)
+        H.eq("begin_ack_name", net.sent[1].msg.name, "demo")
+        H.eq("begin_ack_protocol", net.sent[1].protocol, "PYROET-PKG/1")
+        H.check("begin_part_dir", F.exists("/pkgs/demo.app.part"), "no .part dir")
+        H.eq("begin_app_absent", F.exists("/pkgs/demo.app"), false)
+        H.eq("file1_action", poll(state, api, net, 12, { kind = "file",
+            rel = "manifest.lua", data = MANIFEST, chunk = 1, chunks = 1 }), "move")
+        H.check("file1_written", F.exists("/pkgs/demo.app.part/manifest.lua"),
+            "manifest not staged")
+        H.eq("file1_ack_rel", net.sent[#net.sent].msg.rel, "manifest.lua")
+        H.eq("file2_action", poll(state, api, net, 12, { kind = "file",
+            rel = "main.lua", data = MAIN, chunk = 1, chunks = 1 }), "move")
+        H.contains("progress_status", state.status, "recv demo 2/2")
+        local sha = P.digest_of({ { rel = "manifest.lua", body = MANIFEST },
+            { rel = "main.lua", body = MAIN } })
+        H.check("digest_available", sha ~= nil, "no sha256 in this image")
+        H.eq("end_action", poll(state, api, net, 12, { kind = "end", sha = sha }),
+            "install")
+        H.eq("end_ack_ok", net.sent[#net.sent].msg.ok, true)
+        H.check("published_manifest", F.exists("/pkgs/demo.app/manifest.lua"),
+            "package not published")
+        H.check("published_main", F.exists("/pkgs/demo.app/main.lua"),
+            "package not published")
+        H.eq("published_content", H.read("/pkgs/demo.app/main.lua"), MAIN)
+        H.eq("part_cleaned", F.exists("/pkgs/demo.app.part"), false)
+        H.eq("installed_once", installed[1], "demo")
+        H.eq("installed_count", #installed, 1)
+        H.has(lines, "PKGGET_RECV name=demo files=2 bytes=")
+        H.eq("recv_report_name", state.recv_pkg and state.recv_pkg.name, "demo")
+        H.eq("recv_report_files", state.recv_pkg and state.recv_pkg.files, 2)
+        H.eq("recv_report_install", state.recv_pkg and state.recv_pkg.install, true)
+        H.contains("recv_status", state.status, "installed demo")
+        -- still listening for the next package
+        H.check("still_armed", type(state.recv) == "table", "receiver disarmed")
+        H.eq("next_poll", P.recv_poll(state, api), "none")
+        P.recv_stop(state, api)
+
+        -- no bridge: the package stays staged in /pkgs, which is a normal state
+        H.rmrf("/pkgs")
+        local net2 = fake_rednet()
+        local api2, lines2 = recv_api(net2)
+        local state2 = P.new_state(api2)
+        P.recv_arm(state2, api2)
+        H.eq("solo_begin", poll(state2, api2, net2, 7, begin_msg("solo", 1)), "move")
+        H.eq("solo_file", poll(state2, api2, net2, 7, { kind = "file",
+            rel = "main.lua", data = MAIN, chunk = 1, chunks = 1 }), "move")
+        H.eq("solo_end", poll(state2, api2, net2, 7, { kind = "end" }), "install")
+        H.check("solo_published", F.exists("/pkgs/solo.app/main.lua"),
+            "not published")
+        H.eq("solo_install", state2.recv_pkg and state2.recv_pkg.install, false)
+        H.contains("solo_status", state2.status, "staged /pkgs/solo.app")
+        H.has(lines2, "PKGGET_RECV name=solo files=1 bytes=")
+        H.has(lines2, "install=false")
+        P.recv_stop(state2, api2)
+        H.rmrf("/pkgs")
+    end
+
+    H.group("pkgget.recv.chunks")
+    do
+        H.rmrf("/pkgs")
+        local net = fake_rednet()
+        local api, lines = recv_api(net)
+        local state = P.new_state(api)
+        P.recv_arm(state, api)
+        local body = string.rep("abc", 3000)          -- 9000 bytes, 2 chunks
+        H.eq("chunk_begin", poll(state, api, net, 3, begin_msg("chunked", 1)),
+            "move")
+        H.eq("chunk_first", poll(state, api, net, 3, { kind = "file",
+            rel = "main.lua", data = body:sub(1, P.MAX_CHUNK), chunk = 1,
+            chunks = 2 }), "move")
+        H.eq("chunk_first_ack", net.sent[#net.sent].msg.chunk, 1)
+        H.eq("chunk_first_not_written",
+            F.exists("/pkgs/chunked.app.part/main.lua"), false)
+        H.eq("chunk_second", poll(state, api, net, 3, { kind = "file",
+            rel = "main.lua", data = body:sub(P.MAX_CHUNK + 1), chunk = 2,
+            chunks = 2 }), "move")
+        H.eq("chunk_second_ack", net.sent[#net.sent].msg.chunk, 2)
+        H.eq("chunk_written_bytes",
+            #(H.read("/pkgs/chunked.app.part/main.lua") or ""), #body)
+        H.eq("chunk_end", poll(state, api, net, 3, { kind = "end" }),
+            "install")
+        -- an out-of-order chunk is refused and the .part tree goes away
+        H.eq("order_begin", poll(state, api, net, 3, begin_msg("badchunk", 1)),
+            "move")
+        H.eq("order_action", poll(state, api, net, 3, { kind = "file",
+            rel = "main.lua", data = "x", chunk = 2, chunks = 2 }), "error")
+        H.eq("order_ack_ok", net.sent[#net.sent].msg.ok, false)
+        H.contains("order_ack_err", net.sent[#net.sent].msg.err, "chunk order")
+        H.eq("order_part_cleaned", F.exists("/pkgs/badchunk.app.part"), false)
+        P.recv_stop(state, api)
+        H.rmrf("/pkgs")
+    end
+
+    H.group("pkgget.recv.abort")
+    do
+        H.rmrf("/pkgs")
+        local net = fake_rednet()
+        local api, lines = recv_api(net)
+        local state = P.new_state(api)
+        P.recv_arm(state, api)
+        H.eq("abort_begin", poll(state, api, net, 5, begin_msg("gone", 2)), "move")
+        H.eq("abort_file", poll(state, api, net, 5, { kind = "file",
+            rel = "main.lua", data = "x", chunk = 1, chunks = 1 }), "move")
+        H.check("abort_part_exists", F.exists("/pkgs/gone.app.part"), "no part")
+        H.eq("abort_action", poll(state, api, net, 5, { kind = "abort" }), "repaint")
+        H.eq("abort_ack_ok", net.sent[#net.sent].msg.ok, true)
+        H.eq("abort_part_cleaned", F.exists("/pkgs/gone.app.part"), false)
+        H.eq("abort_published", F.exists("/pkgs/gone.app"), false)
+        H.eq("abort_status", state.status, "aborted gone")
+        H.check("abort_still_armed", type(state.recv) == "table", "disarmed")
+        H.has(lines, "PKGGET_RECV_ABORT name=gone")
+        P.recv_stop(state, api)
+        H.rmrf("/pkgs")
+    end
+
+    H.group("pkgget.recv.failures")
+    do
+        local function ready(name)
+            H.rmrf("/pkgs")
+            local net = fake_rednet()
+            local api, lines = recv_api(net)
+            local state = P.new_state(api)
+            P.recv_arm(state, api)
+            return state, api, net, lines
+        end
+        -- a wrong end digest refuses the package and leaves nothing behind
+        local state, api, net, lines = ready()
+        poll(state, api, net, 9, begin_msg("demo", 1))
+        poll(state, api, net, 9, { kind = "file", rel = "main.lua",
+            data = MAIN, chunk = 1, chunks = 1 })
+        H.eq("sha_bad_action", poll(state, api, net, 9, { kind = "end",
+            sha = string.rep("0", 64) }), "error")
+        H.eq("sha_bad_ack", net.sent[#net.sent].msg.ok, false)
+        H.contains("sha_bad_err", net.sent[#net.sent].msg.err, "hash check failed")
+        H.eq("sha_bad_part", F.exists("/pkgs/demo.app.part"), false)
+        H.eq("sha_bad_published", F.exists("/pkgs/demo.app"), false)
+        H.has(lines, "PKGGET_RECV name=demo files=1 bytes=")
+        H.has(lines, "ok=false")
+        H.check("sha_bad_armed", type(state.recv) == "table", "disarmed")
+        -- a malformed digest is refused before anything is compared
+        poll(state, api, net, 9, begin_msg("sha", 1))
+        poll(state, api, net, 9, { kind = "file", rel = "main.lua",
+            data = MAIN, chunk = 1, chunks = 1 })
+        H.eq("sha_short_action", poll(state, api, net, 9, { kind = "end",
+            sha = "abc" }), "error")
+        H.contains("sha_short_err", net.sent[#net.sent].msg.err, "bad sha")
+        -- an incomplete stream is refused
+        poll(state, api, net, 9, begin_msg("half", 2))
+        poll(state, api, net, 9, { kind = "file", rel = "main.lua",
+            data = "x", chunk = 1, chunks = 1 })
+        H.eq("incomplete_action", poll(state, api, net, 9, { kind = "end" }),
+            "error")
+        H.contains("incomplete_err", net.sent[#net.sent].msg.err, "incomplete")
+        H.eq("incomplete_part", F.exists("/pkgs/half.app.part"), false)
+        -- bad names, versions, kinds and paths are all clean refusals
+        H.eq("bad_name_action", poll(state, api, net, 9, { kind = "begin",
+            name = "../etc", version = "1", files = 1 }), "error")
+        H.contains("bad_name_err", net.sent[#net.sent].msg.err, "bad name")
+        H.eq("bad_kind_action", poll(state, api, net, 9, { kind = "begin",
+            name = "k", version = "1", pkg = "zip", files = 1 }), "error")
+        H.contains("bad_kind_err", net.sent[#net.sent].msg.err, "bad pkg")
+        H.eq("bad_version_action", poll(state, api, net, 9, { kind = "begin",
+            name = "v", version = "", files = 1 }), "error")
+        H.contains("bad_version_err", net.sent[#net.sent].msg.err, "bad version")
+        H.eq("bad_files_action", poll(state, api, net, 9, { kind = "begin",
+            name = "f", version = "1", files = 0 }), "error")
+        H.contains("bad_files_err", net.sent[#net.sent].msg.err, "bad files")
+        poll(state, api, net, 9, begin_msg("paths", 1))
+        H.eq("bad_rel_action", poll(state, api, net, 9, { kind = "file",
+            rel = "../etc/passwd", data = "x", chunk = 1, chunks = 1 }), "error")
+        H.contains("bad_rel_err", net.sent[#net.sent].msg.err, "bad rel")
+        H.eq("bad_rel_part", F.exists("/pkgs/paths.app.part"), false)
+        poll(state, api, net, 9, begin_msg("data", 1))
+        H.eq("bad_data_action", poll(state, api, net, 9, { kind = "file",
+            rel = "main.lua", data = 7, chunk = 1, chunks = 1 }), "error")
+        H.contains("bad_data_err", net.sent[#net.sent].msg.err, "bad data")
+        H.eq("no_begin_action", poll(state, api, net, 9, { kind = "file",
+            rel = "main.lua", data = "x", chunk = 1, chunks = 1 }), "none")
+        H.contains("no_begin_err", net.sent[#net.sent].msg.err, "no begin")
+        H.eq("end_no_begin", poll(state, api, net, 9, { kind = "end" }), "none")
+        H.contains("end_no_begin_err", net.sent[#net.sent].msg.err, "no begin")
+        H.eq("bad_kind_message", poll(state, api, net, 9, { kind = "nope" }),
+            "none")
+        H.contains("bad_kind_message_err", net.sent[#net.sent].msg.err, "bad kind")
+        -- a disk that does not keep the bytes is caught by the read-back check
+        poll(state, api, net, 9, begin_msg("lying", 1))
+        api.fs.read = function() return "mangled" end
+        H.eq("write_check_action", poll(state, api, net, 9, { kind = "file",
+            rel = "main.lua", data = "x", chunk = 1, chunks = 1 }), "error")
+        H.contains("write_check_err", net.sent[#net.sent].msg.err,
+            "write check failed")
+        H.eq("write_check_part", F.exists("/pkgs/lying.app.part"), false)
+        P.recv_stop(state, api)
+        H.rmrf("/pkgs")
+    end
+
+    H.group("pkgget.recv.timeout")
+    do
+        H.rmrf("/pkgs")
+        local now = 0
+        local net = fake_rednet()
+        local api, lines = recv_api(net)
+        local state = P.new_state(api)
+        state.recv_clock = function() return now end
+        P.recv_arm(state, api)
+        H.eq("timeout_begin", poll(state, api, net, 4, begin_msg("slow", 1)),
+            "move")
+        now = 200
+        H.eq("timeout_action", P.recv_poll(state, api), "error")
+        H.eq("timeout_part", F.exists("/pkgs/slow.app.part"), false)
+        H.has(lines, "PKGGET_RECV_TIMEOUT name=slow")
+        H.eq("timeout_acks", #net.sent, 1)   -- only the begin ack from before
+        H.check("timeout_armed", type(state.recv) == "table", "disarmed")
+        -- a plain receive timeout is not an error and does not drop the stream
+        now = 0
+        H.eq("timeout_second_begin", poll(state, api, net, 4,
+            begin_msg("slow2", 1)), "move")
+        H.eq("timeout_empty_poll", P.recv_poll(state, api), "none")
+        H.check("timeout_empty_armed", type(state.recv) == "table", "disarmed")
+        P.recv_stop(state, api)
+        H.rmrf("/pkgs")
+    end
+
     H.group("pkgget.keys")
     do
         local api = api_with(http_from(server()), nil)
@@ -304,6 +685,7 @@ return function(H)
         state.entries = {}
         state.index = 5
         H.eq("keys_empty_enter", P.dispatch_event(state, "key", "enter", api), "none")
-        H.eq("pkgget_hint", P.HINT, "up/dn enter r reload a server q quit")
+        H.eq("pkgget_hint", P.HINT,
+            "up/dn enter r reload a server q quit l receive")
     end
 end

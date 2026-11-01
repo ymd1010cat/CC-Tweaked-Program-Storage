@@ -15,7 +15,23 @@ bridge (api.sys.install) puts it into /apps when it is available.
 
 Keys (Esc is never used): up/down move, enter open/edit, r reload the index,
 a edit the server, q quit. In the editor: printable chars append, backspace
-deletes, enter accepts, c cancels (q is a letter there).
+deletes, enter accepts, c cancels (q is a letter there). `l` arms the receiver
+described below.
+
+Receiver mode (the other computer runs tools/pushpkg.lua): press `l` to listen
+on rednet channel 4101 under protocol PYROET-PKG/1; /etc/pkg.recv may override
+`channel=` and `protocol=`. While armed the status row shows `listening ch=4101`
+plus this computer's id, and `q` stops listening. One package is one stream:
+
+    {kind="begin", name=, version=, pkg="app"|"lua", files=}
+    {kind="file", rel=, data=, chunk=, chunks=}      one per chunk (<= 8 KiB)
+    {kind="end", sha=}                               sha is optional
+
+and every message is answered with {kind="ack", ok=bool, err=..}. Files land
+under /pkgs/<name>.app.part and the tree is renamed to /pkgs/<name>.app only
+after every file read back and the end digest (if sent) matched; any failure
+deletes the .part tree, so a half package never becomes visible. A published
+package is installed through the kernel bridge when the host has one.
 
 No non-ASCII bytes in this file. `_G.PYROET_PKGGET_TEST` returns the module.
 ]]
@@ -35,7 +51,16 @@ M.SHA = "SHA256.txt"
 M.MAX_URL = 160
 M.MAX_FILES = 256
 M.MAX_BODY = 262144
-M.HINT = "up/dn enter r reload a server q quit"
+M.HINT = "up/dn enter r reload a server q quit l receive"
+M.RECV_PROTOCOL = "PYROET-PKG/1"
+M.RECV_CHANNEL = 4101
+M.RECV_CONF = "/etc/pkg.recv"
+M.RECV_TIMEOUT = 0.1
+M.RECV_IDLE = 120
+M.MAX_CHUNK = 8192
+M.MAX_CHUNKS = 256
+M.MAX_REL = 96
+M.MAX_RECV = 262144
 
 function M.fit(text, cols)
     local value = tostring(text == nil and "" or text)
@@ -58,6 +83,13 @@ end
 
 function M.trim(text)
     return (tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- one line, spaces kept: protocol strings (an ack err, a role) stay readable
+function M.oneline(text, max)
+    local value = tostring(text == nil and "" or text):gsub("[\r\n\t]+", " ")
+    if max ~= nil and #value > max then value = value:sub(1, max) end
+    return value
 end
 
 function M.join(base, rest)
@@ -241,6 +273,8 @@ function M.render(state, cols, rows)
     add(status ~= "" and status or "ready")
     if state.editing then
         add("enter accept c cancel bs del")
+    elseif type(state.recv) == "table" then
+        add("q stop listening")
     else
         add(M.HINT)
     end
@@ -565,6 +599,393 @@ function M.download(state, api, entry)
         install = install_ok, root = root }
 end
 
+-- ---------------------------------------------------------------------------
+-- receiver: a package streamed over rednet by pushpkg on another computer
+-- ---------------------------------------------------------------------------
+
+-- /etc/pkg.recv (optional): `channel=<1..65532>` and `protocol=<name>` lines.
+-- A missing or unreadable file is the normal case and means the defaults.
+function M.recv_conf(api)
+    local out = { channel = M.RECV_CHANNEL, protocol = M.RECV_PROTOCOL,
+        path = M.RECV_CONF }
+    local fsx = M.pkgs_of(api)
+    if type(fsx) ~= "table" or type(fsx.read) ~= "function" then return out end
+    local called, text = pcall(fsx.read, M.RECV_CONF)
+    if not called or type(text) ~= "string" then return out end
+    for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+        local clean = M.trim((line:gsub("\r", "")))
+        local key, value = clean:match("^([%w_]+)%s*=%s*(%S+)$")
+        if key == "channel" then
+            local number = tonumber(value)
+            if number and number >= 1 and number <= 65532
+                and number == math.floor(number) then
+                out.channel = number
+            end
+        elseif key == "protocol" and #value <= 32
+            and not value:find("[^\32-\126]") then
+            out.protocol = value
+        end
+    end
+    return out
+end
+
+-- the rednet table this package may use: the runtime grants net.rednet, and a
+-- direct run inside the ROM shell falls back to the global
+function M.rednet_of(api)
+    local net = type(api) == "table" and type(api.net) == "table"
+        and api.net.rednet or nil
+    if type(net) == "table" and type(net.receive) == "function" then return net end
+    local glob = rawget(_G, "rednet")
+    if type(glob) == "table" and type(glob.receive) == "function" then return glob end
+    return nil
+end
+
+-- a zero-timeout receive tells a real rednet table from the capability stub: the
+-- stub answers `nil, "capability denied: net.rednet"` instead of a timeout
+function M.rednet_probe(net, protocol)
+    if type(net) ~= "table" or type(net.receive) ~= "function" then
+        return nil, "no_rednet"
+    end
+    local ok, sender, message = pcall(net.receive, protocol, 0)
+    if not ok then return nil, "no_rednet" end
+    if sender == nil and type(message) == "string"
+        and message:find("capability", 1, true) then
+        return nil, "no_rednet"
+    end
+    if sender ~= nil then return net, nil, sender, message end
+    return net, nil
+end
+
+-- open every attached modem, so rednet receives the broadcast channel
+function M.open_modems(net)
+    if type(net) ~= "table" or type(net.open) ~= "function" then return 0 end
+    local per = rawget(_G, "peripheral")
+    local names = type(per) == "table" and type(per.getNames) == "function"
+        and per.getNames() or nil
+    if type(names) ~= "table" then return 0 end
+    local opened = 0
+    for i = 1, #names do
+        if pcall(net.open, names[i]) then opened = opened + 1 end
+    end
+    return opened
+end
+
+function M.computer_id()
+    local osx = rawget(_G, "os")
+    if type(osx) == "table" and type(osx.getComputerID) == "function" then
+        local ok, id = pcall(osx.getComputerID)
+        if ok and id ~= nil then return id end
+    end
+    return "?"
+end
+
+function M.recv_arm(state, api)
+    if type(state.recv) == "table" then
+        state.status = "listening ch=" .. tostring(state.recv.channel)
+        return "repaint"
+    end
+    local conf = M.recv_conf(api)
+    local net, why, sender, message = M.rednet_probe(M.rednet_of(api),
+        conf.protocol)
+    if net == nil then
+        state.status = "no rednet"
+        M.note(api, "PKGGET_RECV_ARM ok=false err=" .. tostring(why))
+        return "denied", why
+    end
+    local opened = M.open_modems(net)
+    state.recv = { channel = conf.channel, protocol = conf.protocol,
+        path = conf.path, net = net, clock = state.recv_clock or os.clock }
+    state.status = "listening ch=" .. tostring(conf.channel)
+        .. " id=" .. tostring(M.computer_id())
+    M.note(api, "PKGGET_RECV_ARM ch=" .. tostring(conf.channel)
+        .. " protocol=" .. M.plain(conf.protocol, 32)
+        .. " modems=" .. tostring(opened))
+    if sender ~= nil then M.recv_message(state, api, sender, message) end
+    return "repaint"
+end
+
+function M.recv_stop(state, api)
+    local recv = state.recv
+    if type(recv) ~= "table" then return "none" end
+    if recv.pkg then M.recv_cleanup(api, recv) end
+    state.recv = nil
+    state.status = "receiver stopped"
+    M.note(api, "PKGGET_RECV_STOP")
+    return "repaint"
+end
+
+function M.recv_cleanup(api, recv)
+    local fsx = M.pkgs_of(api)
+    if type(fsx) == "table" and type(recv) == "table" and recv.pkg then
+        M.rm_tree(fsx, recv.pkg.part)
+    end
+    if type(recv) == "table" then recv.pkg = nil end
+end
+
+function M.ensure_dir(fsx, path)
+    if type(fsx) ~= "table" or type(fsx.makeDir) ~= "function" then return false end
+    local current = ""
+    for part in tostring(path):gmatch("[^/]+") do
+        current = current .. "/" .. part
+        if type(fsx.exists) ~= "function" or not fsx.exists(current) then
+            pcall(fsx.makeDir, current)
+        end
+    end
+    return type(fsx.exists) ~= "function" or fsx.exists(path) == true
+end
+
+-- write one file and read it back: a disk that misreports a write never gets to
+-- say a package was received
+function M.recv_write(fsx, path, body)
+    if type(fsx) ~= "table" or type(fsx.write) ~= "function" then
+        return nil, "no fs"
+    end
+    M.ensure_dir(fsx, M.parent_dir(path))
+    local called, wrote = pcall(fsx.write, path, body)
+    if not called or wrote == false then return nil, "write failed" end
+    if type(fsx.read) == "function" then
+        local rcalled, back = pcall(fsx.read, path)
+        if not rcalled or back ~= body then return nil, "write check failed" end
+    end
+    return true
+end
+
+-- `parts` is a list of {rel, body}: the digest covers "<rel>\n<body>" sorted by
+-- rel, the same formula pushpkg uses
+function M.digest_of(parts)
+    if type(parts) ~= "table" or #parts == 0 then return nil end
+    local copy = {}
+    for i = 1, #parts do copy[i] = parts[i] end
+    table.sort(copy, function(a, b) return a.rel < b.rel end)
+    local buf = {}
+    for i = 1, #copy do
+        buf[#buf + 1] = copy[i].rel .. "\n"
+        buf[#buf + 1] = copy[i].body
+    end
+    return M.sha_of(table.concat(buf))
+end
+
+function M.recv_ack(recv, sender, ok, err, extra)
+    if type(recv) ~= "table" or type(recv.net) ~= "table" then return false end
+    if type(sender) ~= "number" then return false end
+    local msg = { kind = "ack", ok = ok == true }
+    if err ~= nil then msg.err = M.oneline(err, 48) end
+    if type(extra) == "table" then
+        if extra.name ~= nil then msg.name = tostring(extra.name) end
+        if extra.rel ~= nil then msg.rel = tostring(extra.rel) end
+        if extra.chunk ~= nil then msg.chunk = tonumber(extra.chunk) end
+    end
+    local called, sent = pcall(recv.net.send, sender, msg, recv.protocol)
+    return called and sent ~= false
+end
+
+function M.recv_fail(state, api, recv, sender, err, extra)
+    local pkg = recv.pkg
+    local name = pkg and pkg.name or "?"
+    local files = pkg and pkg.files or 0
+    local bytes = pkg and pkg.bytes or 0
+    M.recv_cleanup(api, recv)
+    M.note(api, "PKGGET_RECV name=" .. tostring(name) .. " files="
+        .. tostring(files) .. " bytes=" .. tostring(bytes) .. " ok=false err="
+        .. M.plain(err, 40))
+    M.recv_ack(recv, sender, false, err, extra)
+    state.status = "recv failed: " .. M.plain(err, 20)
+    return "error"
+end
+
+function M.recv_begin(state, api, recv, sender, msg)
+    if recv.pkg then
+        M.recv_ack(recv, sender, false, "busy", msg)
+        state.status = "recv busy"
+        return "none"
+    end
+    local name, version = msg.name, msg.version
+    local kind = tostring(msg.pkg == nil and "app" or msg.pkg)
+    local files = tonumber(msg.files)
+    if type(name) ~= "string" or #name == 0 or #name > 40
+        or not name:match("^[%w_%-]+$") then
+        return M.recv_fail(state, api, recv, sender, "bad name", msg)
+    end
+    if kind ~= "app" and kind ~= "lua" then
+        return M.recv_fail(state, api, recv, sender, "bad pkg", msg)
+    end
+    if type(version) ~= "string" or #version == 0 or #version > 32
+        or version:find("[^\32-\126]") then
+        return M.recv_fail(state, api, recv, sender, "bad version", msg)
+    end
+    if type(files) ~= "number" or files ~= math.floor(files) or files < 1
+        or files > M.MAX_FILES then
+        return M.recv_fail(state, api, recv, sender, "bad files", msg)
+    end
+    local fsx = M.pkgs_of(api)
+    if type(fsx) ~= "table" or type(fsx.write) ~= "function" then
+        return M.recv_fail(state, api, recv, sender, "no fs", msg)
+    end
+    local root = M.PKGS .. "/" .. name .. ".app"
+    local part = root .. ".part"
+    M.rm_tree(fsx, part)
+    if not M.ensure_dir(fsx, part) then
+        return M.recv_fail(state, api, recv, sender, "no directory", msg)
+    end
+    recv.pkg = {
+        name = name, version = version, kind = kind, files = files,
+        root = root, part = part, written = 0, bytes = 0,
+        chunks = {}, parts = {}, at = recv.clock(),
+    }
+    M.recv_ack(recv, sender, true, nil, { name = name })
+    state.status = "recv " .. name .. " 0/" .. tostring(files) .. " 0 B"
+    return "move"
+end
+
+function M.recv_file(state, api, recv, sender, msg)
+    local pkg = recv.pkg
+    if type(pkg) ~= "table" then
+        M.recv_ack(recv, sender, false, "no begin", msg)
+        return "none"
+    end
+    local rel = msg.rel
+    if type(rel) ~= "string" or #rel == 0 or #rel > M.MAX_REL
+        or rel:sub(1, 1) == "/" or rel:find("..", 1, true)
+        or rel:find("\\") or rel:find("[%s%c]") then
+        return M.recv_fail(state, api, recv, sender, "bad rel", msg)
+    end
+    local data = msg.data
+    if type(data) ~= "string" or #data > M.MAX_CHUNK then
+        return M.recv_fail(state, api, recv, sender, "bad data", msg)
+    end
+    local chunk, chunks = tonumber(msg.chunk) or 1, tonumber(msg.chunks) or 1
+    if chunk ~= math.floor(chunk) or chunks ~= math.floor(chunks)
+        or chunk < 1 or chunks < chunk or chunks > M.MAX_CHUNKS then
+        return M.recv_fail(state, api, recv, sender, "bad chunk", msg)
+    end
+    local slot = pkg.chunks[rel]
+    if slot == nil then
+        slot = { next = 1, parts = {}, bytes = 0 }
+        pkg.chunks[rel] = slot
+    end
+    if chunk ~= slot.next then
+        return M.recv_fail(state, api, recv, sender, "chunk order", msg)
+    end
+    slot.parts[#slot.parts + 1] = data
+    slot.bytes = slot.bytes + #data
+    slot.next = chunk + 1
+    if pkg.bytes + slot.bytes > M.MAX_RECV then
+        return M.recv_fail(state, api, recv, sender, "too large", msg)
+    end
+    pkg.at = recv.clock()
+    local request = { name = pkg.name, rel = rel, chunk = chunk }
+    if chunk < chunks then
+        M.recv_ack(recv, sender, true, nil, request)
+        state.status = "recv " .. pkg.name .. " " .. tostring(pkg.written) .. "/"
+            .. tostring(pkg.files) .. " " .. tostring(pkg.bytes + slot.bytes) .. " B"
+        return "move"
+    end
+    local body = table.concat(slot.parts)
+    pkg.chunks[rel] = nil
+    local ok, why = M.recv_write(M.pkgs_of(api), pkg.part .. "/" .. rel, body)
+    if not ok then
+        return M.recv_fail(state, api, recv, sender, why, request)
+    end
+    pkg.parts[#pkg.parts + 1] = { rel = rel, body = body }
+    pkg.written = pkg.written + 1
+    pkg.bytes = pkg.bytes + #body
+    M.recv_ack(recv, sender, true, nil, request)
+    state.status = "recv " .. pkg.name .. " " .. tostring(pkg.written) .. "/"
+        .. tostring(pkg.files) .. " " .. tostring(pkg.bytes) .. " B"
+    return "move"
+end
+
+function M.recv_end(state, api, recv, sender, msg)
+    local pkg = recv.pkg
+    if type(pkg) ~= "table" then
+        M.recv_ack(recv, sender, false, "no begin", msg)
+        return "none"
+    end
+    if pkg.written ~= pkg.files or next(pkg.chunks) ~= nil then
+        return M.recv_fail(state, api, recv, sender, "incomplete", msg)
+    end
+    local want = msg.sha
+    if want ~= nil and want ~= "" then
+        if type(want) ~= "string" or #want ~= 64 or not want:match("^%x+$") then
+            return M.recv_fail(state, api, recv, sender, "bad sha", msg)
+        end
+        local have = M.digest_of(pkg.parts)
+        if have == nil then
+            return M.recv_fail(state, api, recv, sender, "sha unavailable", msg)
+        end
+        if have ~= want:lower() then
+            return M.recv_fail(state, api, recv, sender, "hash check failed", msg)
+        end
+    end
+    local fsx = M.pkgs_of(api)
+    M.rm_tree(fsx, pkg.root)
+    pcall(fsx.move, pkg.part, pkg.root)
+    if type(fsx.exists) == "function" and fsx.exists(pkg.root) ~= true then
+        return M.recv_fail(state, api, recv, sender, "cannot rename", msg)
+    end
+    local install_ok = false
+    local sysx = type(api) == "table" and api.sys or nil
+    if type(sysx) == "table" and type(sysx.install) == "function" then
+        local called, ok, why = pcall(sysx.install, pkg.name)
+        install_ok = called and ok == true
+        if not install_ok then state.install_error = M.plain(why, 40) end
+    end
+    M.recv_ack(recv, sender, true, nil, { name = pkg.name })
+    M.note(api, "PKGGET_RECV name=" .. pkg.name .. " files=" .. tostring(pkg.files)
+        .. " bytes=" .. tostring(pkg.bytes) .. " ok=true"
+        .. (install_ok and "" or " install=false"))
+    state.recv_pkg = { name = pkg.name, files = pkg.files, bytes = pkg.bytes,
+        root = pkg.root, install = install_ok }
+    state.status = install_ok and ("installed " .. pkg.name)
+        or ("staged " .. pkg.root)
+    recv.pkg = nil
+    return "install"
+end
+
+function M.recv_abort(state, api, recv, sender, msg)
+    local name = recv.pkg and recv.pkg.name or "?"
+    M.recv_cleanup(api, recv)
+    M.recv_ack(recv, sender, true, nil, { name = name })
+    M.note(api, "PKGGET_RECV_ABORT name=" .. tostring(name))
+    state.status = "aborted " .. tostring(name)
+    return "repaint"
+end
+
+function M.recv_message(state, api, sender, msg)
+    local recv = state.recv
+    if type(recv) ~= "table" then return "none" end
+    if type(msg) ~= "table" or type(msg.kind) ~= "string" then
+        M.recv_ack(recv, sender, false, "bad message")
+        return "none"
+    end
+    if msg.kind == "begin" then return M.recv_begin(state, api, recv, sender, msg) end
+    if msg.kind == "file" then return M.recv_file(state, api, recv, sender, msg) end
+    if msg.kind == "end" then return M.recv_end(state, api, recv, sender, msg) end
+    if msg.kind == "abort" then return M.recv_abort(state, api, recv, sender, msg) end
+    if msg.kind == "ack" then return "none" end
+    M.recv_ack(recv, sender, false, "bad kind", msg)
+    return "none"
+end
+
+function M.recv_poll(state, api)
+    local recv = state.recv
+    if type(recv) ~= "table" or type(recv.net) ~= "table" then return "none" end
+    local clock = recv.clock or os.clock
+    if recv.pkg and (clock() - (recv.pkg.at or clock())) > M.RECV_IDLE then
+        local name = recv.pkg.name
+        M.recv_fail(state, api, recv, nil, "timeout", { name = name })
+        M.note(api, "PKGGET_RECV_TIMEOUT name=" .. tostring(name))
+        return "error"
+    end
+    local ok, sender, msg = pcall(recv.net.receive, recv.protocol, M.RECV_TIMEOUT)
+    if not ok then
+        M.note(api, "PKGGET_RECV_ERR err=" .. M.plain(sender, 40))
+        return "none"
+    end
+    if type(sender) ~= "number" then return "none" end
+    return M.recv_message(state, api, sender, msg)
+end
+
 function M.enter(state, api)
     if (state.index or 1) == 1 then return M.edit_begin(state, api) end
     local entry = M.selected_entry(state)
@@ -635,6 +1056,29 @@ function M.dispatch_event(state, event, p1, api)
         if event == "desk_focus" or event == "term_resize" then return "repaint" end
         return "none"
     end
+    -- while the receiver is armed every key belongs to it: `q` stops listening
+    -- and nothing else reaches the list
+    if type(state.recv) == "table" then
+        if event == "key" then
+            local key = p1
+            if type(key) == "number" then
+                key = M.code_name(key, api)
+                if key == nil then return "none" end
+            end
+            key = tostring(key == nil and "" or key):lower()
+            if key == "q" then return M.recv_stop(state, api) end
+            return "none"
+        end
+        if event == "char" then
+            if tostring(p1 == nil and "" or p1):lower() == "q" then
+                return M.recv_stop(state, api)
+            end
+            return "none"
+        end
+        if event == "desk_focus" or event == "term_resize" then return "repaint" end
+        if event == "terminate" or event == "shutdown" then return "quit", event end
+        return "none"
+    end
     if event == "key" then
         local key = p1
         if type(key) == "number" then
@@ -643,6 +1087,7 @@ function M.dispatch_event(state, event, p1, api)
         end
         key = tostring(key == nil and "" or key):lower()
         if key == "q" then return "quit", "q" end
+        if key == "l" then return M.recv_arm(state, api) end
         if key == "up" then return M.move(state, -1) end
         if key == "down" then return M.move(state, 1) end
         if key == "enter" then return M.enter(state, api) end
@@ -656,6 +1101,7 @@ function M.dispatch_event(state, event, p1, api)
         if ch == "q" then return "quit", "q" end
         if ch == "r" then return M.load_index(state, api) end
         if ch == "a" then return M.edit_begin(state, api) end
+        if ch == "l" then return M.recv_arm(state, api) end
         if ch == "s" then return M.cycle_server(state) end
         return "none"
     end
@@ -724,11 +1170,19 @@ function M.body(manifest, api)
         if type(pull) ~= "function" then return M.idle(api) end
         while true do
             local event, p1 = pull()
-            if event == nil then return M.idle(api) end
-            local action, detail = M.dispatch_event(state, event, p1, api)
-            if action == "quit" then return "quit" end
-            if state.editing == nil and action ~= "none" then
-                M.paint_once(state, api, term)
+            if event == nil then
+                if p1 ~= nil then return M.idle(api) end
+                if type(state.recv) == "table" then
+                    local action = M.recv_poll(state, api)
+                    if action ~= "none" then M.paint_once(state, api, term) end
+                end
+                api.yield()
+            else
+                local action, detail = M.dispatch_event(state, event, p1, api)
+                if action == "quit" then return "quit" end
+                if state.editing == nil and action ~= "none" then
+                    M.paint_once(state, api, term)
+                end
             end
         end
     end
@@ -738,14 +1192,22 @@ function M.body(manifest, api)
     if type(pull) ~= "function" then return M.idle(api) end
     while true do
         local event, p1 = pull()
-        if event == nil then return M.idle(api) end
-        local action, detail = M.dispatch_event(state, event, p1, api)
-        if action == "quit" then
-            M.note(api, "PKGGET_QUIT key=" .. tostring(detail))
-            return "quit"
+        if event == nil then
+            if p1 ~= nil then return M.idle(api) end
+            if type(state.recv) == "table" then
+                local action = M.recv_poll(state, api)
+                if action ~= "none" then M.paint_once(state, api, term) end
+            end
+            api.yield()
+        else
+            local action, detail = M.dispatch_event(state, event, p1, api)
+            if action == "quit" then
+                M.note(api, "PKGGET_QUIT key=" .. tostring(detail))
+                return "quit"
+            end
+            if action ~= "none" then M.paint_once(state, api, term) end
+            api.yield()
         end
-        if action ~= "none" then M.paint_once(state, api, term) end
-        api.yield()
     end
 end
 

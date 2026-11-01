@@ -64,7 +64,7 @@ foreach ($required in @("startup.lua", "system\startup.lua", "system\boot.lua",
     "system\system\pkgget.app\manifest.lua", "system\system\pkgget.app\main.lua",
             "system\system\installer.app\manifest.lua", "system\system\installer.app\main.lua",
         "recovery\proto.lua", "recovery\flash.lua", "recovery\bootstrap.lua",
-        "ota\server.lua", "install.set")) {
+        "ota\server.lua", "install.set", "tools\pushpkg.lua")) {
     if (-not (Test-Path (Join-Path $osRoot $required))) {
         Write-Output "OFFLINE_ERROR missing source: pyroet-os/$required"
         exit 2
@@ -124,6 +124,9 @@ Copy-Item (Join-Path $osRoot "system\system\pkgget.app\*") (Join-Path $comp "sys
 Copy-Item (Join-Path $osRoot "examples\web.app\*") (Join-Path $comp "tests\web.app") -Force
 Copy-Item (Join-Path $osRoot "examples\files.app\*") (Join-Path $comp "tests\files.app") -Force
     Copy-Item (Join-Path $here "*.lua")                 (Join-Path $comp "tests")               -Force
+    # tools/ is development material, not image payload: t_pushpkg drives a
+    # copy of the pusher that the OTHER computer would run
+    Copy-Item (Join-Path $osRoot "tools\pushpkg.lua")   (Join-Path $comp "tests\pushpkg.lua") -Force
     Copy-Item (Join-Path $osRoot "system\system\installer.app\*") (Join-Path $comp "tests\installer.app") -Force
     # the ROM stub is not staged as /startup.lua (that is the shim); the layout
     # suite loads this copy and drives it with a stubbed loadfile/print

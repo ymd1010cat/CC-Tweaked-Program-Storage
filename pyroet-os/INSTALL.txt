@@ -65,12 +65,11 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
    "Ctrl+T opens power menu" and the list stays. Ctrl+T (the ROM terminate
    event) opens the power menu -- Shutdown / Reboot / Cancel, up/down picks,
    enter runs, Esc or q cancels -- so there is no key that drops you back to
-   the CraftOS shell. The menu also has "Update": it lists what the sources
-   offer -- /pkgs/*.app on this computer's own disk (the primary source; a
-   pocket computer has no disk drive at all), plus /disk/apps and
-   /disk/ota/meta.txt only when a disk is mounted -- and applies a
-   package through the kernel bridge, and says "no updates" with a reason when
-   there is nothing to apply (q goes back; no Esc needed). Inside an app Ctrl+T leaves that app first (back to the
+   the CraftOS shell. The menu also has "Update": it lists /pkgs/*.app on
+   this computer's own disk (a pocket computer has no disk drive, so that is
+   the only local source) and applies a package through the kernel bridge,
+   and says "no updates" with a reason when there is nothing to apply (q
+   goes back; no Esc needed). Inside an app Ctrl+T leaves that app first (back to the
    desktop); press it again on the desktop to get the menu.
    If it returns to the shell right away, or if keys do nothing while the screen
    stays put, grep /kernel.log for STARTUP_DESKTOP_SKIP: input_denied /
@@ -98,6 +97,22 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                   <dir>/<relpath>     the file
                   <dir>/SHA256.txt    optional "<sha256> <relpath>" lines;
                                       without it the status says unverified
+                l arms the rednet receiver: the status row shows
+                "listening ch=4101 id=<computer id>", q stops listening, and
+                /etc/pkg.recv may override channel= / protocol=. Another
+                computer runs tools/pushpkg.lua (below) to stream a package
+                into /pkgs; a failed transfer leaves no .part tree behind.
+      pushpkg    (a copy on the OTHER computer; not part of the image)
+                pushpkg <target-id|broadcast> [name] reads index.txt and the
+                package files over http, then streams them to the handheld
+                (PYROET-PKG/1, channel 4101 by default). /etc/pushpkg.conf:
+                server=<http base>, protocol=, channel= (logged), timeout=.
+                index.txt takes "app <name> <version> <dir>" and
+                "lua <name> <version> <file.lua>"; a lua entry is wrapped
+                into manifest.lua + main.lua (capabilities
+                fs.read,input,terminal) before it is sent. Every message
+                waits for an ack (retried twice), and a refused stream is
+                aborted so the handheld keeps no half package.
      files      (optional example package) a read-only file manager: up/down,
                 enter to open/view, b or backspace up, r refresh, h hidden,
                 q quit. Not in the image: copy examples/files.app to /pkgs/files.app
@@ -111,7 +126,7 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 q quits (in reading mode only -- while editing q is a letter)
      installer  up/down (or a digit) pick a package, enter installs /
                 removes / reports "locked" via the host bridge, c cancels,
-                q back. No source shows "no source: checked /pkgs,/disk", no bridge
+                q back. No source shows "no source: checked /pkgs", no bridge
                 shows "unavailable" -- it never pretends to install.
    A third-party package that declares no "input" gets a screen that is cleared
    before it is shown (and cleared again before the desktop comes back), so the

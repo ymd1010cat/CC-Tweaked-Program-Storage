@@ -836,7 +836,9 @@ function P.run(opts)
             write_limit = o.write_limit,
             installer = ctx.installer,
             rpv = o.rpv,
-            rednet = o.rednet,
+            -- T20: a package that declares net.rednet needs the ROM table; a
+            -- host/test can still inject its own (o.rednet wins)
+            rednet = o.rednet or rawget(_G, "rednet"),
             redstone = o.redstone,
             peripheral = o.peripheral,
             http = o.http,

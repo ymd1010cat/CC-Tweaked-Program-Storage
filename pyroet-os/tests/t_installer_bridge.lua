@@ -115,9 +115,9 @@ end
 
 local function test_device(name)
     local base = H.case_dir("installer_bridge", name)
-    local dirs = { "disk", "disk/apps", "apps", "system", "tools" }
+    local dirs = { "pkgs", "apps", "system", "tools" }
     for i = 1, #dirs do H.mkdirp(base .. "/" .. dirs[i]) end
-    local medium = base .. "/disk/apps"
+    local medium = base .. "/pkgs"
     H.app_package(medium .. "/box.app",
         { manifest = 'return { name = "box", version = "0.2.0" }' })
     return base, medium
@@ -427,11 +427,11 @@ return function(kit)
         -- the UI sees the runtime's gated fs and the T4 system surface, nothing
         -- else: no opts.installer, no api.installer
         local ui_api = { fs = api.fs, sys = api.sys }
-        local state = UI.build(ui_api, { version = "0.1.0", medium = medium,
+        local state = UI.build(ui_api, { version = "0.1.0", internal = medium,
             apps = base .. "/apps", system = base .. "/system" })
         H.eq("ui_rows", #state.entries, 1)
-        H.eq("ui_disk_count", state.disk_count, 1)
-        H.eq("ui_selected_source", UI.selected(state).source, "disk")
+        H.eq("ui_internal_count", state.internal_count, 1)
+        H.eq("ui_selected_source", UI.selected(state).source, "internal")
         H.eq("ui_hint", UI.hint_line(state), "enter install")
         -- Enter on the medium row really installs, through api.sys
         local action = UI.handle_key(state, "enter", ui_api, {})
@@ -463,7 +463,7 @@ return function(kit)
         local api2 = probe(base2 .. "/tools/probe.app", { "fs.read" },
             { installer = inst2, log = log, lines = lines })
         local ui2 = { fs = api2.fs, sys = api2.sys }
-        local state2 = UI.build(ui2, { version = "0.1.0", medium = medium2,
+        local state2 = UI.build(ui2, { version = "0.1.0", internal = medium2,
             apps = base2 .. "/apps", system = base2 .. "/system" })
         local action3 = UI.handle_key(state2, "enter", ui2, {})
         H.eq("ui_denied_action", action3, "denied")
@@ -474,7 +474,7 @@ return function(kit)
 
         -- no bridge at all: the T1 line, and the app keeps running
         local bare = { fs = REAL() }
-        local state3 = UI.build(bare, { version = "0.1.0", medium = medium,
+        local state3 = UI.build(bare, { version = "0.1.0", internal = medium,
             apps = base .. "/apps", system = base .. "/system" })
         local action4 = UI.handle_key(state3, "enter", bare, {})
         H.eq("ui_no_bridge_action", action4, "unavailable")
@@ -483,7 +483,7 @@ return function(kit)
         -- and the screen shows the same line (the mapping is the one place)
         local stub = { install = function() return nil, "installer unavailable" end }
         local stub_api = { fs = REAL(), sys = stub }
-        local state4 = UI.build(stub_api, { version = "0.1.0", medium = medium,
+        local state4 = UI.build(stub_api, { version = "0.1.0", internal = medium,
             apps = base .. "/apps", system = base .. "/system" })
         local action5 = UI.handle_key(state4, "enter", stub_api, {})
         H.eq("ui_kernel_off_action", action5, "unavailable")
@@ -491,7 +491,7 @@ return function(kit)
         -- and a bridge exposing only list is a bridge, not "the kernel hid it"
         local list_only = { list = function() return {} end }
         local list_api = { fs = REAL(), sys = list_only }
-        local state5 = UI.build(list_api, { version = "0.1.0", medium = medium,
+        local state5 = UI.build(list_api, { version = "0.1.0", internal = medium,
             apps = base .. "/apps", system = base .. "/system" })
         H.eq("ui_list_only_action", UI.handle_key(state5, "enter", list_api, {}),
             "unavailable")
@@ -515,9 +515,9 @@ return function(kit)
         -- the media root and the packages table are passed through
         local log2, lines2 = logger()
         local built = STARTUP.build_installer({ fs = REAL(), log = log2 },
-            { media_root = "/disk/apps", packages = { box = {} },
+            { media_root = "/pkgs", packages = { box = {} },
               apps_root = "/t/apps", system_root = "/t/system" }, APPS)
-        H.eq("startup_media_root", built and built.media_root, "/disk/apps")
+        H.eq("startup_media_root", built and built.media_root, "/pkgs")
         H.eq("startup_apps_root_opt", built and built.apps_root, "/t/apps")
         H.eq("startup_system_root_opt", built and built.system_root, "/t/system")
         H.eq("startup_packages", built and type(built.packages.box), "table")

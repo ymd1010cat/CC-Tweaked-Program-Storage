@@ -62,7 +62,7 @@ EDL 式的恢复工具。发布版本 **1.0.0**，装机内容 **26 个文件 / 
 ```
 pyroet-os/
 ├─ startup.lua              ROM 唯一入口的 starter（1,070 B），只加载 /system/startup.lua
-├─ system/                  镜像 payload（27 文件 / 447,310 B）
+├─ system/                  镜像 payload（28 文件 / 597,973 B）
 │  ├─ startup.lua           启动链：boot → kernel → apps → 权限 → 服务 → 首帧 → commit
 │  ├─ boot.lua              bootloader：单树 + journal 决策表 + 按哈希回滚（45,623 B）
 │  ├─ kernel/
@@ -324,32 +324,33 @@ compat：manifest **不写** `capabilities` = 声明空列表 = 全部拒绝，*
 | 包 | version | capabilities |
 | --- | --- | --- |
 | `launcher.app` | 0.2.0 | `fs.read`, `fs.write`（写只用于 `/etc/launcher.recent`，被拒就忽略）, `input`, `terminal`（D1：常驻桌面对话循环） |
-| `settings.app` | 0.1.0 | `fs.read`（**严格只读**，没有写路径） |
-| `installer.app` | 0.1.0 | `fs.read`, `fs.write`（读来源盘与两个已装根；写只发生在安装事务里） |
-| `net.app` (可选示例，不在镜像) | 0.1.0 | `net.rpv`, `fs.read` |
+| `settings.app` | 0.2.0 | `fs.read`（**严格只读**，没有写路径） |
+| `installer.app` | 0.2.0 | `fs.read`, `fs.write`（读 `/pkgs` 与两个已装根；写只发生在安装事务里）, `input`, `terminal` |
+| `pkgget.app` | 0.1.0 | `http`, `fs.read`, `fs.write`（只写 `/pkgs`）, `input`, `terminal`, `net.rednet`（T20 接收模式） |
+| `net.app` (可选示例，不在镜像) | 0.2.0 | `net.rpv`, `fs.read` |
 
 ### 5.5 安装器 UI（`installer.app`）
 
 图形入口，26x20，与桌面/设置共用同一套布局自检（`layout_selftest()`）。
 
 ```
-installer 0.1.0
-disk ok 3 installed
-> d box          0.2.0    <- d = 来源盘 /disk/apps 上的包（Enter 安装/覆盖）
-  d zeta         1.0.0
+installer 0.2.0
+source internal 3 installed
+> p box          0.2.0    <- p = /pkgs 里待装的包（Enter 安装/覆盖）
+  p zeta         1.0.0
   i notes        0.3.0    <- i = 已装在 /apps（Enter 卸载）
   s launcher     0.2.0    <- s = 镜像自带的系统包（Enter 拒绝）
   ...
 enter install              <- 或 enter remove / system app locked / 结果文案
-d2 i1 s2 sel 1/5
+p2 i1 s2 sel 1/5
 ```
 
 - **按键是纯函数**（`M.handle_key(state, key, api, opts)`）：上/下（或左/右）移动、数字键跳转、
   回车/return 执行、`escape`/`q`/`c` 取消当前提示行；`M.run` 的键从 `opts.keys` 取
-  （安装器没有声明 `input`，见 §4.3）。
-- **来源**：`/disk/apps/*.app`（有驱动器时；没有驱动器是正常状态，文案是 `no disk, no apps`）、
-  `/apps`（用户包）、`/system/system`（镜像包）。版本号：来源盘上的包从 `manifest.lua`
-  **按文本匹配**读取（绝不执行来源盘里的代码），已装的包从 `api.sys.apps()` 取。
+  （T14 起安装器声明了 `input`/`terminal`，键盘直接进它；离线测试仍可用 `opts.keys` 注入）。
+- **来源**：`/pkgs/*.app`（本机磁盘上的待装包；手持机没有软驱，`/disk` 不再参与）、
+  `/apps`（用户包）、`/system/system`（镜像包）。版本号：`/pkgs` 里的包从 `manifest.lua`
+  **按文本匹配**读取（绝不执行来源里的代码），已装的包从 `api.sys.apps()` 取。
 - **安装走宿主桥**，三种桥来源按顺序取第一个可用的：`opts.installer` → `api.sys.install` /
   `api.sys.uninstall` → `api.installer`。桥函数签名为平函数：
   `install(name) -> true, info | nil, err`、`uninstall(name) -> true | nil, err`、
@@ -371,10 +372,48 @@ d2 i1 s2 sel 1/5
   `capability denied: fs.write`、其他 `failed: <原串>`。
 - **卸载保护**：`/system/system` 的包在应用层就拒绝（`system app locked`，桥一次都不调用），
   即使宿主返回 `system app` 也显示同一行；只有 `/apps/<name>.app` 能被卸载。
-- **没有可装项**时给 ASCII 提示：`no apps to install`（有盘无包）或 `no disk, no apps`
-  （无盘也无包）；`fs.read` 被拒时直接显示 `capability denied: fs.read`。
+- **没有可装项**时给 ASCII 提示：`no apps to install`（`/pkgs` 读得到但没包）或
+  `no source: checked /pkgs`（`/pkgs` 不存在）；`fs.read` 被拒时直接显示 `capability denied: fs.read`。
 - **测试钩子**（真机永不设置）：`_G.PYROET_INSTALLER_TEST` 让入口返回模块本身，
   `_G.PYROET_APP_NOPAINT` 跳过绘制。
+
+### 5.6 远程接收：另一台电脑跑 `pushpkg`（T20）
+
+手持机不联网也能装包：另一台电脑（CraftOS / Pyromputer OS）从 http 服务器拉包，再用 rednet 写进手持机的 `/pkgs`。
+
+**手持机**：打开 `pkgget`，按 `l` 进入接收模式，状态行显示
+`listening ch=4101 id=<本机 id>`；`q` 停止。`/etc/pkg.recv`（可选）可以覆盖 `channel=` /
+`protocol=`（非法值忽略）。manifest 已增加 `net.rednet`；未授权时按 `l` 只显示
+`no rednet`，不崩。
+
+**另一台电脑**（把 `pyroet-os/tools/pushpkg.lua` 拷到它的根目录；这个文件不在镜像里）：
+
+```
+pushpkg 7            # 把 index.txt 里的全部包推给 id=7 的手持机
+pushpkg broadcast    # 广播给所有在收的手持机
+pushpkg 7 hello      # 只推 hello
+```
+
+`/etc/pushpkg.conf`（可选）：`server=<http base>`、`protocol=`、`channel=`（仅日志）、`timeout=`。
+
+**服务器目录**（和 `pkgget` 一样是纯文本）：
+
+```
+index.txt         app <name> <version> <dir>      # 目录包：manifest.lua + main.lua + ...
+                  lua <name> <version> <file.lua>  # 单文件包：推送前自动包装
+<dir>/files.txt   包内文件的相对路径，一行一个
+<dir>/<relpath>   文件正文
+<dir>/SHA256.txt  可选，"<sha256> <relpath>"；推送前先校验
+```
+
+**协议 `PYROET-PKG/1`**：`{kind="begin", name=, version=, pkg="app"|"lua", files=n}` → 每个文件按
+≤ 8 KiB 分块 `{kind="file", rel=, data=, chunk=, chunks=}` → `{kind="end", sha=}`（整包摘要，可选）；
+每条消息等接收端 `{kind="ack", ok=bool, err=..}`，没收到 ack 重试 2 次，失败发
+`{kind="abort"}`。接收端把文件写进 `/pkgs/<name>.app.part`、逐文件回读校验，全部成功才
+改名成 `/pkgs/<name>.app` 并尝试 `api.sys.install(name)`；任何失败（坏 sha、坏路径、坏块序、
+写回读失败、120 s 空闲超时）都删掉 `.part`，不会留下半个包。日志：手持机
+`PKGGET_RECV_ARM ...` / `PKGGET_RECV name=.. files=.. bytes=.. ok=..`；推送端
+`PUSHPKG_BEGIN/FILE/RETRY/END/FAIL`。
 
 ---
 
@@ -496,16 +535,16 @@ inst:install("hello"); inst:uninstall("hello"); inst:list()
 当前实测（v1.0.0 + N1 修正 + T1 安装器 UI）：
 
 ```
-entries    : 28 (28 files, 0 dirs, 0 missing)
-TOTAL      : 448,380 B   (system 27 文件 447,310 + 根 starter 1,070)
-VERDICT    : SIZE_WARN   (stretch 349,525 < total 448,380 <= upper 629,145)
-MARGIN     : 98,855 bytes over stretch; 180,765 bytes under upper
-WINDOW_OK  : sum=648380 limit=900000
+entries    : 29 (29 files, 0 dirs, 0 missing)
+TOTAL      : 599,043 B   (system 28 文件 597,973 + 根 starter 1,070)
+VERDICT    : SIZE_WARN   (stretch 349,525 < total 599,043 <= upper 629,145)
+MARGIN     : 249,518 bytes over stretch; 30,102 bytes under upper
+WINDOW_OK  : sum=799043 limit=900000
 ```
 
 - **`SIZE_WARN` 不是失败**：超目标线只报差额；硬门禁才是发版阻断线。
-- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`448,380 + 200,000 = 648,380`，
-  距 900,000 还有 251,620 B，距机身 1,000,000 B 还有 351,620 B。
+- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`599,043 + 200,000 = 799,043`，
+  距 900,000 还有 100,957 B，距机身 1,000,000 B 还有 200,957 B。
 - **发布包 ≠ 镜像**：发布 zip 是完整源码集（含 `recovery/` 与两份文档），`install.set` 统计的才是镜像；
   不要拿 zip 体积当门禁，也不要因为包里有 `recovery/` 就以为它在镜像里。
 

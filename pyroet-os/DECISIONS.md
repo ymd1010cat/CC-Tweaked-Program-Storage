@@ -1296,6 +1296,30 @@ GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校�
 
 39.5 **数字**：离线 **5,024 pass / 0 fail / 257 groups**；TOTAL 见 sizecheck（本轮为净减少）。
 
+40. T19 收尾：`installer.app` 删掉 `/disk` 探测（T20）
+
+40.1 **背景**：安装源早已收敛为 `/pkgs`（§28/§39），但 `system/system/installer.app/main.lua` 仍保留 `/disk/apps` 探测：`M.MEDIUM`/`M.DISK`、`sources` 的 disk 项、tag `d`、`source=="disk"` 分支、摘要 `internal+disk`、提示行 `,/disk`，以及内置 `layout_selftest()` 的 disk fixture。手持机没有软驱，这段代码永远走空，却让界面/文档/自检都留着“来源盘”的概念。
+
+40.2 **改动**：删除 `M.MEDIUM`/`M.DISK`，`M.SOURCES = { "internal", "apps", "system" }`；`M.scan` 只探测 `/pkgs`（`M.INTERNAL`）再扫两个已装根；状态字段 `disk_ok`→`source_ok`、`disk_count`→`internal_count`；计数行前缀 `p`（`d` 不再存在）；无源提示固定 `no source: checked /pkgs`；`tag_of`/`action_of`/`install_selected` 只认 `internal`；`sample_state`/`selftest` 用 internal fixture。测试先改 fixture（`t_installer_app` 全部换到 `/pkgs`；`t_installer_bridge` 的 `test_device` 把包建在 `<case>/pkgs`，ui 组改用 `internal=`），再删代码；两步各自跑套件全绿。
+
+40.3 **测试**：`t_installer_app` 断言改为 internal 标签 `p`、`p2 i1 s2 sel 1/5`（原 `d2..`）；`t_installer_bridge` 的 ui/e2e 仍走真实 `kernel/installer.lua`，`internal` 源→安装→已装行→卸载。**断言未弱化**：删掉的只有 `M.MEDIUM` 常量断言与“无盘即无源”的旧措辞，换成了 `M.INTERNAL`/`/pkgs` 与 `source_ok` 的等价断言；`scan_once`/`scan_every_frame` 的 fs.list 计数由 4/16 变 3/12（少一次 `/disk` 探测，语义不变）。
+
+40.4 **结果**：`install.set` 仍 29 条，TOTAL 从 581,362 降到 580,019 B（installer `main.lua` 41,554 B，-1,368）；离线 **5,024 pass / 0 fail / 257 groups** 不变。
+
+40.5 **遗留观察（本次未改）**：`kernel/apps.lua` 的 `sys_ota_list` 仍保留 `/disk` 死分支（`A.OTA_META`/`A.OTA_DISK` 都未定义，`/disk` 探测与 image meta 分支永远无效），无源日志仍打印 `checked=/pkgs,/disk`；`kernel/installer.lua` 的注释也还提 `/disk`。§39.3 声称已删，与代码不一致；`t_sys_ota` 目前还断言了那条带 `/disk` 的日志行。清理它需要同步改该断言，属于下一步，不在本条改动内。
+
+41. 远程推包：`pushpkg`（另一台电脑）+ `pkgget` 接收模式（T20）
+
+41.1 **形态**：程序跑在另一台电脑（CraftOS / Pyromputer OS）上，从 http 服务器拉包，再用 rednet 写到手持机的 `/pkgs`；手持机不联网也能装包。`tools/pushpkg.lua` 是开发工具，**不进镜像、不在 install.set**。
+
+41.2 **手持机**：`pkgget` 增加接收模式：按 `l` arm，状态行 `listening ch=4101 id=<本机 id>`，`q` 停止；`/etc/pkg.recv` 可覆盖 `channel=`/`protocol=`（非法值忽略，保持默认）。manifest 增加 `net.rednet`（`startup.lua` 把 ROM 的 `rednet` 表交给运行时；宿主仍可用 `opts.rednet` 覆盖；未授权时按 `l` 显示 `no rednet`，不崩）。协议 `PYROET-PKG/1` 默认频道 4101；`rednet.receive(protocol, timeout)` 收表消息 `begin`/`file`/`end`/`abort`，每块 ≤ 8 KiB，`file` 带 `rel`/`chunk`/`chunks`；写 `/pkgs/<name>.app.part` 并逐文件回读校验，全部成功才改名为 `/pkgs/<name>.app` 并尝试 `api.sys.install(name)`；任何失败删除 `.part`（坏 sha / 坏路径 / 坏块序 / 写回读失败 / 120 s 空闲超时），半包永不出现。日志 `PKGGET_RECV_ARM ch=.. protocol=.. modems=..`、`PKGGET_RECV name=.. files=.. bytes=.. ok=..`、失败 `err=..`、`PKGGET_RECV_TIMEOUT`/`PKGGET_RECV_ABORT`/`PKGGET_RECV_STOP`。
+
+41.3 **另一台电脑**：`pushpkg <target-id|broadcast> [name]`；`/etc/pushpkg.conf` 的 `server=`/`protocol=`/`channel=`（仅日志）/`timeout=`；服务器目录 `index.txt`（`app` 目录包 + `lua` 单文件包）、`<dir>/files.txt`、`<dir>/<relpath>`、可选 `<dir>/SHA256.txt`；`lua` 包在发送前包装成 `manifest.lua`（name/version、capabilities `fs.read,input,terminal`）+ `main.lua`。整包摘要 = 按 rel 排序拼 `<rel>\n<body>` 再 SHA-256（工具自带 bit32/bit 版 sha256；宿主没有位运算时省略 `end.sha`，仍逐文件回读校验）。每条消息等 ack，丢失重试 2 次，拒绝（`ok=false`）不重试并回 `abort`。日志 `PUSHPKG_TARGET/INDEX/BEGIN/FILE/RETRY/END/FAIL`。
+
+41.4 **测试**：`t_pkgget` 新增 `recv.arm`/`recv.conf`/`recv.package`/`recv.chunks`/`recv.abort`/`recv.failures`/`recv.timeout`（脚本化 rednet + 真实文件系统，覆盖 begin/file/end/abort、坏 sha、坏块序、坏路径、写回读失败、空闲超时、无 rednet 能力、`.part` 不残留、无桥时留在 `/pkgs`）；新增 `t_pushpkg`（内嵌 sha256 向量校验、index 解析、lua 包装、app 下载 + SHA256.txt、chunk ≤ 8 KiB、ack 重试 2 次、拒绝/超时 abort、广播、坏 index/坏 target/无 rednet）。`run-tests.ps1` 把 `tools/pushpkg.lua` stage 到 `/tests/pushpkg.lua`。
+
+41.5 **结果**：`install.set` 仍 29 条，TOTAL 599,043 B（距硬门禁 629,145 余 30,102；pkgget main.lua 27,348→46,109，含接收状态机与校验，超过“≤8 KB 增量”的期望值）；离线 **5,332 pass / 0 fail / 274 groups**（+308 断言 / +17 组）。尚未真机复核。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1339,3 +1363,5 @@ GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校�
 - 2026-11-01: **新增自带应用 `pkgget`（自选服务器的包下载）**（口径见 §37）。新包 `system/system/pkgget.app/`（caps http/fs.read/fs.write/input/terminal，约 20 KB），纯文本协议：`index.txt`（`app <name> <version> <dir>`）+ `<dir>/files.txt` + 文件 + 可选 `SHA256.txt`；服务器由用户输入（`a` 编辑 `/etc/pkg.servers` 第一行，`s` 轮换多行，默认占位 `http://example.invalid/`）。下载写入 `/pkgs/<name>.app`（`.part` → 回读 → 改名，失败全清），完成后走 `api.sys.install` 桥装到 `/apps`，无桥则 `staged in /pkgs`。`install.set` 27→29、`t_budget` 同步、`/system/system` 计数 2→3 各套件同步；新增 `tests/t_pkgget.lua`（6 组 76 断言）。离线 **5,008 pass / 0 fail / 256 groups**。未 commit。
 - 2026-11-01: **手持机无侧面：modem 自动发现**（口径见 §38）。`net/service.lua` 默认 `iface_side=auto`，新增 `S.find_modem` / `S.resolve_side`：具体侧面是 modem 就用（方块电脑兼容），否则自动发现并记 `NET_IFACE_AUTODETECT name=..`（配置侧面非 modem 时记 `NET_IFACE_FALLBACK configured=.. detected=..`），完全没有 modem 时 degraded + `NET_NO_MODEM`（headless 无 peripheral 表则保留配置值）。`settings.app` 的 iface 循环含 `auto` 且默认 auto。接口在 net 服务启动时解析一次，改配置需重启。新增 `t_net_service.net.iface_auto` 覆盖五种情况。离线 **5,026 pass / 0 fail / 257 groups**。未 commit。
 - 2026-11-01: **只面向手持电脑，收敛方块电脑兼容**（口径见 §39）。`net/service.lua` 不再读 `iface_side`（出现时记 `NET_CONFIG_IGNORED`），modem 一律自动发现；`settings.app` 的 `iface` 行只剩 `auto`；`kernel/installer.lua` 删 `I.DISK`/磁盘查找只留 `/pkgs`，`kernel/apps.lua` 的 OTA 删 `/disk` 来源与 `internal+disk` 摘要。README/DECISIONS 写明"只手面向手持电脑，不支持方块电脑"。离线 **5,024 pass / 0 fail / 257 groups**。未 commit。
+- 2026-11-01: **T19 收尾：installer.app 删 `/disk` 探测（§40）**。`system/system/installer.app/main.lua` 只探测 `/pkgs`：删 `M.MEDIUM`/`M.DISK`、disk source、tag `d`、`internal+disk` 摘要、`/disk` 提示与 selftest fixture；`disk_ok`/`disk_count` 改为 `source_ok`/`internal_count`，计数行用 `p`。测试 fixture 先迁到 `/pkgs`（t_installer_app 全部、t_installer_bridge 的 test_device/ui 组）再删代码，两步各自全绿；断言强度不变（scan 的 fs.list 计数 4/16→3/12 是少一次 `/disk` 探测）。体积 581,362→580,019 B（-1,343）；离线 5,024/0/257 不变。
+- 2026-11-01: **T20 远程推包：pushpkg + pkgget 接收模式（§41）**。`system/system/pkgget.app/main.lua` 增接收模式（`l` arm / `q` 停，`/etc/pkg.recv` 覆盖 channel/protocol，`PYROET-PKG/1` 频道 4101，begin/file/end/abort + ack，.part → 回读校验 → 改名发布 → `api.sys.install`，失败/超时清 `.part`，日志 `PKGGET_RECV*`）；manifest 增 `net.rednet`；`startup.lua` 把 ROM rednet 表交给运行时（`opts.rednet` 仍可覆盖）。新增 `tools/pushpkg.lua`（不进镜像/install.set：pushpkg <id|broadcast> [name]、/etc/pushpkg.conf、app+lua 两种包、lua 自动包装、≤8 KiB 分块、ack 重试 2 次、整包 sha256、PUSHPKG_* 日志）。新增 t_pkgget 接收组（+143 断言/+7 组）与 t_pushpkg（+165 断言/+11 组，含 sha256 已知向量）；离线 5,332/0/274；total 599,043 B（余 30,102）。
