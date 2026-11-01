@@ -152,3 +152,10 @@ rewritten; delete it to be asked again.
 Storage: "df" shows free space; keep >= 601,778 B free before an update
 (401,778 image + 200,000 cap). A too-large update is refused before any byte
 is written. Keep /recovery on the machine: it is the only rescue path.
+
+Keys note
+---------
+Escape is not a usable key on this target: the CraftOS-PC ROM has no keys.escape
+entry, so an Esc press reaches the runtime as an unmapped code and is dropped.
+Use q (or Q) everywhere this document says "Esc", and Ctrl+T for the power menu.
+The apps still accept raw code 256 if a terminal does deliver it.
