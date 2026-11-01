@@ -11,7 +11,6 @@
 | [`pyroet-os/`](pyroet-os/) | Pyroet OS：掌机类 Android 风格 OS（由 `pyromputer-os/` **硬分支**做小型化改写，不合并、不回灌），目标是整机装进 Pocket Computer 屏幕 26x20 与机身配额；单一 `/system` 系统树 + `update.journal.<seq>` 文件集增量更新（清单聚合哈希校验、差异备份、按内容哈希的幂等回滚），另含 EDL 式救援工具 `recovery/`（`flash.lua` / `bootstrap.lua` 从软盘或 rednet 重刷 `/system`）。设计口径见目录内 `DECISIONS.md` 与 `P6-design.md`。 |
 | [`sentinel/`](sentinel/) | Sentinel 安全终端系统（原 HighSafe，协议 `secure_auth_v4`）：独立认证服务器 + 审计服务器 + 终端。终端不存密码、只存终端密钥（PSK），登录走挑战—应答，登录与操作事件签名后发往审计服务器落盘（分段 + 哈希链 + 归档换盘）。部署与配置见目录内 `README.md`。 |
 | [`cardkey/`](cardkey/) | 卡密验证机：由 Sentinel 改造，登录改为输入卡密。卡密服务器统一校验，并**由服务器经独立驱动器网络写盘**（服务器 `/payload/` → 玩家软盘），终端不参与写盘。卡密由秘密 pepper 经 SHA-256 派生（不用 `math.random` 直接抽取），库内只存指纹；**写盘成功才扣次数**，盘满/无盘/取消均不扣。部署与配置见目录内 `README.md`。 |
-| [`itn-pass/`](itn-pass/) | ITN-Pass（协议 `itnpass_v1`，频道 33）：由 `cardkey/` **硬分支出**的 InterTeamNet 公网访客准入证与装机盘，两者不合并、不回灌。准入证由站端统一校验与记账，**写盘成功才扣次**；站端把 payload 写到访客软盘，终端只是转发壳。运行时路径全带 `itnpass_` 前缀、日志 tag `ITNP_*`，装机盘容量按 payload profile 分别定（软盘 1,228,800 B）。含 headless CraftOS-PC 离线套件（基线 488/0/29）。部署与配置见目录内 `README.md`，决策与容量口径见 `DECISIONS.md`。 |
 | [`rpv1/`](rpv1/) | RPV1（Rednet Protocol Version 1）：跑在 CC:Tweaked 上的用户态 IPv4 网络栈库——MAC/IPv4/ARP/ICMP/UDP、路由与转发、分片重装、连接层拥塞控制，rednet 只作 WAN。含发布包（`dist/`：单文件 / 目录 / 安装器三种形态）与 CraftOS-PC 回归套件（`poc/`）。该目录自带 `README.md` 与设计文档；真机测试用的 Minecraft 服务器运行时（`server.jar`、`libraries`、`world`）不入库，用 `poc/mc/` 下的脚本重建。 |
 | [`pylib/`](pylib/) | 手写的 CC:Tweaked Python 子集解释器：`pkg/pylib/pythonlib.lua`（解释器本体）、`pkg/pyrepl.lua`（REPL 前端）、解释器 import 的 15 个 `.py` 模块，以及包管理器清单 `pkg/manifest`、还原说明 `MANIFEST.md` 与 `SHA256SUMS` 校验和。`pkg/legacy-py.lua` 是被取代的早期解释器，仅留档。 |
 | [`powergrid/`](powergrid/) | Power Grid Controller v2.1：CC:Tweaked 电站切换终端（主电网 / 备用电池 / 外部电网 / 关闭），状态存于 `PowerGrid.ini`，经**背面红石模拟输出**驱动供电；含 Windows 10 风格蓝屏模块、日志库与打印机分页打印日志功能。终端程序的原始部署文件归档，说明见目录内 `README.md`。 |
@@ -31,7 +30,7 @@
 
 | 项目 | 命令 | 产物 |
 |---|---|---|
-| sentinel / cardkey / pylib / itn-pass | `python tools/build_release.py --project sentinel` | `dist/release/sentinel-v2.0.0.zip` 等（itn-pass 为 `itn-pass-v1.0.0.zip`，不含 `tests/`） |
+| sentinel / cardkey / pylib | `python tools/build_release.py --project sentinel` | `dist/release/sentinel-v2.0.0.zip` 等（cardkey 不含 `tests/`） |
 | pyroet-os | `python tools/build_release.py --project pyroet-os --out dist/release` | `dist/release/pyroet-os-v1.0.0.zip`（不含 `tests/`、`tools/`；含 `recovery/`、`DECISIONS.md`、`P6-design.md`、`install.set`） |
 | rpv1 | `pwsh -NoProfile -File rpv1/poc/build-dist.ps1` | `rpv1/dist/`（含 `LICENSE`、单文件 MIT 头部、`rpv-1.0.0.zip`） |
 | pyromputer-os | `python pyromputer-os/tools/release.py --out dist/release` | 两个安装半、字体介质、`gnome` 包、`pkgserver`、`INSTALL.txt`、`SHA256SUMS.txt` |
@@ -41,7 +40,7 @@
 CI 在 [`.github/workflows/release-builds.yml`](.github/workflows/release-builds.yml)：
 
 - **分支推送**：构建全部项目（只做 CI 校验，不发布）。
-- **新建 tag**（`sentinel` / `cardkey` / `pylib` / `itn-pass` / `pyroet-os` / `rpv1` / `pyromputer-os` / `dcnet` / `pyromputer-os-no-craftos`）：构建该项目并**刷新对应 release 的资产**（带 `RELEASE.md` 的项目会同时用模板刷新 release 正文）。
+- **新建 tag**（`sentinel` / `cardkey` / `pylib` / `pyroet-os` / `rpv1` / `pyromputer-os` / `dcnet` / `pyromputer-os-no-craftos`）：构建该项目并**刷新对应 release 的资产**（带 `RELEASE.md` 的项目会同时用模板刷新 release 正文）。
 - **手动 `workflow_dispatch`**：在 Actions 页面选择项目构建（不发布）。
 
 注意：GitHub 不会为「把已有 tag 强推到另一个提交」启动工作流，所以给已有 tag 重新发布时，用 `workflow_dispatch`，或先删掉再重建 tag。构建是确定性的（zip 使用固定时间戳），同一提交重复构建得到相同字节。
