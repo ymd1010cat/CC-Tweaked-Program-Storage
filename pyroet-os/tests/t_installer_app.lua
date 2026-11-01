@@ -165,9 +165,11 @@ return function(H)
         H.table("manifest", manifest)
         H.eq("manifest_error", err, nil)
         H.eq("manifest_name", manifest and manifest.name, "installer")
-        H.eq("manifest_version", manifest and manifest.version, "0.1.0")
+        H.eq("manifest_version", manifest and manifest.version, "0.2.0")
         H.eq("manifest_entry", manifest and manifest.entry, "main.lua")
-        H.eq("cap_count", manifest and #manifest.capabilities, 2)
+        H.eq("cap_count", manifest and #manifest.capabilities, 4)
+        H.eq("cap_input", manifest and manifest.capabilities[3], "input")
+        H.eq("cap_terminal", manifest and manifest.capabilities[4], "terminal")
         H.eq("cap_read", manifest and manifest.capabilities[1], "fs.read")
         H.eq("cap_write", manifest and manifest.capabilities[2], "fs.write")
         H.eq("entry_is_body",
@@ -784,14 +786,14 @@ return function(H)
         local rt = APPS.new({ fs = H.real_fs(), log = log,
             apps_root = dir .. "/system/system" })
         H.eq("package_scan", rt:scan(), 1)
-        H.has(lines, "APP_LOAD name=installer version=0.1.0 caps=fs.read,fs.write")
+        H.has(lines, "APP_LOAD name=installer version=0.2.0 caps=fs.read,fs.write,input,terminal")
         local record = rt:app("installer")
         H.table("package_record", record)
         H.eq("package_name", record and record.name, "installer")
         H.eq("package_entry", record and record.entry_path,
             dir .. "/system/system/installer.app/main.lua")
         H.eq("package_caps", record and table.concat(record.manifest.capabilities, ","),
-            "fs.read,fs.write")
+            "fs.read,fs.write,input,terminal")
         -- both capabilities really are granted to the package
         H.check("package_start", rt:start("installer") == true, "start refused")
         local api = rt:app("installer").api

@@ -116,15 +116,17 @@ return function(H)
         H.table("manifest", manifest)
         H.eq("manifest_error", err, nil)
         H.eq("manifest_name", manifest and manifest.name, "settings")
-        H.eq("manifest_version", manifest and manifest.version, "0.1.0")
+        H.eq("manifest_version", manifest and manifest.version, "0.2.0")
         H.eq("manifest_entry", manifest and manifest.entry, "main.lua")
-        H.eq("cap_count", manifest and #manifest.capabilities, 1)
+        H.eq("cap_count", manifest and #manifest.capabilities, 4)
         H.eq("only_read", manifest and manifest.capabilities[1], "fs.read")
         local has_write = false
         for i = 1, #(manifest and manifest.capabilities or {}) do
             if manifest.capabilities[i] == "fs.write" then has_write = true end
         end
-        H.eq("no_write_cap", has_write, false)
+        H.eq("write_cap", has_write, true)
+        H.eq("cap_input", manifest and manifest.capabilities[3], "input")
+        H.eq("cap_terminal", manifest and manifest.capabilities[4], "terminal")
         H.eq("entry_is_body",
             type(assert(loadfile("/system/system/settings.app/main.lua"))()), "function")
         H.eq("view_cols", M.VIEW.cols, 26)
@@ -233,7 +235,7 @@ return function(H)
         local lines = M.render(state, 26, 20)
         H.eq("rows", #lines, 20)
         for i = 1, #lines do H.eq("width_" .. tostring(i), #lines[i], 26) end
-        H.contains("title", lines[1], "Settings 0.1.0")
+        H.contains("title", lines[1], "Settings 0.2.0")
         H.contains("status_row", lines[20], "ro 3 apps 26x20")
         H.eq("status_width", #lines[20], 26)
 
@@ -242,7 +244,7 @@ return function(H)
         H.eq("tall_rows", #tall, 40)
         for i = 1, #tall do H.eq("tall_width_" .. tostring(i), #tall[i], 26) end
         local tall_text = H.joined(tall)
-        H.contains("tall_system", tall_text, "os 0.1.0")
+        H.contains("tall_system", tall_text, "os 0.2.0")
         H.contains("tall_image", tall_text, "image 2.0.0")
         H.contains("tall_sha", tall_text, "image 2.0.0 sha efefefef")
         H.absent("tall_no_slot", tall_text, "slot")
@@ -293,7 +295,7 @@ return function(H)
         local empty = M.build(fake_api({}))
         local empty_lines = M.render(empty, 26, 40)
         local empty_text = H.joined(empty_lines)
-        H.contains("empty_system", empty_text, "os 0.1.0")
+        H.contains("empty_system", empty_text, "os 0.2.0")
         H.contains("empty_image", empty_text, "image ?")
         H.absent("empty_no_slot", empty_text, "slot")
         H.contains("empty_apps", empty_text, "apps n/a")
@@ -301,7 +303,7 @@ return function(H)
         H.contains("empty_free", empty_text, "free n/a")
         H.contains("empty_install", empty_text, "install.set n/a")
         H.contains("empty_net", empty_text, "net off")
-        H.eq("empty_status", empty_lines[40], M.fit("ro 0 apps 26x40", 26))
+        H.eq("empty_status", empty_lines[40], M.fit("ro 0 apps 26x40 q=back", 26))
 
         -- a runtime without app capabilities still renders the app table
         local nocaps = M.build(machine({
@@ -317,7 +319,7 @@ return function(H)
     end
 
     -- -----------------------------------------------------------------
-    H.group("settings.readonly")
+    H.group("settings.write")
     do
         local api = machine()
         local state = M.build(api)
@@ -366,17 +368,24 @@ return function(H)
         end
         H.eq("no_write_mode_open", write_opens, 0)
 
-        -- the runtime denies fs.write because the manifest never declares it
+        -- D1-fix round 3: the manifest declares fs.write now, so the runtime
+        -- hands the app a real writer (it still only edits one config line)
         local rt = APPS.new({ fs = H.real_fs(), log = H.logger(), apps_root = "/system/system" })
         H.eq("runtime_scan", rt:scan(), 3)
         H.check("start_settings", rt:start("settings") == true, "start refused")
         local api_table = rt:app("settings").api
-        local called, value, reason = pcall(api_table.fs.write, "/t/nope.txt", "x")
-        H.eq("write_call_ok", called, true)
-        H.eq("write_denied", value, nil)
-        H.eq("write_reason", reason, "capability denied: fs.write")
         local read_value = api_table.fs.read("/system/system/settings.app/manifest.lua")
         H.contains("read_allowed", tostring(read_value), "settings")
+        local cfg = H.case_dir("settings", "write")
+        H.write(cfg .. "/net.conf", "# hand written\nprefix=24\niface_side=back\nkeep=1\n")
+        local ok_write = M.save_item(api_table, cfg .. "/net.conf", "prefix", "16")
+        H.eq("save_ok", ok_write, true)
+        local saved = H.read(cfg .. "/net.conf") or ""
+        H.contains("save_prefix", saved, "prefix=16")
+        H.contains("save_comment_kept", saved, "# hand written")
+        H.contains("save_other_key_kept", saved, "keep=1")
+        H.contains("save_side_kept", saved, "iface_side=back")
+        H.absent("save_old_value_gone", saved, "prefix=24")
         rt:tick()
         H.eq("still_running", rt:app("settings").state, "running")
         rt:kill("settings")

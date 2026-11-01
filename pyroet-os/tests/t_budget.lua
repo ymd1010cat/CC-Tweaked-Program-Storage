@@ -86,7 +86,7 @@ return function(H)
         local manifest, err = APPS.validate_manifest(raw, "/system/system/net.app")
         H.table("net_manifest", manifest)
         H.eq("net_name", manifest and manifest.name, "net")
-        H.eq("net_version", manifest and manifest.version, "0.1.0")
+        H.eq("net_version", manifest and manifest.version, "0.2.0")
         H.check("net_entry", H.exists("/system/system/net.app/main.lua"), "no main.lua")
         H.check("net_manifest_error", err == nil, tostring(err))
     end

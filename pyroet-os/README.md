@@ -585,7 +585,7 @@ python tools/build_release.py --project pyroet-os --out dist/release
 | kernel / apps / permissions / desktop | 1.0 / 1.0 / 1.0 / 1.0（13,958 / 39,475 / 21,449 / 22,802 B；D1：apps +808 B 记录 body 返回值、新增 desktop.lua；D1-fix：permissions +2,628 B，陈旧决策文件按"未决定"迁移） |
 | installer / ota | 1.0 / 2.0（17,295 / 31,877 B；N1：+3,854 / +3,566 B，size 校验） |
 | rpv 子集 | 10 文件 / 131,590 B（9 模块 + loader） |
-| 系统应用 | launcher 0.2.0（D1：+5,209 B；D1-fix 第二轮：+2,476 B，两种按键形态；第三轮：+403 B，desk_focus；常驻桌面循环）/ settings 0.1.0 / installer 0.1.0 / net 0.1.0 |
+| 系统应用 | launcher 0.2.0（D1：+5,209 B；D1-fix 第二轮：+2,476 B，两种按键形态；第三轮：+403 B，desk_focus）/ settings 0.2.0（T14：20,548→31,350 B，可键盘编辑并落盘）/ installer 0.2.0（T14：33,774→38,907 B，交接即可操作）/ net 0.2.0（T14：15,493→20,319 B，刷新/滚动） |
 | `installer.app`（T1/T4） | 0.1.0，34,853 B（main.lua 33,774 + manifest.lua 1,079） |
 | OTA 服务端（`ota/server.lua`） | 1.0，27,927 B（不进镜像） |
 | 镜像 | 29 条 / 509,303 B / `SIZE_WARN` / `WINDOW_OK sum=709303` |

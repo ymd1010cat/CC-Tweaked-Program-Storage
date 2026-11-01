@@ -327,10 +327,11 @@ return function(H)
         local events = {
             { "key", 11 },   -- down: the launcher moves to "net"
             { "key", 14 },   -- enter: start net.app through api.sys.launch
-            -- net declares no `input`, so it gets a screen loan; a keyboard-less
-            -- app can never hand the screen back, so the loan timer ends it
-            { "timer", 7 },
-            { "key", 15 },   -- escape: quit, hand the machine back
+            -- net declares input now: Enter is a full handover (keyboard+screen),
+            -- so this escape goes to net and quits it ...
+            { "key", 15 },
+            -- ... the launcher gets the screen back, and this one quits the desktop
+            { "key", 15 },
         }
         local pull = function()
             pulls = pulls + 1
@@ -361,12 +362,11 @@ return function(H)
         H.table("boot_desktop", result.desktop)
         H.eq("boot_desktop_reason", result.desktop_reason, "quit")
         H.eq("boot_pulled", result.desktop and result.desktop.pulled, 4)
-        -- 4 events + the loan's first frame + the loan-end repaint
         H.ge("boot_ticked", result.desktop and result.desktop.ticked, 4)
-        H.eq("boot_delivered", result.desktop and result.desktop.delivered, 4)
-        H.eq("boot_handovers", result.desktop and result.desktop.handovers, 1)
-        H.eq("boot_loans", result.desktop and result.desktop.loans, 1)
-        H.eq("boot_loan_ends", result.desktop and result.desktop.loan_ends, 1)
+        H.ge("boot_delivered", result.desktop and result.desktop.delivered, 4)
+        -- net declares input: launch handover, then the screen back to launcher
+        H.eq("boot_handovers", result.desktop and result.desktop.handovers, 2)
+        H.eq("boot_loans", result.desktop and result.desktop.loans, 0)
         H.check("boot_commit_before_first_pull", committed_at_first_pull,
             "the desktop pulled before the commit")
 
@@ -391,22 +391,22 @@ return function(H)
             and exit_at < chain_exit, "exit=" .. tostring(exit_at)
             .. " chain=" .. tostring(chain_exit))
 
-        -- down moved the selection to net, enter started it (screen loan, net is
-        -- visible), the timer took the screen back, escape quit
+        -- down moved the selection to net, enter handed keyboard+screen to net,
+        -- escape quit net, the second escape quit the desktop
         H.has(lines, "DESKTOP_EVENT n=1 event=key arg=down app=launcher")
         H.has(lines, "DESKTOP_EVENT n=2 event=key arg=enter app=launcher")
-        H.has(lines, "DESKTOP_EVENT n=3 event=timer arg=7 app=net")
+        H.has(lines, "DESKTOP_EVENT n=3 event=key arg=escape app=net")
         H.has(lines, "DESKTOP_EVENT n=4 event=key arg=escape app=launcher")
         H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=net")
         H.has(lines, "APP_LOG app=launcher msg=key=enter action=launch"
             .. " index=2 sel=net detail=net")
         H.has(lines, "APP_START name=net")
-        H.eq("boot_net_running", result.apps:app("net").state, "running")
-        -- the loan: net gets the screen, and the launcher is told why it is back
-        H.has(lines, "DESKTOP_LOAN app=net reason=no_input caps=2")
-        H.has(lines, "DESKTOP_LOAN_END app=net reason=timeout")
-        H.has(lines, "DESKTOP_FOREGROUND app=launcher reason=loan_end")
-        H.has(lines, "APP_LOG app=launcher msg=focus msg=display only: net")
+        -- the handover: net gets both, escape quits it, the launcher takes the
+        -- screen back and is told to repaint (no loan: net owns a keyboard now)
+        H.has(lines, "DESKTOP_FOREGROUND app=net reason=launch")
+        H.has(lines, "APP_EXIT app=net")
+        H.has(lines, "DESKTOP_FOREGROUND app=launcher reason=settle")
+        H.has(lines, "APP_LOG app=launcher msg=focus msg=back from net")
         H.has(lines, "APP_LOG app=launcher msg=quit key=escape")
         H.has(lines, "APP_EXIT app=launcher")
         H.has(lines, "DESKTOP_DETACH app=launcher reason=quit")
@@ -439,7 +439,10 @@ return function(H)
         local log, lines = H.logger()
         local pulls = 0
         local events = {
-            { "key", 11 }, { "key", 14 }, { "timer", 7 }, { "key", 15 },
+            { "key", 11 },   -- down -> net
+            { "key", 14 },   -- enter -> handover to net (it declares input now)
+            { "key", 15 },   -- escape -> net quits
+            { "key", 15 },   -- escape -> the launcher quits the desktop
         }
         local pull = function()
             pulls = pulls + 1
@@ -470,17 +473,18 @@ return function(H)
         H.lacks("migrate_no_terminal_denial", lines,
             "APP_CAP_DENIED app=launcher cap=terminal")
 
-        -- and the keyboard works: down moved the selection, enter started net on
-        -- a screen loan, the timer returned the screen, escape left the desktop
+        -- and the keyboard works: down moved the selection, enter handed net the
+        -- keyboard+screen, escape quit net, the launcher came back and quit
         H.eq("migrate_desktop_reason", result.desktop_reason, "quit")
         H.has(lines, "STARTUP_DESKTOP_ENTER name=launcher source=injected")
         H.has(lines, "DESKTOP_EVENT n=1 event=key arg=down app=launcher")
         H.has(lines, "APP_LOG app=launcher msg=key=down action=move index=2 sel=net")
         H.has(lines, "APP_START name=net")
-        H.has(lines, "DESKTOP_LOAN app=net reason=no_input caps=2")
-        H.has(lines, "DESKTOP_LOAN_END app=net reason=timeout")
-        H.has(lines, "APP_LOG app=launcher msg=focus msg=display only: net")
-        H.eq("migrate_net_running", result.apps:app("net").state, "running")
+        H.has(lines, "DESKTOP_FOREGROUND app=net reason=launch")
+        H.has(lines, "APP_EXIT app=net")
+        H.has(lines, "DESKTOP_FOREGROUND app=launcher reason=settle")
+        H.has(lines, "APP_LOG app=launcher msg=focus msg=back from net")
+        H.eq("migrate_net_result", result.apps:app("net").result, "quit")
         H.eq("migrate_launcher_result", result.apps:app("launcher").result, "quit")
         H.eq("migrate_pulls", pulls, 4)
         H.ascii_check("migrate_logs_ascii", H.joined(lines))

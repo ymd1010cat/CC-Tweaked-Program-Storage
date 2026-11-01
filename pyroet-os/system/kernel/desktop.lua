@@ -299,12 +299,17 @@ function D:tick()
     -- but never get a time slice, so they cannot paint over the foreground
     local skip = {}
     for name in pairs(self.parked) do skip[name] = true end
-    if self.loan ~= nil then
-        -- during a loan the loaned app owns the screen: only it runs, so the
-        -- launcher cannot take the screen back behind the app's frame
+    -- exactly one app owns the console: the loaned app during a loan, else the
+    -- foreground app. Every other app is left unscheduled, which is what stops
+    -- the two failures of round 3 from coming back: a background app painting
+    -- over the screen, and the launcher (record #1) draining the one shared
+    -- input queue before the app that actually owns the keyboard reads it.
+    local owner = self.foreground
+    if self.loan ~= nil then owner = self.loan.name end
+    if owner ~= nil and owner ~= self.name then
         local all = self:running_all()
         for name in pairs(all) do
-            if name ~= self.loan.name then skip[name] = true end
+            if name ~= owner then skip[name] = true end
         end
     end
     local ok, advanced = pcall(self.rt.tick, self.rt, skip)
@@ -476,6 +481,7 @@ function D:settle(before)
     end
 
     if after[self.foreground] == nil then
+        local lost = self.foreground
         local pick = self:pick(after, self.foreground)
         if pick == nil then
             self:log("DESKTOP_DETACH app=" .. short(self.foreground, 24) .. " reason=no_app")
@@ -484,6 +490,13 @@ function D:settle(before)
         self.foreground = pick
         self.handovers = self.handovers + 1
         self:log("DESKTOP_FOREGROUND app=" .. short(pick, 24) .. " reason=settle")
+        -- the app that had the screen is gone (it returned "quit" or stopped):
+        -- whoever takes the screen back has to be told, or the dead app's last
+        -- frame stays on screen and the keyboard looks dead until a key arrives
+        if pick == self.name then
+            self:deliver("desk_focus", "back from " .. tostring(lost))
+            self:tick()
+        end
     end
     return false
 end

@@ -59,8 +59,8 @@ return function(H)
         -- the system packages are scanned next to the boot chain
         H.has(lines, "APP_SCAN root=/system/system loaded=3 failed=0")
         H.has(lines, "APP_LOAD name=launcher version=0.2.0 caps=fs.read,fs.write,input,terminal")
-        H.has(lines, "APP_LOAD name=net version=0.1.0 caps=net.rpv,fs.read")
-        H.has(lines, "APP_LOAD name=settings version=0.1.0 caps=fs.read")
+        H.has(lines, "APP_LOAD name=net version=0.2.0 caps=net.rpv,fs.read,input,terminal")
+        H.has(lines, "APP_LOAD name=settings version=0.2.0 caps=fs.read,fs.write,input,terminal")
 
         -- nothing is decided yet, and reading the table does not prompt
         H.has(lines, "STARTUP_PERMS_READY root=/etc/perms")
@@ -218,7 +218,7 @@ return function(H)
         H.eq("entry_names", table.concat({
             state.entries[1].name, state.entries[2].name, state.entries[3].name }, ","),
             "launcher,net,settings")
-        H.eq("net_version", state.entries[2].version, "0.1.0")
+        H.eq("net_version", state.entries[2].version, "0.2.0")
         local lines_first = LAUNCHER.render(state, 26, 20)
         H.eq("render_rows", #lines_first, 20)
         H.contains("status_first", lines_first[20], "3 apps sel 1/3")
@@ -231,7 +231,7 @@ return function(H)
         H.eq("net_running", rt:app("net").state, "running")
         H.has(lines, "APP_START name=net")
         rt:tick()
-        H.has(lines, "APP_LOG app=net msg=capability unavailable: net.rpv")
+        H.has(lines, "APP_LOG app=net msg=ready health=degraded ip=nil")
         H.eq("still_running", rt:app("net").state, "running")
 
         -- and the whole frame loop does the same from a key sequence

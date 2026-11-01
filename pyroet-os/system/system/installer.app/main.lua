@@ -55,7 +55,7 @@ No non-ASCII bytes in this file.
 
 local M = {}
 
-M.VERSION = "0.1.0"
+M.VERSION = "0.2.0"
 M.VIEW = { cols = 26, rows = 20 }
 M.MIN_COLS = 16
 M.MIN_ROWS = 6
@@ -740,6 +740,152 @@ function M.run(manifest, api, opts)
 end
 
 -- ---------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- the resident body (D1-fix round 3): keyboard + screen, no busy loop
+-- ---------------------------------------------------------------------------
+
+M.KEY_NAMES = { "up", "down", "left", "right", "enter", "escape", "backspace",
+    "tab", "delete", "space" }
+
+function M.key_map(keysx)
+    local out = {}
+    if type(keysx) ~= "table" then return out end
+    for i = 1, #M.KEY_NAMES do
+        local name = M.KEY_NAMES[i]
+        local code = keysx[name]
+        if type(code) == "number" and out[code] == nil then out[code] = name end
+    end
+    for name, code in pairs(keysx) do
+        if type(name) == "string" and type(code) == "number" and out[code] == nil then
+            out[code] = name
+        end
+    end
+    return out
+end
+
+function M.keys_table(api)
+    local input = type(api) == "table" and api.input or nil
+    local keysx = type(input) == "table" and input.keys or nil
+    if type(keysx) == "table" and next(keysx) ~= nil then return keysx end
+    return rawget(_G, "keys")
+end
+
+function M.code_name(code, api)
+    local keysx = M.keys_table(api)
+    if M.map_source ~= keysx then
+        M.map_source = keysx
+        M.map = M.key_map(keysx)
+    end
+    return (M.map or {})[code]
+end
+
+function M.note(api, text)
+    if type(api) ~= "table" or type(api.log) ~= "function" then return false end
+    return pcall(api.log, text)
+end
+
+function M.clear(term)
+    local t = term or rawget(_G, "term")
+    if type(t) ~= "table" or type(t.clear) ~= "function" then return false end
+    if rawget(_G, "PYROET_APP_NOPAINT") then return false end
+    return (pcall(t.clear))
+end
+
+function M.paint_once(state, api, term, opts)
+    local cols, rows = M.view_size(term)
+    state.cols, state.rows = cols, rows
+    M.refresh(state, api, opts or {})
+    local lines = M.render(state, cols, rows)
+    M.clear(term)
+    M.paint(lines, term)
+    state.painted = (state.painted or 0) + 1
+    return lines
+end
+
+-- `enter` runs the real action for the selected row (install / remove / locked),
+-- `c` cancels a pending confirmation, `q`/escape leaves. `state.unavailable`
+-- (no installer bridge, no source medium) is shown, never faked.
+function M.dispatch_event(state, event, p1, api, opts)
+    if event == "key" then
+        local key = p1
+        if type(key) == "number" then
+            key = M.code_name(key, api)
+            if key == nil then return "none" end
+        end
+        key = tostring(key == nil and "" or key)
+        if key == "escape" or key == "q" then return "quit", "escape" end
+        local action, detail = M.handle_key(state, key, api, opts)
+        M.note(api, "key=" .. key .. " action=" .. tostring(action)
+            .. " index=" .. tostring(state.index or 0)
+            .. (detail ~= nil and (" detail=" .. tostring(detail)) or ""))
+        return action, detail
+    end
+    if event == "char" then
+        local ch = tostring(p1 == nil and "" or p1)
+        if ch == "q" or ch == "Q" then return "quit", "q" end
+        if ch == "c" or ch == "C" then
+            local action, detail = M.handle_key(state, "c", api, opts)
+            M.note(api, "key=c action=" .. tostring(action))
+            return action, detail
+        end
+        if ch:match("^%d$") then
+            local action, detail = M.handle_key(state, ch, api, opts)
+            M.note(api, "key=" .. ch .. " action=" .. tostring(action))
+            return action, detail
+        end
+        return "none"
+    end
+    if event == "desk_focus" or event == "term_resize" then return "repaint" end
+    return "none"
+end
+
+function M.idle(api)
+    while true do
+        if type(api) == "table" and type(api.yield) == "function" then
+            api.yield()
+        else
+            return "idle"
+        end
+    end
+end
+
+function M.body(manifest, api)
+    local opts = {}
+    local state = M.build(api, opts)
+    state.manifest = manifest
+    if type(manifest) == "table" and manifest.version then
+        state.version = tostring(manifest.version)
+    end
+    local term = type(api) == "table" and api.terminal or nil
+    local input = type(api) == "table" and api.input or nil
+    local pull = type(input) == "table" and input.pullEvent or nil
+    M.paint_once(state, api, term, opts)
+    M.note(api, "ready entries=" .. tostring(#(state.entries or {}))
+        .. " disk=" .. tostring(state.disk_ok and "ok" or "no"))
+    if type(pull) ~= "function" then
+        M.note(api, "no_input reason=no_host")
+        return M.idle(api)
+    end
+    while true do
+        local event, p1 = pull()
+        if event == nil then
+            if p1 ~= nil then
+                M.note(api, "no_input reason=" .. tostring(p1))
+                return M.idle(api)
+            end
+            api.yield()
+        else
+            local action, detail = M.dispatch_event(state, event, p1, api, opts)
+            if action == "quit" then
+                M.note(api, "quit key=" .. tostring(detail))
+                return "quit"
+            end
+            if action ~= "none" then M.paint_once(state, api, term, opts) end
+            api.yield()
+        end
+    end
+end
+
 -- DECISIONS.md 7.2 self test: no terminal, no fs, pure layout rules
 -- ---------------------------------------------------------------------------
 
@@ -859,7 +1005,7 @@ end
 M.layout_selftest = M.selftest
 
 local function body(manifest, api)
-    return M.run(manifest, api)
+    return M.body(manifest, api)
 end
 
 if rawget(_G, "PYROET_INSTALLER_TEST") then

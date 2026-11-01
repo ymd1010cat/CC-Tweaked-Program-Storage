@@ -15,12 +15,19 @@ that cannot start a program, toggle a pin or open a socket has nothing to lose.
 The installer itself is not reached through a capability -- see main.lua and
 DECISIONS.md 17.2 for the bridge contract.
 
+`input` and `terminal` (D1-fix round 3) make the UI actually operable: up/down
+moves the list, a digit jumps to a row, `enter` installs / removes / reports a
+locked system package through the host bridge (api.sys.install / uninstall, no
+new bridge), `c` cancels a confirmation, `q` (or escape) returns to the desktop.
+When there is no source medium or no bridge the screen says `installer
+unavailable` / `no disk` with the reason -- it never fakes an install.
+
 No non-ASCII bytes in this file.
 ]]
 
 return {
     name = "installer",
-    version = "0.1.0",
+    version = "0.2.0",
     entry = "main.lua",
-    capabilities = { "fs.read", "fs.write" },
+    capabilities = { "fs.read", "fs.write", "input", "terminal" },
 }

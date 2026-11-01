@@ -81,11 +81,13 @@ return function(H)
         H.table("manifest", m)
         H.eq("manifest_error", err, nil)
         H.eq("manifest_name", m and m.name, "net")
-        H.eq("manifest_version", m and m.version, "0.1.0")
+        H.eq("manifest_version", m and m.version, "0.2.0")
         H.eq("manifest_entry", m and m.entry, "main.lua")
-        H.eq("manifest_cap_count", m and #m.capabilities, 2)
+        H.eq("manifest_cap_count", m and #m.capabilities, 4)
         H.eq("cap_net", m and m.capabilities[1], "net.rpv")
         H.eq("cap_fs_read", m and m.capabilities[2], "fs.read")
+        H.eq("cap_input", m and m.capabilities[3], "input")
+        H.eq("cap_terminal", m and m.capabilities[4], "terminal")
         H.eq("no_write_cap", (function()
             for i = 1, #(m and m.capabilities or {}) do
                 if m.capabilities[i] == "fs.write" then return true end
@@ -127,7 +129,7 @@ return function(H)
         for i = 1, #lines do
             H.eq("width_" .. tostring(i), #lines[i], 26)
         end
-        H.contains("title", lines[1], "Pyroet Net 0.1.0")
+        H.contains("title", lines[1], "Pyroet Net 0.2.0")
         H.contains("ip_line", lines[2], "ip 10.0.0.5/24")
         H.contains("gw_line", lines[3], "gw 10.0.0.1")
         H.contains("health_line", lines[4], "health ok")
@@ -400,7 +402,7 @@ return {
             fs = H.real_fs(), log = missing_log, apps_root = dir1 .. "/apps",
         })
         H.eq("unavailable_scan", rt1:scan(), 1)
-        H.eq("unavailable_caps", #rt1:app("net").manifest.capabilities, 2)
+        H.eq("unavailable_caps", #rt1:app("net").manifest.capabilities, 4)
         rt1:start("net")
         rt1:tick()
         H.has(missing_lines, "APP_CAP_UNAVAILABLE app=net cap=net.rpv")

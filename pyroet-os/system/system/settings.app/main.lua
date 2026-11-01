@@ -35,7 +35,7 @@ No non-ASCII bytes in this file.
 
 local M = {}
 
-M.VERSION = "0.1.0"
+M.VERSION = "0.2.0"
 M.VIEW = { cols = 26, rows = 20 }
 M.MIN_COLS = 16
 M.MIN_ROWS = 6
@@ -266,6 +266,8 @@ function M.build(api, opts)
         conf_error = nil,
         install_entries = nil,
         conf_path = o.conf_path or M.CONF_PATH,
+        item = 1,
+        message = "",
         frames = 0,
     }
     return M.refresh(state, api, o)
@@ -368,7 +370,7 @@ end
 
 function M.status_line(state, cols, rows)
     local text = "ro " .. tostring(#(state.apps or {})) .. " apps "
-        .. tostring(cols) .. "x" .. tostring(rows)
+        .. tostring(cols) .. "x" .. tostring(rows) .. " q=back"
     return M.fit(text, cols)
 end
 
@@ -392,15 +394,32 @@ function M.render(state, cols, rows)
         return true
     end
     add("Settings " .. M.VERSION)
-    local body = M.sections(state)
-    local capacity = rows - 2
-    if #body > capacity then
-        local keep = capacity - 1
-        for i = 1, keep do add(body[i]) end
-        add("+" .. tostring(#body - keep) .. " more")
+    -- the editable rows (D1-fix round 3): one line per config key, `>` on the
+    -- selected one, and the hint row right under them
+    local items = M.items(state)
+    if #items == 0 then
+        add("no editable settings")
+        add("need " .. M.conf_path(state))
     else
-        for i = 1, #body do add(body[i]) end
-        while #out < rows - 1 do add("") end
+        for i = 1, #items do
+            local item = items[i]
+            local marker = (i == (state.item or 1)) and ">" or " "
+            add(marker .. " " .. item.label .. " " .. item.value)
+        end
+        add("up/dn enter q=back")
+    end
+    if state.message and state.message ~= "" then add(state.message) end
+    local body = M.sections(state)
+    local capacity = rows - #out - 1
+    if capacity > 0 then
+        if #body > capacity then
+            local keep = capacity - 1
+            for i = 1, keep do add(body[i]) end
+            add("+" .. tostring(#body - keep) .. " more")
+        else
+            for i = 1, #body do add(body[i]) end
+            while #out < rows - 1 do add("") end
+        end
     end
     add(M.status_line(state, cols, rows))
     return out
@@ -436,6 +455,156 @@ function M.view_size(term_api)
 end
 
 -- ---------------------------------------------------------------------------
+-- editable settings (D1-fix round 3: the app has a keyboard now)
+-- ---------------------------------------------------------------------------
+--
+-- The file pyroet-os already treats as *the* user settings is `/etc/network.conf`
+-- (the net service reads it at boot; `settings` only used to print it). Editing
+-- therefore means: pick a whitelisted key, cycle its value, write that one line
+-- back. Everything else in the file -- comments, order, unknown keys -- is kept
+-- byte for byte, because rewriting a config the user hand-edited is how a
+-- "settings screen" turns into a broken network.
+
+M.ITEMS = {
+    { key = "prefix", label = "prefix", choices = { "24", "16", "8" } },
+    { key = "iface_side", label = "iface", choices = {
+        "back", "top", "front", "bottom", "left", "right" } },
+}
+
+function M.conf_path(state, opts)
+    local o = opts or {}
+    return (state and state.conf_path) or o.conf_path or M.CONF_PATH
+end
+
+-- the editable rows: a key is offered only when the config file actually has it,
+-- so a machine without /etc/network.conf says so instead of inventing defaults
+function M.items(state)
+    local out = {}
+    local conf = (state and state.conf) or {}
+    local have = {}
+    for i = 1, #conf do have[conf[i].key] = conf[i].value end
+    for i = 1, #M.ITEMS do
+        local item = M.ITEMS[i]
+        local value = have[item.key]
+        if value ~= nil then
+            out[#out + 1] = {
+                key = item.key,
+                label = item.label,
+                value = value,
+                choices = item.choices,
+            }
+        end
+    end
+    return out
+end
+
+function M.item_count(state)
+    return #M.items(state)
+end
+
+-- index of the first choice equal to `value`, else 1
+function M.choice_at(choices, value)
+    local list = choices or {}
+    for i = 1, #list do
+        if tostring(list[i]) == tostring(value) then return i end
+    end
+    return 1
+end
+
+-- next choice in `step` direction (wraps both ways)
+function M.cycle(choices, value, step)
+    local list = choices or {}
+    if #list == 0 then return value end
+    local at = M.choice_at(list, value)
+    at = at + (step or 1)
+    while at < 1 do at = at + #list end
+    while at > #list do at = at - #list end
+    return tostring(list[at])
+end
+
+-- rewrite exactly one `key=value` line, keeping every other byte of the file.
+-- Returns true on success, or nil + reason (a refused fs.write is a normal
+-- result: the capability stub answers, the screen shows it, nothing is lost).
+function M.save_item(api, path, key, value)
+    local fsx = api and api.fs
+    if type(fsx) ~= "table" then return nil, "capability denied: fs.write" end
+    local called, text, err = pcall(fsx.read, path)
+    if not called then text, err = nil, text end
+    if type(text) ~= "string" then
+        return nil, tostring(err or "cannot read " .. tostring(path))
+    end
+    local wanted = tostring(key) .. "=" .. tostring(value)
+    local out, done = {}, false
+    for raw in (text .. "\n"):gmatch("([^\n]*)\n") do
+        local line_key = raw:gsub("^%s+", ""):match("^([%w_%-%.]+)%s*=")
+        if line_key ~= nil and line_key == tostring(key) then
+            out[#out + 1] = wanted
+            done = true
+        else
+            out[#out + 1] = raw
+        end
+    end
+    if not done then out[#out] = wanted end
+    local wrote, werr = pcall(fsx.write, path, table.concat(out, "\n") .. "\n")
+    if not wrote then return nil, tostring(werr) end
+    return true
+end
+
+-- one key in, one action out: "move"|"change"|"denied"|"none". `left`/`right`
+-- and `enter` all change the selected value (enter confirms the next choice).
+function M.handle_key(state, key, api)
+    if type(key) ~= "string" then return "none" end
+    local items = M.items(state)
+    local count = #items
+    if key == "up" or key == "left" then
+        if count == 0 then return "none" end
+        if key == "up" then
+            state.item = (state.item or 1) - 1
+            if state.item < 1 then state.item = count end
+            state.message = ""
+            return "move"
+        end
+        return M.change_item(state, api, -1)
+    end
+    if key == "down" or key == "right" then
+        if count == 0 then return "none" end
+        if key == "down" then
+            state.item = (state.item or 1) + 1
+            if state.item > count then state.item = 1 end
+            state.message = ""
+            return "move"
+        end
+        return M.change_item(state, api, 1)
+    end
+    if key == "enter" or key == "return" then
+        return M.change_item(state, api, 1)
+    end
+    return "none"
+end
+
+function M.change_item(state, api, step)
+    local items = M.items(state)
+    local item = items[state.item or 1]
+    if item == nil then
+        state.message = "nothing to edit"
+        return "none"
+    end
+    local value = M.cycle(item.choices, item.value, step)
+    local ok, err = M.save_item(api, M.conf_path(state), item.key, value)
+    if not ok then
+        state.message = "save failed: " .. tostring(err)
+        M.note(api, "save failed key=" .. item.key .. " err=" .. tostring(err))
+        return "denied", tostring(err)
+    end
+    state.message = "saved " .. item.key .. "=" .. value
+    M.note(api, "saved " .. item.key .. "=" .. value)
+    -- refresh from disk so the row shows what was actually written, not what we
+    -- hoped was written
+    M.refresh(state, api, {})
+    return "change", value
+end
+
+-- ---------------------------------------------------------------------------
 -- main loop
 -- ---------------------------------------------------------------------------
 
@@ -456,6 +625,140 @@ function M.run(manifest, api, opts)
         if api and type(api.yield) == "function" then api.yield() end
     end
     return state
+end
+
+-- ---------------------------------------------------------------------------
+-- the resident body (D1-fix round 3): keyboard + screen, no busy loop
+-- ---------------------------------------------------------------------------
+
+M.KEY_NAMES = { "up", "down", "left", "right", "enter", "escape", "backspace",
+    "tab", "delete", "space" }
+
+function M.key_map(keysx)
+    local out = {}
+    if type(keysx) ~= "table" then return out end
+    for i = 1, #M.KEY_NAMES do
+        local name = M.KEY_NAMES[i]
+        local code = keysx[name]
+        if type(code) == "number" and out[code] == nil then out[code] = name end
+    end
+    for name, code in pairs(keysx) do
+        if type(name) == "string" and type(code) == "number" and out[code] == nil then
+            out[code] = name
+        end
+    end
+    return out
+end
+
+function M.keys_table(api)
+    local input = type(api) == "table" and api.input or nil
+    local keysx = type(input) == "table" and input.keys or nil
+    if type(keysx) == "table" and next(keysx) ~= nil then return keysx end
+    return rawget(_G, "keys")
+end
+
+function M.code_name(code, api)
+    local keysx = M.keys_table(api)
+    if M.map_source ~= keysx then
+        M.map_source = keysx
+        M.map = M.key_map(keysx)
+    end
+    return (M.map or {})[code]
+end
+
+function M.note(api, text)
+    if type(api) ~= "table" or type(api.log) ~= "function" then return false end
+    return pcall(api.log, text)
+end
+
+function M.clear(term)
+    local t = term or rawget(_G, "term")
+    if type(t) ~= "table" or type(t.clear) ~= "function" then return false end
+    if rawget(_G, "PYROET_APP_NOPAINT") then return false end
+    return (pcall(t.clear))
+end
+
+-- refresh + render + paint in one call: only called on a frame that changed
+function M.paint_once(state, api, term)
+    local cols, rows = M.view_size(term)
+    state.cols, state.rows = cols, rows
+    M.refresh(state, api, {})
+    local lines = M.render(state, cols, rows)
+    M.clear(term)
+    M.paint(lines, term)
+    state.painted = (state.painted or 0) + 1
+    return lines
+end
+
+-- one delivered event -> one action. Returns "quit" when the app has to end,
+-- otherwise "move" | "change" | "denied" | "none" | "repaint".
+function M.dispatch_event(state, event, p1, api)
+    if event == "key" then
+        local key = p1
+        if type(key) == "number" then
+            key = M.code_name(key, api)
+            if key == nil then return "none" end
+        end
+        key = tostring(key == nil and "" or key)
+        if key == "escape" or key == "q" then return "quit", "escape" end
+        local action, detail = M.handle_key(state, key, api)
+        M.note(api, "key=" .. key .. " action=" .. tostring(action)
+            .. " item=" .. tostring(state.item or 1)
+            .. (detail ~= nil and (" detail=" .. tostring(detail)) or ""))
+        return action, detail
+    end
+    if event == "char" then
+        local ch = tostring(p1 == nil and "" or p1)
+        if ch == "q" or ch == "Q" then return "quit", "q" end
+        return "none"
+    end
+    if event == "desk_focus" then return "repaint" end
+    if event == "term_resize" then return "repaint" end
+    return "none"
+end
+
+-- no keyboard (capability refused or no host): keep the frame, never spin
+function M.idle(api)
+    while true do
+        if type(api) == "table" and type(api.yield) == "function" then
+            api.yield()
+        else
+            return "idle"
+        end
+    end
+end
+
+function M.body(manifest, api)
+    local state = M.build(api, {})
+    state.manifest = manifest
+    local term = type(api) == "table" and api.terminal or nil
+    local input = type(api) == "table" and api.input or nil
+    local pull = type(input) == "table" and input.pullEvent or nil
+    M.paint_once(state, api, term)
+    M.note(api, "ready item=" .. tostring(state.item or 1)
+        .. " items=" .. tostring(#M.items(state)))
+    if type(pull) ~= "function" then
+        M.note(api, "no_input reason=no_host")
+        return M.idle(api)
+    end
+    while true do
+        local event, p1, p2 = pull()
+        if event == nil then
+            if p1 ~= nil then
+                M.note(api, "no_input reason=" .. tostring(p1))
+                return M.idle(api)
+            end
+            api.yield()
+        else
+            local action, detail = M.dispatch_event(state, event, p1, api)
+            if action == "quit" then
+                M.note(api, "quit key=" .. tostring(detail))
+                return "quit"
+            end
+            if action ~= "none" then M.paint_once(state, api, term) end
+            api.yield()
+        end
+    end
 end
 
 -- ---------------------------------------------------------------------------
@@ -557,7 +860,7 @@ end
 M.layout_selftest = M.selftest
 
 local function body(manifest, api)
-    return M.run(manifest, api)
+    return M.body(manifest, api)
 end
 
 if rawget(_G, "PYROET_SETTINGS_TEST") then
