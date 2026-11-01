@@ -90,6 +90,14 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 creates it), q back
      net        up/down scroll the hosts, enter or r refresh (rpv status,
                 hosts, probe target), q back
+     pkgget     built-in package downloader: a edits the server line, enter
+                downloads the selected package into /pkgs and installs it.
+                Server layout (plain text, any static file server):
+                  index.txt           "app <name> <version> <dir>" per line
+                  <dir>/files.txt     one relative path per line
+                  <dir>/<relpath>     the file
+                  <dir>/SHA256.txt    optional "<sha256> <relpath>" lines;
+                                      without it the status says unverified
      files      (optional example package) a read-only file manager: up/down,
                 enter to open/view, b or backspace up, r refresh, h hidden,
                 q quit. Not in the image: copy examples/files.app to /pkgs/files.app

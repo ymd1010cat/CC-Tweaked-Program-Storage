@@ -60,7 +60,7 @@ return function(H)
         H.rmrf("/pkgs")
         local inst = installer_for()
         local rt, log, lines = runtime({ installer = inst })
-        H.eq("scan", rt:scan(), 2)
+        H.eq("scan", rt:scan(), 3)
         local api = launch(rt, "launcher")
 
         -- 1) no source medium at all
@@ -137,7 +137,7 @@ return function(H)
         })
         local inst = installer_for()
         local rt, log, lines = runtime({ installer = inst })
-        H.eq("scan", rt:scan(), 2)
+        H.eq("scan", rt:scan(), 3)
         local api = launch(rt, "launcher")
 
         -- a package entry installs through the installer object
@@ -185,7 +185,7 @@ return function(H)
         })
         local inst = installer_for()
         local rt, log, lines = runtime({ installer = inst })
-        H.eq("scan", rt:scan(), 2)
+        H.eq("scan", rt:scan(), 3)
         local api = launch(rt, "launcher")
 
         -- no /disk at all: the internal package is still listed, and the source
@@ -355,7 +355,7 @@ return function(H)
         local rt, log, lines = runtime({ installer = inst, apps_root = "/system/system" })
         local record = { name = "launcher", caps = { ["fs.read"] = true,
             ["fs.write"] = true } }
-        H.eq("rescan_scan", rt:scan(), 2)
+        H.eq("rescan_scan", rt:scan(), 3)
         -- a package appears while the machine is running
         H.app_package("/apps/late.app", {
             manifest = 'return { name = "late", version = "1.4.2", entry = "main.lua",'
@@ -399,7 +399,7 @@ return function(H)
         local rok, rinfo = rt:sys_rescan(record)
         H.eq("rescan_ok", rok, true)
         H.table("rescan_report", rinfo)
-        H.ge("rescan_count", rinfo and rinfo.count or 0, 3)
+        H.ge("rescan_count", rinfo and rinfo.count or 0, 4)
 
         -- removing the directory drops the record on the next rescan, but a
         -- running instance is kept (its coroutine is alive)

@@ -120,6 +120,8 @@ pyroet-os/system/kernel/permissions.lua
 pyroet-os/system/system/launcher.app/manifest.lua
 pyroet-os/system/system/launcher.app/main.lua
 pyroet-os/system/system/settings.app/manifest.lua
+pyroet-os/system/system/pkgget.app/manifest.lua
+pyroet-os/system/system/pkgget.app/main.lua
 pyroet-os/system/system/settings.app/main.lua
 # T1: the Installer UI (DECISIONS.md 17). Same two files per package as the other
 # desktop packages, listed file by file for the same reason. It is image payload

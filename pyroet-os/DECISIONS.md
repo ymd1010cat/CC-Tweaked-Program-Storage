@@ -1243,6 +1243,29 @@ APP_LOG app=installer msg=key=enter action=install index=1 detail=files
 
 36.6 **数字**：离线 **4,933 pass / 0 fail / 250 groups**；sizecheck 见上（27 条，远低于 629,145）。
 
+37. pkgget：用户自选服务器的软件包下载（T16）
+
+37.1 **包**：`system/system/pkgget.app/`（manifest 0.1.0 + main.lua，进镜像）。caps = `http`、`fs.read`、`fs.write`、`input`、`terminal`。事件驱动；键位统一 `up/down` 移动、`enter` 进入/下载、`r` 重拉 index、`a` 编辑服务器、`q` 退出、`s` 在 `/etc/pkg.servers` 多行间切换（**不用 Esc**）。
+
+37.2 **服务器协议（纯文本、静态文件服务器即可，无 zip/JSON）**：
+```
+GET <base>/index.txt          每行 "app <name> <version> <dir>"
+GET <base>/<dir>/files.txt    每行一个相对路径（manifest.lua / main.lua / ...）
+GET <base>/<dir>/<relpath>    该文件正文
+GET <base>/<dir>/SHA256.txt   可选，每行 "<sha256> <relpath>"（有则校验，无则状态行标 unverified）
+```
+服务器地址：`/etc/pkg.servers` 每行一个 URL（第一行是默认；`a` 编辑的永远是第一条；`s` 在界面上轮换）。没有该文件时用占位 `http://example.invalid/` 并提示按 `a` 设置。
+
+37.3 **行为**：`enter` 在列表行 → 下载到 `/pkgs/<name>.app/`：每个文件先写 `<rel>.part`、回读校验、再改名；全部成功才发布目录（失败清理 `.part` 与已下载内容，绝不留半个包）。进度行 `fetching <relpath> (i/n)`。发布后若有 `api.sys.install` 就走桥装到 `/apps`（`PKGGET_INSTALL name=.. ok=true|false`），没有桥就留在 `/pkgs` 并显示 `staged in /pkgs, unverified|verified`。
+
+37.4 **错误码/文案**：无 http → `pkgget unavailable: no http`；index 404/非 2xx → `index http 404`；传输失败 → `index <err>`；坏行跳过并计数 `bad lines: n`；`files.txt` 缺失/非法路径 → `files <err>` / `bad path ..` / `to many files`；单文件失败 → `failed <relpath>: <err>` 并清理；校验失败 → `hash check failed: <rel>` 并清理；写盘失败 → `write failed` / `write check failed` / `cannot rename`；地址非法（空/含空格/>160）→ `empty address` / `address has a space` / `address too long`（留在编辑态）。
+
+37.5 **日志**：`PKGGET_SERVER url=..`、`PKGGET_INDEX ok=.. entries=.. bad=..`、`PKGGET_FETCH name=.. files=.. bytes=.. ok=..`、`PKGGET_INSTALL name=.. ok=..`、`PKGGET_EDIT begin|end`、`PKGGET_UNAVAILABLE reason=no_http`、`PKGGET_QUIT key=..`。
+
+37.6 **测试**：`tests/t_pkgget.lua`（6 组 76 断言）：manifest 静态、index 解析（正常/坏行计数/404/无 http/首帧逐字）、下载（两个文件内容落盘、无 `.part` 残留、install 桥被调用一次、状态行 `installed demo`）、无 SHA 时 `unverified`、SHA 错误时 `hash check failed` 且不留包、正确 SHA 时 `, verified`（image 能加载 crypto 时）、编辑态（预填/输入/backspace/enter 生效/c 取消/q 只当字符/非法地址）、键位与订阅轮换。
+
+37.7 **数字**：离线 **5,008 pass / 0 fail / 256 groups**；`install.set` **29 条**（+pkgget 两文件），TOTAL 见 sizecheck。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1283,3 +1306,4 @@ APP_LOG app=installer msg=key=enter action=install index=1 detail=files
 - 2026-11-01: **修可选包装不上**（口径见 §34）。根因二：`installer.app` 的 `install_selected` 只接受 `source=="disk"`（`internal` 行被当成 `already installed` 直接返回 none）；`kernel/installer.lua` 的 `I.INTERNAL`/`I.DISK` 只被引用未声明，`source_for` 恒 nil → `no_source`。修：`install_selected` 接受 `disk|internal`；补上两个源根常量。新增 `t_sys_ota.ota.e2e_install` 端到端回归（真 kernel/installer + 临时 `/pkgs/xpkg.app` + installer 应用 Enter + runtime 桥 → `/apps/xpkg.app`、`APP_INSTALL name=xpkg ok=true`、`INSTALL_OK name=xpkg`）。真机副本复验：`INSTALL_OK name=files` + `APP_INSTALL name=files ok=true` + `action=install` + `/apps/files.app` 出现。离线 **4,911 pass / 0 fail / 249 groups**。未 commit。
 - 2026-11-01: **launcher 不再把自己列为可启动项**（口径见 §35）。`launcher.app` 新增 `M.SELF="launcher"`，`M.scan` 按**包名**跳过自身（`/system/system` 与 `/apps` 两份都跳），记 `LAUNCHER_SKIP_SELF name=launcher path=..`，列表少一行、计数随之变化；kernel 的 `APP_START_DENIED reason=already_running` 保留兜底但桌面不再触发。测试同步 `t_launcher`/`t_desktop`/`t_desktop_loop`（screen 组自启动用例改为"列表无自身 + SKIP 日志"）/`t_budget`。真机副本开机日志：`LAUNCHER_SKIP_SELF name=launcher path=/system/system/launcher.app`。离线 **4,909 pass / 0 fail / 249 groups**。未 commit。
 - 2026-11-01: **安装后无需重启（rescan + launch 自动重扫）**（口径见 §36）。`kernel/apps.lua` 新增 `A:rescan()`（同时扫 `/system/system` 与 `/apps`，运行中实例保留，缺失目录的 record 仅非运行时丢弃，日志 `APP_RESCAN count= added= removed=`）与运行时提供的 `api.sys.rescan()`（cap `fs.read`）、`api.sys.launch(name)`（未知名字先自动 rescan，仍无 → `nil, "no such app"`，日志 `APP_LAUNCH_RESCAN`/`APP_LAUNCH_MISS`）。launcher 新增 `M.read_version`：无 runtime record 时直接读包 manifest 的版本（失败才 `?` 并记 `LAUNCHER_MANIFEST_MISS`）。新增 `t_sys_ota.ota.rescan`（自动重扫启动、显式 rescan、运行中保留/停止后清除、未知名字、launcher 版本 1.4.2）。离线 **4,933 pass / 0 fail / 250 groups**。未 commit。
+- 2026-11-01: **新增自带应用 `pkgget`（自选服务器的包下载）**（口径见 §37）。新包 `system/system/pkgget.app/`（caps http/fs.read/fs.write/input/terminal，约 20 KB），纯文本协议：`index.txt`（`app <name> <version> <dir>`）+ `<dir>/files.txt` + 文件 + 可选 `SHA256.txt`；服务器由用户输入（`a` 编辑 `/etc/pkg.servers` 第一行，`s` 轮换多行，默认占位 `http://example.invalid/`）。下载写入 `/pkgs/<name>.app`（`.part` → 回读 → 改名，失败全清），完成后走 `api.sys.install` 桥装到 `/apps`，无桥则 `staged in /pkgs`。`install.set` 27→29、`t_budget` 同步、`/system/system` 计数 2→3 各套件同步；新增 `tests/t_pkgget.lua`（6 组 76 断言）。离线 **5,008 pass / 0 fail / 256 groups**。未 commit。

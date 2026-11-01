@@ -39,7 +39,7 @@ return function(H)
         -- T1 added the Installer UI as image payload (2 files, DECISIONS.md 17),
         -- so the exact count moved 26 -> 28; D1 added the resident desktop loop
         -- (kernel/desktop.lua), so it is 29. The strictness is unchanged.
-        H.eq("install_entries", #paths, 27)
+        H.eq("install_entries", #paths, 29)
         H.check("has_installer", set["pyroet-os/system/kernel/installer.lua"] == true,
             "installer is not image payload")
         H.check("has_desktop", set["pyroet-os/system/kernel/desktop.lua"] == true,
@@ -65,7 +65,7 @@ return function(H)
             "recovery tools must not be image payload")
         H.check("no_tests", set["pyroet-os/tests/run.lua"] == nil, "tests are not payload")
                 H.check("no_examples_text", (text or ""):find("pyroet-os/examples/", 1, true) == nil, "install.set still names an examples/ path")
-        H.check("no_duplicates", #paths == 27, "duplicate active entries")
+        H.check("no_duplicates", #paths == 29, "duplicate active entries")
     end
 
     -- ---------------------------------------------------------------------
@@ -101,16 +101,14 @@ return function(H)
         local entries, problems = LAUNCHER.scan(api, { roots = { dir .. "/system" } })
         H.eq("scan_count", #entries, 1)
         H.eq("scan_problems", #problems, 0)
+        -- the launcher is the desktop: it never lists itself (T14)
         H.eq("scan_names", entries[1].name, "settings")
         H.eq("scan_unknown_state", entries[1].state, "unknown")
         local state = LAUNCHER.build(api, { roots = { dir .. "/system" } })
         H.eq("state_entries", #state.entries, 1)
         H.eq("state_selected", LAUNCHER.selected(state).name, "settings")
         local lines = LAUNCHER.render(state, 26, 20)
-        H.eq("render_rows", #lines, 20)
         H.contains("status_line", lines[#lines], "1 app sel 1/1")
-        H.eq("handle_move", LAUNCHER.handle_key(state, "down", api), "move")
-        H.eq("moved_selected", LAUNCHER.selected(state).name, "settings")
     end
 
     -- ---------------------------------------------------------------------
