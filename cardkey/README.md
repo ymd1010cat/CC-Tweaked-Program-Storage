@@ -116,6 +116,7 @@ CraftOS 的有线 modem 网络会把同一网络上所有外设共享给网络�
 | --- | --- | --- |
 | `/startup.lua` | `cardkey/server/startup.lua` | 并行启动服务与管理台 |
 | `/sha256.lua` | `cardkey/common/sha256.lua` | 纯 Lua SHA-256；服务器**必需** |
+| `/cardkey_mode.lua` | `cardkey/common/cardkey_mode.lua` | 运行模式解析器（`pass` / `free`）；**可选**，缺文件按 `pass` 跑（见第 15 节） |
 | `/auth/cardkey_config.lua` | `cardkey/server/auth/cardkey_config.lua` | 配置表 |
 | `/auth/cardkey_store.lua` | `cardkey/server/auth/cardkey_store.lua` | 数据库、pepper、预留与扣次 |
 | `/system/cardkey_server.lua` | `cardkey/server/system/cardkey_server.lua` | 协议服务、限流、日志 |
@@ -136,6 +137,7 @@ CraftOS 的有线 modem 网络会把同一网络上所有外设共享给网络�
 | `/system/kernel.lua` | `cardkey/terminal/system/kernel.lua` | 登录循环 |
 | `/system/ui.lua` | `cardkey/terminal/system/ui.lua` | 菜单与结果界面 |
 | `/auth/cardkey_client.lua` | `cardkey/terminal/auth/cardkey_client.lua` | 协议客户端 |
+| `/cardkey_mode.lua` | `cardkey/common/cardkey_mode.lua` | 运行模式解析器；终端与服务器用**同一份**（可选，缺文件按 `pass`） |
 | `/auth/cardkey_login.lua` | `cardkey/terminal/auth/cardkey_login.lua` | 卡密输入界面 |
 | `/auth/session.lua` | `cardkey/terminal/auth/session.lua` | 内存会话表，TTL 600000 ms |
 
@@ -156,7 +158,8 @@ CraftOS 的有线 modem 网络会把同一网络上所有外设共享给网络�
 3. 若 modem 选择失败，服务把一行原因写进 `/auth/cardkey_fault.flag`，管理台首页显示
    `[SERVICE FAULT] <原因>`。按提示设置 `modem_side` 后重启服务器。
 4. 服务成功启动时会在 `/auth/cardkey_server.log` 追加一行 `START server_id=... channel=3
-   keys_usable=N keys_total=N`，并删掉旧的故障旗标。
+   keys_usable=N keys_total=N`（第 15 节的模式功能再追加一行 `MODE mode=... source=...`），
+   并删掉旧的故障旗标。
 
 ### 3.2 pepper：必须单独备份
 
@@ -367,6 +370,9 @@ Writing disk...
 
 然后等待服务器回 `write_response`（写盘超时 30 秒）。
 
+free 模式（第 15 节）下菜单多一行 `Free mode: no card key needed.`，而且没有卡密登录界面；
+成功/失败文案也不同，逐条对照见 15.3。
+
 ### 7.4 成功 / 未扣次警告 / 失败
 
 成功（`charged` 为真）：
@@ -462,6 +468,7 @@ Password:
 
 ```
 Card Key Admin
+MODE: <pass|free>
 usable=<可用卡数>  remaining=<剩余总次数>
 [SERVICE FAULT] <故障旗标第一行>     (有旗标才显示)
 disk: <no drive|too many drives|no disk|no mount|ready> ( (<驱动器名>) )
@@ -474,6 +481,7 @@ free: <n> bytes                     (ready 且能拿到空间数据时)
 Select: 
 ```
 
+`MODE` 是当前运行模式（见第 15 节；缺 `/cardkey_mode.lua` 的旧部署显示 `MODE: pass`）。
 `usable` 是"未撤销且还有次数"的卡数；`remaining` 是所有卡 `uses_left` 之和（含已撤销的卡，
 撤销不会回收次数）。`0` 或直接回车退出（随后被重启）。
 
@@ -554,6 +562,7 @@ Card key:
 
 | 键 | 默认值 | 谁读 | 含义 |
 | --- | --- | --- | --- |
+| `mode` | `"pass"` | 服务、管理台、终端 | 运行模式：`pass` 要卡密、`free` 完全不要（见第 15 节）；`/auth/cardkey_mode.txt` 能覆盖它 |
 | `channel` | `3` | 服务 | 终端网频道；终端写死 3，不读配置 |
 | `protocol` | `"cardkey_v1"` | 服务 | 协议名；终端写死，不读配置 |
 | `modem_side` | `nil` | 服务 | 终端侧 modem 的侧名；`nil` = 自动识别 |
@@ -571,9 +580,10 @@ Card key:
 | `global_lockout_ms` | `30000` | 服务 | 全局锁时长，毫秒 |
 
 生效时机：`channel`、`protocol`、`modem_side`、`heartbeat_interval` 在服务启动时读取一次，改后
-需要重启服务器；`reservation_ttl_ms` 在每次 `reserve` 时重读，`export_dir` 在每次生成时重读，
+需要重启服务器；`mode` 在配置加载时解析一次（服务、管理台、终端各自加载），改配置或模式文件后
+需要重启机器；`reservation_ttl_ms` 在每次 `reserve` 时重读，`export_dir` 在每次生成时重读，
 `payload_dir` 在每次写盘时重读；管理台每次启动（约每秒）重读 `admin_file`、`max_batch`、
-`default_uses`。也就是说，改这些值大多不用重启，但网络相关的四项必须重启。
+`default_uses`。也就是说，改这些值大多不用重启，但网络相关的四项和 `mode` 必须重启。
 
 计失败的是 `lookup`/`reserve` 的失败（不存在、格式错、撤销、用完、被预留）；空卡密、重复
 nonce、限流期间的请求、写盘失败都不计入。任意一次成功（verify 或 write）会清空该终端的计数和
@@ -601,9 +611,25 @@ YYYY-MM-DD HH:MM:SS  <消息>
 | `WRITEFAIL` | `WRITEFAIL terminal=7 reservation=... reason=... detail=...`，写盘失败、已释放不扣次 |
 | `WRITE!` | `WRITE! reservation=... files=3 dirs=1 bytes=4096`，复制完成 |
 | `COMMIT!` | `COMMIT! reservation=... charged=1 uses_left=1`，提交结果 |
+| `MODE` | 启动时多一行 `MODE mode=pass source=config`，当前模式与来源（见第 15 节） |
+| `FREE_VERIFY` | `FREE_VERIFY terminal=7 uses=none`，free 模式的验证（不查库、不计数） |
+| `FREE_WRITE` | `FREE_WRITE ok=1 files=3 dirs=1 bytes=4096 terminal=7 reservation=...`，free 模式写盘成功；失败是 `FREE_WRITE ok=0 reason=...`（不扣次） |
 | `ERROR` | 启动故障（`ERROR fault: ...`）、心跳/回复发送失败、处理异常、prune 异常、commit 找不到预留 |
 
 日志只增不减；需要清理时可以直接删掉或清空文件（服务以追加方式打开，不会因此崩溃）。
+
+### 10.1.1 模式日志（`/auth/cardkey_mode.log`）
+
+`/cardkey_mode.lua` 自己写这一份，与上面的服务日志分开。每行同样是
+`YYYY-MM-DD HH:MM:SS  <消息>`，标签：
+
+| 标签 | 示例 / 含义 |
+| --- | --- |
+| `MODE_CONFIG_BAD` | `MODE_CONFIG_BAD key=mode value=bogus fallback=pass`：配置里的 `mode` 非法，已 fail-safe 到 `pass` |
+| `MODE_FILE_BAD` | `MODE_FILE_BAD path=/auth/cardkey_mode.txt value=nonsense keep=pass`：覆盖文件内容非法，保持配置值 |
+| `FREE_SESSION` | `FREE_SESSION id=7`：终端在 free 模式下跳过了卡密登录 |
+
+文件不存在时不会创建；没有 `/auth` 目录或磁盘满时静默放弃写日志，绝不因此打断启动或写盘。
 
 ### 10.2 故障旗标
 
@@ -709,6 +735,7 @@ CraftOS shell。回到 shell 后可以查看或拷贝 `/auth/cardkey_server.log`
 | --- | --- |
 | `/startup.lua` | 并行启动服务与管理台；服务失败时停在原地而不是掉回 shell |
 | `/sha256.lua` | SHA-256 实现，`cardkey_store.lua` 加载时必需 |
+| `/cardkey_mode.lua` | 运行模式解析器（可选：缺文件按 `pass` 跑，见第 15 节） |
 | `/auth/cardkey_config.lua` | 配置表（见第 9 节） |
 | `/auth/cardkey_store.lua` | 指纹库、pepper、预留、commit/release、生成与导出 |
 | `/system/cardkey_server.lua` | 协议、心跳、限流、nonce 去重、日志、写盘事务 |
@@ -726,6 +753,8 @@ CraftOS shell。回到 shell 后可以查看或拷贝 `/auth/cardkey_server.log`
 | `/auth/admin.db` | 首次设置管理员密码时创建 |
 | `/auth/cardkey_server.log` | 服务追加写的日志 |
 | `/auth/cardkey_fault.flag` | 仅启动失败时出现，一行原因 |
+| `/auth/cardkey_mode.txt` | 人工放的模式覆盖文件（可选；内容只写 `pass` 或 `free`，见第 15 节） |
+| `/auth/cardkey_mode.log` | 模式诊断日志：`MODE_CONFIG_BAD` / `MODE_FILE_BAD` / `FREE_SESSION` |
 | `/cardkeys/cardkeys_*.txt`、`/cardkeys/latest.txt` | 生成批次时的明文导出；拷出后手动删除 |
 
 终端代码：
@@ -738,6 +767,7 @@ CraftOS shell。回到 shell 后可以查看或拷贝 `/auth/cardkey_server.log`
 | `/system/kernel.lua` | 登录→会话→界面→销毁会话的循环 |
 | `/system/ui.lua` | 菜单与成功/失败界面 |
 | `/auth/cardkey_client.lua` | 协议客户端、服务器集合缓存 |
+| `/cardkey_mode.lua` | 运行模式解析器（与服务器同一份；缺文件按 `pass`） |
 | `/auth/cardkey_login.lua` | 卡密输入界面 |
 | `/auth/session.lua` | 内存会话，TTL 600000 ms |
 
@@ -750,7 +780,8 @@ CraftOS shell。回到 shell 后可以查看或拷贝 `/auth/cardkey_server.log`
    disk drive；每台终端一个有线 modem。
 2. 拷贝服务器文件：`/startup.lua`、`/sha256.lua`、`/auth/cardkey_config.lua`、
    `/auth/cardkey_store.lua`、`/system/cardkey_server.lua`、`/system/disk_writer.lua`、
-   `/system/cardkey_admin.lua`，以及 `/payload/`。
+   `/system/cardkey_admin.lua`，以及 `/payload/`。要用 free 模式再把 `/cardkey_mode.lua`
+   和终端的 `/cardkey_mode.lua` 一起拷（第 15 节；只跑 pass 可以不拷）。
 3. 接线：网络 A = 服务器终端侧 modem + 所有终端；网络 B = 服务器驱动器侧 modem + 驱动器。
    **网络 B 不接任何其它电脑。**
 4. 第一次开机服务器：看是否出现 `/auth/cardkey_fault.flag`；若 modem 选择报错，按文本设置
@@ -758,7 +789,8 @@ CraftOS shell。回到 shell 后可以查看或拷贝 `/auth/cardkey_server.log`
 5. 首次进入管理台：设置管理员密码；立刻把 `/auth/cardkey_pepper.txt` 备份到服务器之外。
 6. 放好 payload，把软盘插进驱动器；管理台选 `1` 生成一批卡密；把 `/cardkeys/*.txt` 拷出
    服务器后删除。
-7. 把终端文件拷到每台终端（**不要**拷 `/sha256.lua`，不要拷 `/auth` 下的数据库）。
+7. 把终端文件拷到每台终端（**不要**拷 `/sha256.lua`，不要拷 `/auth` 下的数据库）；
+   要用 free 模式时每台终端也要放 `/cardkey_mode.lua`。
 8. 依次开机终端：应出现 `Secure Terminal`。若锁死，按第 11 节排查网络 A、服务器状态与
    `modem_side`。
 9. 用一张测试卡密走一遍 `1. Write Disk`：确认软盘内容正确、终端显示
@@ -766,6 +798,114 @@ CraftOS shell。回到 shell 后可以查看或拷贝 `/auth/cardkey_server.log`
    `GRANT`/`WRITE!`/`COMMIT!`。
 10. 建立备份习惯：`/auth/cardkey_pepper.txt` 与 `/auth/cardkeys.db`（以及 `/auth/admin.db`）
     分开保存；换服务器时一起带走 pepper。
+
+## 15. 运行模式（pass / free）
+
+CardKey 支持两种运行模式，判定与切换都由唯一解析器 `/cardkey_mode.lua`
+（本仓库 `cardkey/common/cardkey_mode.lua`，与 `/sha256.lua` 同层）负责：服务、管理台、终端
+读的都是它，所以不存在"两台机器各有一套规则"。
+
+| 模式 | 含义 |
+| --- | --- |
+| `pass`（默认） | 每次写盘都要卡密：`verify` 查库、`write` 预留 → 写盘 → 扣次 |
+| `free` | 公开开放模式：完全不要卡密，什么都不扣；**但盘照样真的写**（同一个 disk_writer 事务、同样的校验/回滚/空间预检） |
+
+### 15.1 解析优先级
+
+1. `/auth/cardkey_mode.txt`：存在且内容合法时优先。改这个文件不用改代码，重启服务器与终端后生效。
+2. 否则 `/auth/cardkey_config.lua` 的 `mode` 字段（出厂文件里是 `mode = "pass"`）。
+3. 否则内置默认 `pass`。
+
+合法值**只有小写** `pass` 与 `free`。覆盖文件的写法：忽略空行；`#` 起注释（整行或行尾）；剩下
+的每个词都必须是同一个合法值。所以 `free`、`  free  `、`free\n`、`free # open day` 都合法；
+`FREE`、`Free`、`open`、空文件、`# free`（全是注释）、`pass` 与 `free` 同时出现都非法。
+
+失败方向一律朝 `pass`——坏文件、坏配置都不能把收费机变成免费机：
+
+- 配置里的 `mode` 非法 → 记一条 `MODE_CONFIG_BAD key=mode value=<值> fallback=pass` 到
+  `/auth/cardkey_mode.log`，模式按 `pass`；
+- 覆盖文件内容非法 → 记一条 `MODE_FILE_BAD path=/auth/cardkey_mode.txt value=<值> keep=<配置值>`，
+  **保持配置值**（既不变成 pass 也不变成 free）；
+- 文件合法时它压过配置值（两个方向都压）。
+
+### 15.2 缺文件的向后兼容（与 itn-pass 的关键差异）
+
+在这个仓库的 itn-pass 项目里，缺 `/itnpass_mode.lua` 是启动 fault。CardKey 是**既有部署项目**，
+所以选了更保守的策略：**`/cardkey_mode.lua` 是可选的，缺文件一律按 `pass` 跑，不 fatal。**
+
+- 三个读取方（服务、管理台、终端 kernel/client）都用 `pcall(dofile, "/cardkey_mode.lua")`
+  加载，失败就当没有解析器；
+- 服务与管理台：配置加载时找不到解析器 → `mode = pass`、`mode_source = "default"`，不写
+  `/auth/cardkey_fault.flag`、不打印 `[ERROR]`、照样起服务；
+- 终端：kernel 找不到解析器 → 走原来的登录流程；client 找不到 → 仍然拒绝空卡密；
+- 于是**旧部署（只有 `cardkey_*` 那些文件）不放解析器也照旧是 pass**，升级时可以一台一台来。
+
+比配置更保守的一点：即使有人把一份 `mode = "free"` 的配置抄到旧机器上，只要那台机器没有
+`/cardkey_mode.lua`，它仍然是 `pass`。想要 free，必须放解析器。
+
+### 15.3 free 与 pass 的逐项差异
+
+| 环节 | pass | free |
+| --- | --- | --- |
+| 服务 `verify_request` | 限流检查 → 空卡密拒绝 → 查库 → 成功清计数 / 失败计失败 | 过了 nonce 去重就直接成功；**不查库、不计失败、不做限流**，日志 `FREE_VERIFY ... uses=none` |
+| 服务 `write_request` | `reserve` 预留 → `disk_writer.write()` → `commit` 扣 1 次 | **不 reserve、不 commit、不扣次**，直接 `disk_writer.write()`；日志 `FREE_WRITE ok=1/0 ...` |
+| 回包字段 | `charged`、`uses_left`、`uses_total` | 多 `free = true`、`mode = "free"`；`charged = false`，**不带** `uses_left`/`uses_total` |
+| 写盘事务 | 校验软盘、逐文件复制、尺寸校验、失败回滚、空间预检、失败文案 | **完全一样**（free 也会失败：`disk write error` + detail） |
+| 终端 kernel | 每次进卡密输入界面 | 跳过登录，合成 guest 用户（`name="guest"`、`code=""`、`free=true`），日志 `FREE_SESSION id=<本机ID>` |
+| 终端 client | 空卡密本地拒绝（`empty code`），不发请求 | 允许空卡密并照发；协议/nonce/`server_id` 校验一条不少 |
+| 终端菜单 `ui.lua` | `[OK] Disk written and key charged.`、失败时 `Your card key was NOT charged.` | 多一行 `Free mode: no card key needed.`，成功文案 `[OK] Disk written (free mode).` + `No card key was charged.`，失败只说 `The disk was not written.` |
+| 管理台首页 | `MODE: pass` | `MODE: free` |
+| 终端开机网络检查 | 必须恰好听到 1 个 `server_id`，否则锁死 | **一样**（盘还是服务器写的，终端必须能连上；free 不跳过检查） |
+| nonce 去重 / 协议字段 / 频道 | 一样 | 一样（重复 nonce 仍然 `duplicate request`） |
+
+一句话：free 只改"要不要卡密、扣不扣次"，不改"怎么写盘、怎么连网、怎么去重"。
+
+补充：free 的 `verify_request` / `write_request` 仍然校验 `nonce` 与 `reservation_id`
+（协议字段照旧，`reservation_id` 只是不复用、不去库）；缺字段照样回 `malformed request` /
+`missing reservation id`。
+
+### 15.4 两端一致性
+
+模式由**每台机器各自**解析，服务器和终端不会互相通告模式，所以两端必须放同样的值：
+
+- 终端 free + 服务器 pass：终端发空卡密，服务器按 pass 逻辑回 `empty code`，界面显示
+  `[Failed] empty code`（不会写盘）；
+- 终端 pass + 服务器 free：终端本地就拒绝空输入，玩家必须敲点什么（任意非空内容都能过
+  `verify`，因为 free 不查库），能用但流程别扭；
+- 只给服务器改、忘了改终端也一样别扭。**切换时两端一起改，然后一起重启。**
+
+切换步骤（不改代码）：
+
+1. 把 `/cardkey_mode.lua` 拷到服务器与每台终端（`cardkey/common/cardkey_mode.lua`）；
+2. 想要 free 就在两端写 `/auth/cardkey_mode.txt`，内容一行 `free`（或在两端的
+   `cardkey_config.lua` 里写 `mode = "free"`；终端用文件更省事，终端不需要配置文件）；
+3. 重启服务器与所有终端；管理台首页应显示 `MODE: free`，服务日志应出现 `MODE mode=free`。
+
+改回 `pass`：删掉 `/auth/cardkey_mode.txt`（或把它改成 `pass`）再重启。
+
+### 15.5 日志关键字（排查用）
+
+- `/auth/cardkey_server.log`：启动时多一行 `MODE mode=pass|free source=config|file|default`
+  （原来那行 `START ...` 逐字未变），free 请求记 `FREE_VERIFY`、`FREE_WRITE`；
+- `/auth/cardkey_mode.log`：`MODE_CONFIG_BAD` / `MODE_FILE_BAD` / `FREE_SESSION`（见 10.1.1）。
+
+排查口径：`MODE` 行说 free 但界面还问卡密 → 终端没放解析器或没放模式文件（终端只看
+`/cardkey_mode.txt`）；反过来终端 free 但写盘报 `[Failed] empty code` → 服务器还是 pass。
+
+### 15.6 安全说明
+
+free 模式下**任何能碰到终端的人都能写盘**（无卡密、无次数、无审计对象），这正是该模式的目的，
+所以它只适合公开/自助场景。管理台与服务器物理边界不变：能坐到服务器前的人本来就能拿到
+pepper、改配置文件、直接把模式文件改成 free。第 12 节的风险条目依然成立。
+
+### 15.7 离线回归
+
+`pwsh -NoProfile -File cardkey/tests/run-tests.ps1` 会在临时 CraftOS-PC 电脑上把本目录的部署
+布局 stage 出来后跑 `cardkey/tests/`：覆盖解析优先级、非法值 fail-safe、缺文件兼容、free 的
+verify/write（不碰库、不扣次、真实写盘）、pass 的逐项回归（回包字段、`CHECK`/`DENY`/`GRANT`/
+`WRITE!`/`COMMIT!` 日志、限流锁定）、终端 client/kernel/ui 的 free 透传与管理台 `MODE` 文案。
+运行结果是 `OFFLINE_PASS` / `OFFLINE_FAIL` / `OFFLINE_GROUPS` 三个数字，PASS 后自动删
+`cardkey/.offline`（`-KeepStaging` 可保留）。
 
 ## 许可证
 

@@ -174,9 +174,24 @@ local function faultText()
     return line
 end
 
+-- Run mode shown on the home screen. Only the literal "free" says free:
+-- /cardkey_mode.lua already resolved the value into conf.mode when the config
+-- was loaded, and anything else (a missing resolver, a hand-built table) shows
+-- the paid mode. Exported as M.modeText so the offline suite can pin it down.
+local function modeText(conf)
+    local mode = "pass"
+    if type(conf) == "table" and conf.mode == "free" then
+        mode = "free"
+    end
+    return "MODE: " .. mode
+end
+
+M.modeText = modeText
+
 local function showHome(conf, store, writer)
     clearScreen()
     print("Card Key Admin")
+    print(modeText(conf))
     local stats = store.stats()
     print("usable=" .. tostring(stats.alive) .. "  remaining=" .. tostring(stats.remaining))
     local fault = faultText()

@@ -12,6 +12,27 @@ local PROTOCOL = "cardkey_v1"
 local VERIFY_TIMEOUT = 8
 local WRITE_TIMEOUT = 30
 
+-- Optional run mode resolver: a missing or broken /cardkey_mode.lua keeps the
+-- paid mode, so a terminal that was never updated still asks for a card key.
+-- In "free" mode an empty code is a valid request: the station does not ask for
+-- one, and the reply carries the free/mode flags back to the menu.
+local okMode, modeModule = pcall(dofile, "/cardkey_mode.lua")
+if not okMode or type(modeModule) ~= "table" then
+    modeModule = nil
+end
+local MODE = "pass"
+if modeModule ~= nil then
+    local okCurrent, value = pcall(modeModule.current)
+    if okCurrent and modeModule.is_valid(value) then
+        MODE = value
+    end
+end
+
+-- M.mode() -> "pass" | "free" (what this terminal booted with).
+function M.mode()
+    return MODE
+end
+
 -- Server ids learned by netcheck, cached per client object. The set is only
 -- refreshed after a failed exchange (see DECISIONS.md), never per request.
 local knownServers = nil
@@ -177,10 +198,10 @@ local function exchange(kind, code, timeout, expectedType)
     return true, reply
 end
 
--- check(code) -> (true, {uses_left, uses_total}) | (false, reason)
+-- check(code) -> (true, {uses_left, uses_total, free, mode}) | (false, reason)
 function M.check(code)
     local trimmed = trimCode(code)
-    if trimmed == "" then
+    if trimmed == "" and MODE ~= "free" then
         return false, "empty code"
     end
     local ok, reply = exchange("verify_request", trimmed, VERIFY_TIMEOUT, "verify_response")
@@ -190,14 +211,16 @@ function M.check(code)
     return true, {
         uses_left = reply.uses_left,
         uses_total = reply.uses_total,
+        free = reply.free,
+        mode = reply.mode,
     }
 end
 
--- write(code) -> (true, {uses_left, uses_total, charged, files, dirs, bytes})
+-- write(code) -> (true, {uses_left, uses_total, charged, free, mode, files, dirs, bytes})
 --             | (false, reason, detail)
 function M.write(code)
     local trimmed = trimCode(code)
-    if trimmed == "" then
+    if trimmed == "" and MODE ~= "free" then
         return false, "empty code"
     end
     local ok, replyOrReason, refused = exchange("write_request", trimmed, WRITE_TIMEOUT,
@@ -214,6 +237,8 @@ function M.write(code)
         uses_left = reply.uses_left,
         uses_total = reply.uses_total,
         charged = reply.charged,
+        free = reply.free,
+        mode = reply.mode,
         files = reply.files,
         dirs = reply.dirs,
         bytes = reply.bytes,

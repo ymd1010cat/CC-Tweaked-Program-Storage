@@ -289,6 +289,57 @@ local function writeReply(ctx, nonce, success, message, fields)
     return out
 end
 
+-- Which run mode this request is served in. Only the literal string "free"
+-- turns the open mode on; a missing or mistyped value keeps the paid mode.
+-- /cardkey_mode.lua already resolved cfg.mode when the config was loaded, and
+-- this check repeats the rule so a hand-built context (tests, an old config
+-- table) can never fall into the free path by accident.
+local function modeOf(ctx)
+    if type(ctx.cfg) == "table" and ctx.cfg.mode == "free" then
+        return "free"
+    end
+    return "pass"
+end
+
+-- Free-mode write: no reservation, no charge, no card key database lookup. The
+-- disk transaction is exactly the one the paid path runs (validate the disk,
+-- copy the payload, report files/dirs/bytes, roll back on failure), because a
+-- free station is still allowed to fail a write.
+local function freeWrite(ctx, terminal, nonce, resId)
+    -- pcall keeps the return positions: (ok, first, second, third, ...).
+    -- writer.write returns (true, info) or (false, reason, detail).
+    local called, wrote, writeResult, writeExtra = pcall(ctx.writer.write)
+    if not called then
+        M.log("FREE_WRITE ok=0 reason=exception " .. tostring(wrote) ..
+            " terminal=" .. terminal .. " reservation=" .. resId)
+        return writeReply(ctx, nonce, false, "disk write error",
+            {charged = false, free = true, mode = "free", detail = tostring(wrote)})
+    end
+    if not wrote then
+        M.log("FREE_WRITE ok=0 reason=" .. tostring(writeResult) ..
+            " detail=" .. tostring(writeExtra) ..
+            " terminal=" .. terminal .. " reservation=" .. resId)
+        local text = tostring(writeResult or "disk write error")
+        if writeExtra ~= nil and tostring(writeExtra) ~= "" then
+            text = text .. ": " .. tostring(writeExtra)
+        end
+        return writeReply(ctx, nonce, false, "disk write error",
+            {charged = false, free = true, mode = "free", detail = text})
+    end
+    local info = writeResult or {}
+    M.log("FREE_WRITE ok=1 files=" .. tostring(info.files) ..
+        " dirs=" .. tostring(info.dirs) .. " bytes=" .. tostring(info.bytes) ..
+        " terminal=" .. terminal .. " reservation=" .. resId)
+    return writeReply(ctx, nonce, true, "OK (free mode, no use charged)", {
+        charged = false,
+        free = true,
+        mode = "free",
+        files = info.files,
+        dirs = info.dirs,
+        bytes = info.bytes,
+    })
+end
+
 ---------------------------------------------------------------------------
 -- handlers
 ---------------------------------------------------------------------------
@@ -303,6 +354,16 @@ local function handleVerify(ctx, message)
     if not replayCheck(ctx, nonce, now) then
         M.log("DENY terminal=" .. terminal .. " reason=duplicate request")
         return verifyReply(ctx, nonce, false, "duplicate request")
+    end
+    if modeOf(ctx) == "free" then
+        -- Free mode: the card key database is never consulted (no lookup, no
+        -- failure counter, no lockout). The reply keeps the paid shape and
+        -- simply omits the use counters.
+        M.log("FREE_VERIFY terminal=" .. terminal .. " uses=none")
+        local freeReply = verifyReply(ctx, nonce, true, "OK", nil)
+        freeReply.free = true
+        freeReply.mode = "free"
+        return freeReply
     end
     local wait = lockoutSeconds(ctx, terminal, now)
     if wait then
@@ -339,6 +400,9 @@ local function handleWrite(ctx, message)
     if not replayCheck(ctx, nonce, now) then
         M.log("DENY terminal=" .. terminal .. " reason=duplicate request")
         return writeReply(ctx, nonce, false, "duplicate request", {charged = false})
+    end
+    if modeOf(ctx) == "free" then
+        return freeWrite(ctx, terminal, nonce, resId)
     end
     local wait = lockoutSeconds(ctx, terminal, now)
     if wait then
@@ -462,6 +526,14 @@ function M.start()
     local st = store.stats()
     M.log("START server_id=" .. serverId .. " channel=" .. tostring(conf.channel) ..
         " keys_usable=" .. tostring(st.alive) .. " keys_total=" .. tostring(st.total))
+    -- One extra line, never a change to the START line above: operators must be
+    -- able to tell an open station from a paid one without guessing.
+    local startMode = "pass"
+    if conf.mode == "free" then
+        startMode = "free"
+    end
+    M.log("MODE mode=" .. startMode .. " source=" ..
+        tostring(conf.mode_source or "default"))
 
     local ctx = M.newContext(conf, store, writer, serverId)
     local heartbeatInterval = tonumber(conf.heartbeat_interval) or 2
