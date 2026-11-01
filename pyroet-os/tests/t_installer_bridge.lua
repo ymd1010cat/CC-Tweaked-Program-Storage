@@ -161,9 +161,9 @@ return function(kit)
     -- -----------------------------------------------------------------
     H.group("installer_bridge.surface")
     do
-        H.eq("sys_function_count", #APPS.SYS_FUNCTIONS, 7)
+        H.eq("sys_function_count", #APPS.SYS_FUNCTIONS, 9)
         H.eq("sys_functions", table.concat(APPS.SYS_FUNCTIONS, ","),
-            "status,apps,perms,launch,install,uninstall,list")
+            "status,apps,perms,launch,install,uninstall,list,ota_list,ota_apply")
         H.eq("install_cap", APPS.SYS_INSTALLER.install.cap, "fs.write")
         H.eq("install_method", APPS.SYS_INSTALLER.install.method, "sys_install")
         H.eq("uninstall_cap", APPS.SYS_INSTALLER.uninstall.cap, "fs.write")

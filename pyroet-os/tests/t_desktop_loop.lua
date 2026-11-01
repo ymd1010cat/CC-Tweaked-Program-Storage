@@ -1045,7 +1045,8 @@ end
         stub_power(true)
         local one = boot_power({
             { "terminate" },      -- Ctrl+T
-            { "key", "down" },    -- move to Reboot
+            { "key", "down" },    -- Update -> Shutdown
+            { "key", "down" },    -- Shutdown -> Reboot
             { "key", "enter" },   -- run it (stubbed)
             { "key", "escape" },  -- cancel
         })
@@ -1056,21 +1057,22 @@ end
         -- the menu on screen, verbatim: title, three entries, marker on row 3
         local menu = one.frames[2] or {}
         H.eq("power_title", (menu[1] or ""):sub(1, 10), "Power 0.2.")
-H.contains("power_row3", menu[3] or "", "> Shutdown")
-H.contains("power_row4", menu[4] or "", "  Reboot")
-H.contains("power_row5", menu[5] or "", "  Cancel")
+        H.contains("power_row3", menu[3] or "", "> Update")
+        H.contains("power_row4", menu[4] or "", "  Shutdown")
+        H.contains("power_row5", menu[5] or "", "  Reboot")
+        H.contains("power_row6", menu[6] or "", "  Cancel")
         H.eq("power_hint", (menu[19] or ""):sub(1, 19), "enter runs q=cancel")
         -- down moved the marker to Reboot
-        local moved = one.frames[3] or {}
-H.contains("power_moved_off", moved[3] or "", "  Shutdown")
-H.contains("power_moved_on", moved[4] or "", "> Reboot")
+        local moved = one.frames[4] or {}
+        H.contains("power_moved_off", moved[4] or "", "  Shutdown")
+        H.contains("power_moved_on", moved[5] or "", "> Reboot")
         -- enter ran Reboot exactly once, logged BEFORE acting, and Shutdown was
         -- not called at all
         H.eq("power_reboot_calls", calls.reboot, 1)
         H.eq("power_shutdown_calls", calls.shutdown, 0)
         H.has(one.lines, "POWER reboot requested")
         -- Esc cancelled back to the desktop: row 18 is the normal hint again
-        local back = one.frames[5] or {}
+        local back = one.frames[6] or {}
         H.eq("power_cancel_hint", (back[18] or ""):sub(1, 15), "up/dn enter run")
         H.contains("power_cancel_list", table.concat(back, "\n"), "apps sel")
         H.has(one.lines, "power menu cancel")
@@ -1094,13 +1096,17 @@ H.contains("power_moved_on", moved[4] or "", "> Reboot")
         -- 3) a ROM without os.shutdown: the entry says so, nothing crashes
         calls.reboot, calls.shutdown = 0, 0
         stub_power(false)
-        local three = boot_power({ { "terminate" } })
+        local three = boot_power({
+            { "terminate" },
+            { "key", "down" },   -- move onto the unavailable Shutdown entry
+        })
         H.check("power_missing_run_ok", three.ok, tostring(three.run))
         local missing = three.frames[2] or {}
-H.contains("power_missing_row3", missing[3] or "", "> Shutdown unavailable")
-H.contains("power_missing_row4", missing[4] or "", "  Reboot")
-H.contains("power_missing_row5", missing[5] or "", "  Cancel")
-        H.contains("power_missing_reason", table.concat(missing, "\n"),
+        H.contains("power_missing_row3", missing[3] or "", "> Update")
+        H.contains("power_missing_row4", missing[4] or "", "  Shutdown unavailable")
+        H.contains("power_missing_row5", missing[5] or "", "  Reboot")
+        local moved_missing = three.frames[3] or {}
+        H.contains("power_missing_reason", table.concat(moved_missing, "\n"),
             "os.shutdown unavailable")
 
         rawget(_G, "os").shutdown = saved_shutdown

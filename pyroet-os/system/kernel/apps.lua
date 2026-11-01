@@ -337,7 +337,8 @@ end
 -- system introspection surface (host supplied, capability free)
 -- ---------------------------------------------------------------------------
 
-A.SYS_FUNCTIONS = { "status", "apps", "perms", "launch", "install", "uninstall", "list" }
+A.SYS_FUNCTIONS = { "status", "apps", "perms", "launch", "install", "uninstall",
+    "list", "ota_list", "ota_apply" }
 -- the three installer entries above are served by this runtime (see the
 -- installer bridge section); the four before them come from the host table
 A.SYS_INSTALLER = {
@@ -345,6 +346,15 @@ A.SYS_INSTALLER = {
     uninstall = { cap = "fs.write", method = "sys_uninstall" },
     list = { cap = "fs.read", method = "sys_list" },
 }
+-- the desktop OTA surface (T5): the launcher never touches a source file
+-- itself -- the kernel reads the medium, parses the meta with kernel/ota.lua and
+-- applies a package through the same installer object as api.sys.install
+A.SYS_OTA = {
+    ota_list = { cap = "fs.read", method = "sys_ota_list" },
+    ota_apply = { cap = "fs.write", method = "sys_ota_apply" },
+}
+A.OTA_META = "/disk/ota/meta.txt"
+A.OTA_MEDIA = "/disk/apps"
 -- same ceiling as kernel/installer.lua's NAME_MAX
 A.APP_NAME_MAX = 40
 
@@ -376,6 +386,7 @@ function A:sys_api(record)
     for i = 1, #A.SYS_FUNCTIONS do
         local name = A.SYS_FUNCTIONS[i]
         local bridge = A.SYS_INSTALLER[name]
+        if bridge == nil then bridge = A.SYS_OTA[name] end
         if bridge then
             -- the installer bridge is the runtime's own function: it has to ask
             -- this record's cap set before anything reaches the installer. It
@@ -476,6 +487,112 @@ function A:sys_uninstall(record, name)
     self:log(label .. " ok=" .. tostring(ok == true))
     if ok ~= true then return nil, tostring(info) end
     return true, info
+end
+
+-- ---------------------------------------------------------------------------
+-- the desktop OTA surface (T5)
+-- ---------------------------------------------------------------------------
+
+-- the meta parser is the kernel's own module: the app never sees a file handle,
+-- only the parsed result (or an error string it can render)
+function A:ota_module()
+    if type(self.ota) == "table" then return self.ota end
+    local ok, module = pcall(function()
+        return assert(loadfile("/system/kernel/ota.lua"))()
+    end)
+    if not ok or type(module) ~= "table" then
+        self:log("APP_OTA_NO_MODULE")
+        return nil
+    end
+    self.ota = module
+    return module
+end
+
+-- What the source medium offers: `/disk/ota/meta.txt` is an image update (the
+-- boot image is reflashed by recovery, so it is listed but not applied here);
+-- `/disk/apps/<name>.app` are package updates, applied through the installer.
+function A:sys_ota_list(record)
+    if not record.caps["fs.read"] then return self:denied(record, "fs.read") end
+    local fsx = self.fs
+    local entries, notes = {}, {}
+    local ota = self:ota_module()
+    local meta_path = self.opts.ota_meta or A.OTA_META
+    local media = self.opts.ota_media or A.OTA_MEDIA
+    local called, exists = pcall(fsx.exists, meta_path)
+    if called and exists then
+        local ok_read, text = pcall(fsx.open, meta_path, "r")
+        local body = nil
+        if ok_read and text then
+            local hcalled, handle = pcall(function() return text end)
+            if hcalled and handle and type(handle.readAll) == "function" then
+                local rcalled, data = pcall(handle.readAll)
+                pcall(handle.close)
+                if rcalled then body = data end
+            end
+        end
+        if body == nil then
+            self:log("APP_OTA_LIST ok=false reason=unreadable")
+            return nil, "unreadable meta"
+        end
+        if type(ota) ~= "table" or type(ota.parse_meta) ~= "function" then
+            self:log("APP_OTA_LIST ok=false reason=no_module")
+            return nil, "ota unavailable"
+        end
+        local mcalled, meta = pcall(ota.parse_meta, body)
+        if not mcalled or type(meta) ~= "table" then
+            self:log("APP_OTA_LIST ok=false reason=bad_meta")
+            return nil, "bad meta"
+        end
+        entries[#entries + 1] = {
+            name = "image",
+            version = tostring(meta.version or "?"),
+            kind = "image",
+            files = tonumber(meta.files) or 0,
+        }
+    end
+    local mcalled, names = pcall(fsx.list, media)
+    local listing = (mcalled and type(names) == "table") and names or {}
+    table.sort(listing)
+    for i = 1, #listing do
+        local dir = join(media, listing[i])
+        if listing[i]:sub(-4) == ".app" then
+            local dcalled, is_dir = pcall(fsx.isDir, dir)
+            if dcalled and is_dir then
+                local name = listing[i]:sub(1, -5)
+                local version = "?"
+                local inst = self:installer_of()
+                if inst and type(inst.read_manifest) == "function" then
+                    local vcalled, manifest = pcall(inst.read_manifest, inst, dir)
+                    if vcalled and type(manifest) == "table" then
+                        version = tostring(manifest.version or "?")
+                    end
+                end
+                entries[#entries + 1] = {
+                    name = name, version = version, kind = "package",
+                }
+            end
+        end
+    end
+    if #entries == 0 then
+        notes[#notes + 1] = "no source"
+        self:log("APP_OTA_LIST ok=false reason=no_source entries=0")
+        return nil, "no source"
+    end
+    self:log("APP_OTA_LIST ok=true entries=" .. tostring(#entries))
+    return true, { source = meta_path, entries = entries }
+end
+
+function A:sys_ota_apply(record, name)
+    if not record.caps["fs.write"] then return self:denied(record, "fs.write") end
+    if name == "image" then
+        self:log("APP_OTA_APPLY name=image ok=false reason=recovery_only")
+        return nil, "image ota needs recovery"
+    end
+    -- a package entry is an ordinary install of the source package: same object,
+    -- same validation, same error text as api.sys.install
+    local ok, info = self:sys_install(record, name)
+    self:log("APP_OTA_APPLY name=" .. short(name) .. " ok=" .. tostring(ok == true))
+    return ok, info
 end
 
 function A:sys_list(record)

@@ -1047,6 +1047,38 @@ pulls=1
 
 25.5 **数字**：离线 **4,633 pass / 0 fail / 230 groups**（上一轮 4,606/229，**+27 断言 / +1 组**）；`install.set` **29 条**、TOTAL 见 sizecheck（**SIZE_WARN**，距硬门禁 629,145 仍有余量）；`WINDOW_OK` 同步；改动 lua 非 ASCII 计数 0。
 
+26. installer 宿主桥（已接通）与桌面 OTA 入口（T5）
+
+26.1 **installer 桥状态**：`api.sys.install / uninstall / list` 在 T4 就已实现并被 `startup.lua` 第 3b 步的对象接上（`P.build_installer` → `ctx.installer` → 运行时 `self.installer`），本轮**没有新增文件**，只补了 OTA 面并在测试里把四类断言钉住。接口（平函数，返回值固定）：
+
+| 调用 | 成功 | 失败（第二返回值） |
+| --- | --- | --- |
+| `api.sys.install(name)` | `true, {version=...}` | `"bad name"` / `"installer unavailable"` / `"no_source"` / `"copy failed ..."` / `"manifest_name:..."` / hash/size 文案 / `"capability denied: fs.write"` |
+| `api.sys.uninstall(name)` | `true` | `"system app"` / `"not installed"` / `"cannot remove"` / `"bad name"` / `"capability denied: fs.write"` |
+| `api.sys.list()` | `true, {..}` | `"capability denied: fs.read"` |
+
+调用方校验：运行时按**调用记录自己的 cap 集**判定（installer 声明 `fs.write`，只读应用拿不到写面）；`installer unavailable` 表示宿主没送来 installer 对象；应用永远拿不到 `/system/kernel` 的文件句柄——`sys_api` 只给函数。
+
+26.2 **OTA 面（本轮新增）**：`api.sys.ota_list()` / `api.sys.ota_apply(name)`，cap 分别是 `fs.read` / `fs.write`，实现全在内核：
+
+- 源规则（按顺序合并）：①`/disk/ota/meta.txt` 是**镜像更新**，内容是一条 PYROET-OTA/2 报文（`PYROET-OTA/2 META version=.. files=.. manifest_sha=<64hex>`），由 `kernel/ota.lua` 的 `O.parse_meta` 解析，条目 `{name="image", version=, kind="image", files=}`；②`/disk/apps/<name>.app` 是**包更新**，版本取自该目录的 manifest，条目 `{name=, version=, kind="package"}`。二者都没有 → `nil, "no source"`；meta 解析失败 → `nil, "bad meta"`；读不出 → `nil, "unreadable meta"`；没有 ota 模块 → `nil, "ota unavailable"`。
+- 应用规则：`ota_apply("image")` 永远返回 `nil, "image ota needs recovery"`（镜像级更新归 §12 恢复/刷写，桌面不越权）；`ota_apply(<package>)` 走**与 `api.sys.install` 同一个 installer 对象**（同一套校验与错误文案），日志 `APP_OTA_APPLY name=<n> ok=..`。
+- 日志：`APP_OTA_LIST ok=true entries=N`、`APP_OTA_LIST ok=false reason=no_source|bad_meta|no_module|unreadable`、`APP_OTA_NO_MODULE`、`APP_OTA_APPLY ...`。
+
+26.3 **桌面入口**：电源菜单由三项变四项 —— `Update` / `Shutdown` / `Reboot` / `Cancel`（`Update` 永远可选，不依赖 `os` 函数）。`Update` 打开 **Updates** 屏（launcher 自绘，事件驱动，不新开 app）：
+
+```
+Updates 0.2.0
+> demo 1.0.1 package
+...
+enter install q=back
+```
+没有源时第二行是 `no updates`，第三行是内核给的原因（`no source` / `bad meta` / `no ota bridge`）；`up/down` 移动、`enter` 应用（日志 `ota apply name=.. ok=..`，失败显示内核文案如 `hash check failed`，不崩）、`q` 返回桌面。**不用 Esc**（ROM 不投递）。
+
+26.4 **测试**：新增 `tests/t_sys_ota.lua`（3 组 65 断言，已注册）：`ota.list`（无源 / 包源 / 镜像 meta / 坏 meta / cap 门槛）、`ota.apply`（包安装成功且落盘、镜像被拒 `image ota needs recovery`、缺包 `no_source`、卸载回滚）、`ota.launcher`（菜单第一项是 `Update`、四行渲染逐字、up/down/enter/q、无源时 `no updates`+原因、apply 失败显示 `hash check failed`、无桥时 `no ota bridge` 不崩）。`t_ota.lua`（kernel/ota.lua 协议套件，930 行）**保持原样**。电源菜单的四项也在 `t_desktop_loop` 的 `desktop_loop.power` 里逐字断言（已随本轮更新：`Update` 在第 3 行）。
+
+26.5 **数字**：离线 **4,699 pass / 0 fail / 233 groups**（上一轮 4,633/230，**+66 断言 / +3 组**）；`install.set` **29 条**（无新增文件）、TOTAL **560,258 B / SIZE_WARN**（超 stretch 210,733、距硬门禁 629,145 余 **68,887**）、`WINDOW_OK sum=760258`；改动 lua 非 ASCII 计数 0。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1076,3 +1108,4 @@ pulls=1
 - 2026-11-01: **q 留在桌面，Ctrl+T 才是出口**（口径见 §23）。真机反馈"launcher 上按 q 直接回 CraftOS shell"：根因是 launcher 的 `dispatch_event` 把 `escape` 与 `char q/Q` 返回 `"quit"`，启动链据此离开桌面。改法：launcher 新增 `M.LEAVE_HINT="Ctrl+T leaves Pyroet OS"`，三种键形态命中后只设提示 + `"repaint"`（日志 `APP_LOG app=launcher msg=leave hint ... scope=desktop`），不再 `"quit"`；`kernel/desktop.lua` 的 `terminate` 分支带作用域——租借中 `DESKTOP_TERMINATE scope=app` + `loan_end("terminate")`，前台是应用则把 terminate 投递给应用再 settle（`scope=app`），前台是桌面才 `scope=desktop` 并回 shell。测试：`t_desktop_loop` 新增 `desktop_loop.leave`（桌面 q 不退 + 第 18 行逐字提示 + 应用内 terminate 先退应用再退系统），`launcher_keys` 三处 quit→repaint，`boot`/`migrate` 的退出改用 `terminate` 且 launcher 保持 running。离线 **4,606 pass / 0 fail / 229 groups**（4,569/227）；`install.set` 29 条、TOTAL **543,481 B / SIZE_WARN / MARGIN 193,956**、`WINDOW_OK sum=743481`；改动 lua 非 ASCII 计数 0。
 - 2026-11-01: **进入桌面即就绪，不需要按键**（口径见 §24）。现象是开机/应用返回后要按一下方向键画面才"出来"。两个真因：①启动链第 7b 步画的 launcher 首帧被随后的提交日志、以及**仍然指向控制台的 app 运行时日志 sink**（每条 `APP_LOG` 都打印）反复盖掉；②`desktop.run()` 在第一次 pull 之前不画任何东西。修法：`desktop.run()` 进循环前投一次 `desk_focus`（空消息）+ tick 并记 `DESKTOP_READY app=..`（可用 `ready_paint=false` 关掉），`apps.lua` 新增 `A:set_log` 且 `startup.lua` 在 `quiet_log` 之后把运行时 sink 指过去，桌面阶段日志只进 `/kernel.log`。测试新增 `desktop_loop.ready`（零按键首帧逐字断言 + 应用退出/租借结束的返回帧 + pull 计数不增），`dispatcher` 假运行时统一 `ready_paint=false`。离线 **4,606 pass / 0 fail / 229 groups**（4,587/228）；`install.set` 29 条、TOTAL **543,481 B / SIZE_WARN / MARGIN 193,956**、`WINDOW_OK sum=743481`；改动 lua 非 ASCII 计数 0。真机复验：注入一个 terminate、pulls=1，首帧即完整桌面（row3 `> installer`、row18 `up/dn enter run`、row19 `4 apps sel 1/4`），日志 `DESKTOP_READY app=launcher`。
 - 2026-11-01: **Ctrl+T 打开电源菜单，不再退回 shell**（口径见 §25）。桌面收到 `terminate`/`shutdown` 不再返回 "terminate"（那会回 CraftOS shell），而是 `DESKTOP_TERMINATE scope=desktop` + `DESKTOP_POWER_MENU scope=desktop` + 投 `power_menu` 事件并 tick；launcher 自己画三项菜单（Shutdown/Reboot/Cancel，`up/down` 选、`enter` 执行、`Esc`/`q` 取消），执行前写 `POWER shutdown requested`/`POWER reboot requested`，缺 `os.shutdown`/`os.reboot` 时该行 `unavailable` 并给出原因；应用内 Ctrl+T 仍先退应用（`scope=app`）。launcher 的 `q/Q/Esc` 提示改为 `Ctrl+T opens power menu`。测试新增 `desktop_loop.power`（os stub、菜单逐字、Reboot 调用一次、Esc 回桌面、应用内不弹菜单、缺 os.shutdown 显示 unavailable），旧组统一 `power_menu = false`。离线 **4,633 pass / 0 fail / 230 groups**（4,606/229）；未 commit。
+- 2026-11-01: **桌面 OTA 入口 + installer 桥复核**（口径见 §26）。`api.sys.install/uninstall/list` 是 T4 的既有实现（本轮只补断言，未改语义）；新增 `api.sys.ota_list()` / `api.sys.ota_apply(name)`（cap `fs.read` / `fs.write`）：源 = `/disk/ota/meta.txt`（镜像更新，`kernel/ota.lua` 的 `O.parse_meta` 解析）+ `/disk/apps/<name>.app`（包更新）；无源 `no source`、坏 meta `bad meta`、镜像 apply 一律 `image ota needs recovery`（归 recovery），包 apply 复用同一 installer 对象。launcher 电源菜单由三项变四项（`Update` 在首位），`Update` 打开自绘 Updates 屏（`no updates` + 原因、`up/down/enter/q`、不用 Esc）。新增 `tests/t_sys_ota.lua`（3 组 65 断言），`t_ota.lua` 原样保留。离线 **4,699 pass / 0 fail / 233 groups**（4,633/230）；`install.set` 29 条、TOTAL **560,258 B / SIZE_WARN / MARGIN 210,733**（余 68,887）、`WINDOW_OK sum=760258`；无新增镜像文件。

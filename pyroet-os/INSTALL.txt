@@ -65,7 +65,10 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
    "Ctrl+T opens power menu" and the list stays. Ctrl+T (the ROM terminate
    event) opens the power menu -- Shutdown / Reboot / Cancel, up/down picks,
    enter runs, Esc or q cancels -- so there is no key that drops you back to
-   the CraftOS shell. Inside an app Ctrl+T leaves that app first (back to the
+   the CraftOS shell. The menu also has "Update": it lists what the source
+   medium offers (/disk/ota/meta.txt image, /disk/apps packages), applies a
+   package through the kernel bridge, and says "no updates" with a reason when
+   there is nothing to apply (q goes back; no Esc needed). Inside an app Ctrl+T leaves that app first (back to the
    desktop); press it again on the desktop to get the menu.
    If it returns to the shell right away, or if keys do nothing while the screen
    stays put, grep /kernel.log for STARTUP_DESKTOP_SKIP: input_denied /

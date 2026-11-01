@@ -59,10 +59,14 @@ M.LEAVE_HINT = "Ctrl+T opens power menu"
 -- and shows this instead. It is drawn by the launcher itself: no new app, no
 -- extra capability, exactly three entries.
 M.POWER_ITEMS = {
+    { id = "update", label = "Update" },
     { id = "shutdown", label = "Shutdown" },
     { id = "reboot", label = "Reboot" },
     { id = "cancel", label = "Cancel" },
 }
+-- the OTA screen (T5): the launcher only renders what the kernel reports; the
+-- kernel owns the medium, the meta parser and the installer
+M.OTA_TITLE = "Updates"
 M.POWER_TITLE = "Power"
 -- tests replace these instead of really shutting the machine down
 M.POWER_HOOKS = {}
@@ -368,7 +372,8 @@ function M.power_fn(id)
 end
 
 function M.power_available(id)
-    if id == "cancel" then return true end
+    -- the menu entries that do not call an `os` function
+    if id == "cancel" or id == "update" then return true end
     return M.power_fn(id) ~= nil
 end
 
@@ -409,6 +414,7 @@ function M.power_run(state, api, index)
     local item = M.POWER_ITEMS[index or state.power_index or 1]
     if item == nil then return "none" end
     if item.id == "cancel" then return M.power_close(state, api) end
+    if item.id == "update" then return M.ota_open(state, api) end
     local fn = M.power_fn(item.id)
     if fn == nil then
         M.note(api, "POWER " .. item.id .. " unavailable")
@@ -423,6 +429,129 @@ function M.power_run(state, api, index)
         return "error"
     end
     return "power"
+end
+
+-- The OTA screen. `api.sys.ota_list()` is the kernel's answer: `true, {source,
+-- entries}` when the medium offers something, `nil, reason` when it does not.
+-- Nothing here reads a file or reaches a network.
+function M.ota_open(state, api)
+    state.power = nil
+    state.ota = { index = 1, entries = {}, source = nil, reason = nil }
+    local sysax = type(api) == "table" and api.sys or nil
+    local list = type(sysax) == "table" and sysax.ota_list or nil
+    if type(list) ~= "function" then
+        state.ota.reason = "no ota bridge"
+        M.note(api, "ota unavailable")
+        return "repaint"
+    end
+    local called, ok, info = pcall(list)
+    if not called then
+        state.ota.reason = "ota failed"
+        M.note(api, "ota list failed err=" .. M.fit(tostring(ok), 40))
+        return "repaint"
+    end
+    if ok ~= true or type(info) ~= "table" then
+        state.ota.reason = tostring(info or "no source")
+        M.note(api, "ota list source=none reason=" .. state.ota.reason)
+        return "repaint"
+    end
+    state.ota.source = tostring(info.source or "?")
+    local entries = info.entries or {}
+    for i = 1, #entries do state.ota.entries[#state.ota.entries + 1] = entries[i] end
+    if #state.ota.entries == 0 then
+        state.ota.reason = "up to date"
+        M.note(api, "ota list source=" .. state.ota.source .. " entries=0")
+        return "repaint"
+    end
+    M.note(api, "ota list source=" .. M.fit(state.ota.source, 32)
+        .. " entries=" .. tostring(#state.ota.entries))
+    return "repaint"
+end
+
+function M.ota_close(state, api)
+    state.ota = nil
+    state.message = ""
+    M.note(api, "ota cancel")
+    return "repaint"
+end
+
+function M.ota_selected(state)
+    local ota = state.ota
+    if type(ota) ~= "table" then return nil end
+    return ota.entries[ota.index or 1]
+end
+
+function M.ota_move(state, delta)
+    local ota = state.ota
+    if type(ota) ~= "table" then return "none" end
+    local count = #ota.entries
+    local index = (ota.index or 1) + delta
+    if index < 1 then index = 1 end
+    if count > 0 and index > count then index = count end
+    ota.index = index
+    return "move"
+end
+
+-- Applying an entry: a package is installed through the kernel bridge; an image
+-- update is listed but reflashed by recovery (the kernel says so, verbatim).
+function M.ota_apply(state, api)
+    local ota = state.ota
+    local entry = M.ota_selected(state)
+    if type(entry) ~= "table" then
+        ota.reason = "no updates"
+        return "none"
+    end
+    local sysax = type(api) == "table" and api.sys or nil
+    local apply = type(sysax) == "table" and sysax.ota_apply or nil
+    if type(apply) ~= "function" then
+        ota.reason = "no ota bridge"
+        return "denied"
+    end
+    M.note(api, "ota apply name=" .. tostring(entry.name))
+    local called, ok, info = pcall(apply, entry.name)
+    if not called then
+        ota.reason = "apply failed"
+        M.note(api, "ota apply failed err=" .. M.fit(tostring(ok), 40))
+        return "error"
+    end
+    if ok ~= true then
+        ota.reason = tostring(info or "failed")
+        M.note(api, "ota apply name=" .. tostring(entry.name)
+            .. " ok=false reason=" .. ota.reason)
+        return "error"
+    end
+    state.message = "updated " .. tostring(entry.name)
+    M.note(api, "ota apply name=" .. tostring(entry.name) .. " ok=true")
+    return "power"
+end
+
+function M.ota_lines(state, cols, rows)
+    local ota = state.ota or {}
+    local out = {}
+    local function add(text)
+        if #out >= rows then return false end
+        out[#out + 1] = M.fit(text, cols)
+        return true
+    end
+    add(M.OTA_TITLE .. " " .. M.VERSION)
+    local entries = ota.entries or {}
+    if #entries == 0 then
+        add("no updates")
+        if ota.reason then add(tostring(ota.reason)) end
+    else
+        local index = ota.index or 1
+        local area = rows - 4
+        for i = 1, math.min(#entries, area) do
+            local entry = entries[i]
+            local marker = (i == index) and ">" or " "
+            add(marker .. " " .. tostring(entry.name) .. " "
+                .. tostring(entry.version or "?") .. " " .. tostring(entry.kind or ""))
+        end
+        if ota.reason then add(tostring(ota.reason)) end
+    end
+    while #out < rows - 1 do add("") end
+    add(M.fit("enter install q=back", cols))
+    return out
 end
 
 -- render the menu inside the same 26x19 frame (title, three entries, marker,
@@ -485,6 +614,7 @@ function M.render(state, cols, rows)
     if cols < M.MIN_COLS or rows < M.MIN_ROWS then
         return { M.compact_line(state, cols, rows) }
     end
+    if state.ota then return M.ota_lines(state, cols, rows) end
     if state.power then return M.power_lines(state, cols, rows) end
     local out = {}
     local function add(text)
@@ -776,6 +906,29 @@ end
 -- Returns "quit" when the desktop has to end, otherwise the handle_key action
 -- ("move" | "select" | "launch" | "error" | "denied" | "repaint" | "none").
 function M.dispatch_event(state, event, p1, p2, api)
+    -- the OTA screen: up/down move, enter applies, q cancels (no Esc: the ROM
+    -- does not deliver it, see DECISIONS.md)
+    if state.ota then
+        if event == "key" then
+            local key = p1
+            if type(key) == "number" then
+                key = M.code_name(key, api)
+                if key == nil then return "none" end
+            end
+            key = tostring(key == nil and "" or key):lower()
+            if key == "up" then return M.ota_move(state, -1) end
+            if key == "down" then return M.ota_move(state, 1) end
+            if key == "enter" then return M.ota_apply(state, api) end
+            if key == "q" then return M.ota_close(state, api) end
+            return "none"
+        end
+        if event == "char" then
+            local ch = tostring(p1 == nil and "" or p1):lower()
+            if ch == "q" then return M.ota_close(state, api) end
+            return "none"
+        end
+        return "none"
+    end
     -- the power menu owns the keyboard while it is open: up/down move, enter
     -- runs, q/Esc cancels (nothing else may act on the desktop meanwhile)
     if state.power then

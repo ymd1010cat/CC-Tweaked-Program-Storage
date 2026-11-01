@@ -139,7 +139,7 @@ pyroet-os/
        ├─ 8. boot.commit()      写全局 /boot.ok，删 journal 与 /update.backup
        └─ 9. 常驻桌面对话循环    commit 后**不返回**：kernel/desktop.lua 持有一个阻塞
                                 os.pullEvent，把事件规范化后投给前台应用（launcher）；
-                                **Ctrl+T（ROM 的 `terminate`）在桌面打开电源菜单**（Shutdown / Reboot / Cancel，
+                                **Ctrl+T（ROM 的 `terminate`）在桌面打开电源菜单**（Update / Shutdown / Reboot / Cancel；Update 列出 `/disk/ota/meta.txt` 与 `/disk/apps/*.app` 的更新，没有时显示 `no updates` + 原因，
                                 `up/down` 选、`enter` 执行、`Esc`/`q` 取消），不再直接退回 shell；
                                 桌面上按 `q`/`Q`/Esc 只写一行 `Ctrl+T opens power menu`，
                                 应用内按它们则退回 launcher（应用内 Ctrl+T 也是先退应用）
