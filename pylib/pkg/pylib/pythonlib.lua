@@ -252,6 +252,11 @@ local function pathIsFile(p)
     return fs.exists(p) == true and fs.isDir(p) ~= true
 end
 
+local osMakedirs, osMkdir, osRemove, osRmdir, osRename
+
+-- os.makedirs/mkdir/remove/rmdir/rename are declared before the builtin
+-- module table (see "os.path" above) and assigned after makeException, since
+-- raising a Python-style error needs the exception helper.
 local OS_PATH_MODULE = {__pytype="module", __name="os.path", __scope={
     basename = pathBase,
     dirname = pathDir,
@@ -293,6 +298,14 @@ local function getBuiltinModules()
         }},
         ["os.path"] = OS_PATH_MODULE,
     }
+    -- The os mutators raise Python-style errors, so they are assigned after
+    -- makeException; the wrappers read the upvalues at call time.
+    local osScope = BUILTIN_MODULES["os"].__scope
+    osScope.makedirs = function(p, exist_ok) return osMakedirs(p, exist_ok) end
+    osScope.mkdir = function(p) return osMkdir(p) end
+    osScope.remove = function(p) return osRemove(p) end
+    osScope.rmdir = function(p) return osRmdir(p) end
+    osScope.rename = function(src, dst) return osRename(src, dst) end
     return BUILTIN_MODULES
 end
 
@@ -323,6 +336,163 @@ local function excStr(e)
     if not isException(e) then return tostring(e) end
     if e.value == nil or e.value == "" then return e.type end
     return e.type .. ": " .. tostring(e.value)
+end
+
+-- ---------- None inside dicts ----------
+-- A Lua table cannot hold nil, so a Python None stored as a dict key or value
+-- is kept as this sentinel and unwrapped on every read. Nothing else ever
+-- creates DICT_NONE, so seeing it inside dict data always means Python None.
+-- A separate sentinel from the exception/os ones keeps that guarantee local.
+local DICT_NONE = {__pytype = "none"}
+
+local function dictWrap(v)
+    if v == nil then return DICT_NONE end
+    return v
+end
+
+local function dictUnwrap(v)
+    if v == DICT_NONE then return nil end
+    return v
+end
+
+-- Returns value, found. A stored None is a legal value, so callers that must
+-- tell "present but None" from "absent" (get/pop/`in`/KeyError) use `found`.
+local function dictLookup(d, key)
+    local raw = d.data[dictWrap(key)]
+    if raw == nil then return nil, false end
+    return dictUnwrap(raw), true
+end
+
+local function dictSet(d, key, value)
+    d.data[dictWrap(key)] = dictWrap(value)
+end
+
+local function dictDelete(d, key)
+    local rawKey = dictWrap(key)
+    local raw = d.data[rawKey]
+    if raw == nil then return nil, false end
+    d.data[rawKey] = nil
+    return dictUnwrap(raw), true
+end
+
+-- ---------- os mutators ----------
+-- CPython-style errors: FileExistsError / FileNotFoundError derive from
+-- OSError. The exception-class fallback turns the name into a class, so
+-- `except OSError` catches all three without passing a class object here.
+local function osError(name, msg)
+    error(makeException(name, msg), 0)
+end
+
+-- CraftOS-PC 2.8.3 does not report success through the return value of every
+-- fs call: fs.makeDir returns nil even after creating the directory, and
+-- fs.move returns nil when it refuses a move. Every check below is therefore
+-- made from the filesystem state, not from the call's return value.
+osMkdir = function(p)
+    p = tostring(p)
+    if fs.exists(p) == true then
+        osError("FileExistsError", "mkdir: path exists: " .. p)
+    end
+    local parent = pathDir(p)
+    if parent ~= "" and fs.exists(parent) ~= true then
+        osError("FileNotFoundError",
+            "mkdir: no such parent directory: " .. p)
+    end
+    fs.makeDir(p)
+    if fs.isDir(p) ~= true then
+        osError("OSError", "mkdir: cannot create directory: " .. p)
+    end
+    return nil
+end
+
+osMakedirs = function(p, existOk)
+    p = tostring(p)
+    if p == "" then
+        osError("FileNotFoundError", "makedirs: empty path")
+    end
+    local absolute = p:sub(1, 1) == "/"
+    local parts = {}
+    for part in p:gmatch("[^/]+") do parts[#parts + 1] = part end
+    if #parts == 0 then
+        -- the path is just "/" (or a run of slashes): it can only exist
+        if fs.exists(p) == true then
+            if existOk then return nil end
+            osError("FileExistsError", "makedirs: path exists: " .. p)
+        end
+        osError("OSError", "makedirs: cannot create: " .. p)
+    end
+    local cur = absolute and "/" or ""
+    local created = false
+    for _, part in ipairs(parts) do
+        if cur == "" then cur = part
+        elseif cur == "/" then cur = "/" .. part
+        else cur = cur .. "/" .. part end
+        if fs.exists(cur) == true then
+            if fs.isDir(cur) ~= true then
+                osError("FileExistsError",
+                    "makedirs: path exists and is not a directory: " .. cur)
+            end
+        else
+            created = true
+            fs.makeDir(cur)
+            if fs.isDir(cur) ~= true then
+                osError("OSError",
+                    "makedirs: cannot create directory: " .. cur)
+            end
+        end
+    end
+    if not created and existOk ~= true then
+        -- every level already existed, so CPython raises here (exist_ok=False)
+        osError("FileExistsError", "makedirs: path exists: " .. p)
+    end
+    return nil
+end
+
+osRemove = function(p)
+    p = tostring(p)
+    if fs.exists(p) ~= true then
+        osError("FileNotFoundError", "remove: no such file: " .. p)
+    end
+    if fs.isDir(p) == true then
+        osError("OSError", "remove: is a directory: " .. p)
+    end
+    fs.delete(p)
+    if fs.exists(p) == true then
+        osError("OSError", "remove: cannot delete: " .. p)
+    end
+    return nil
+end
+
+osRmdir = function(p)
+    p = tostring(p)
+    if fs.exists(p) ~= true then
+        osError("FileNotFoundError", "rmdir: no such directory: " .. p)
+    end
+    if fs.isDir(p) ~= true then
+        osError("OSError", "rmdir: not a directory: " .. p)
+    end
+    local entries = fs.list(p)
+    if entries and #entries > 0 then
+        osError("OSError", "rmdir: directory not empty: " .. p)
+    end
+    fs.delete(p)
+    if fs.exists(p) == true then
+        osError("OSError", "rmdir: cannot remove directory: " .. p)
+    end
+    return nil
+end
+
+osRename = function(src, dst)
+    src = tostring(src)
+    dst = tostring(dst)
+    if fs.exists(src) ~= true then
+        osError("FileNotFoundError", "rename: no such file: " .. src)
+    end
+    fs.move(src, dst)
+    -- success means the source is gone and the destination exists
+    if fs.exists(src) == true or fs.exists(dst) ~= true then
+        osError("OSError", "rename: cannot move " .. src .. " -> " .. dst)
+    end
+    return nil
 end
 
 local function containsYield(node)
@@ -1718,7 +1888,10 @@ local EXC_PARENTS = {
     ["AssertionError"] = "Exception",
     ["StopIteration"] = "Exception",
     ["AttributeError"] = "Exception",
-    ["IOError"] = "Exception",
+    ["OSError"] = "Exception",
+    ["IOError"] = "OSError",
+    ["FileExistsError"] = "OSError",
+    ["FileNotFoundError"] = "OSError",
 }
 
 local function excClass(name)
@@ -1755,6 +1928,20 @@ local function exceptionIsInstanceOf(e, cls)
     return isSubclass(exceptionClassOf(e), cls)
 end
 
+-- ---------- primitive type objects ----------
+-- `int`, `str`, ... are shared singletons too. Module code compares them by
+-- identity (argparse's `type=int` check compares the caller's class object
+-- with its own `int`), so a per-interpreter table would never match.
+local PRIM_CLASSES = {}
+local function primClass(name)
+    local cls = PRIM_CLASSES[name]
+    if cls then return cls end
+    cls = {__pytype = "class", name = name, bases = {},
+           methods = {}, attrs = {}}
+    PRIM_CLASSES[name] = cls
+    return cls
+end
+
 local function pyRepr(v)
     if v == nil then return "None" end
     if v == true then return "True" end
@@ -1786,7 +1973,7 @@ local function pyRepr(v)
         elseif v.__pytype == "dict" then
             local p = {}
             for k,val in pairs(v.data) do
-                p[#p+1]=pyRepr(k)..": "..pyRepr(val)
+                p[#p+1]=pyRepr(dictUnwrap(k))..": "..pyRepr(dictUnwrap(val))
             end
             return "{" .. table.concat(p, ", ") .. "}"
         elseif v.__pytype == "tuple" then
@@ -2239,20 +2426,16 @@ function Interpreter:getBuiltins()
         ["property"] = function(f) return f end,
         ["staticmethod"] = function(f) return f end,
         ["classmethod"] = function(f) return f end,
-        ["object"] = {__pytype="class", name="object", bases={},
-                      methods={}, attrs={}},
-        ["int"]    = {__pytype="class", name="int", bases={},
-                      methods={}, attrs={}},
-        ["float"]  = {__pytype="class", name="float", bases={},
-                      methods={}, attrs={}},
-        ["str"]    = {__pytype="class", name="str", bases={},
-                      methods={}, attrs={}},
-        ["bool"]   = {__pytype="class", name="bool", bases={},
-                      methods={}, attrs={}},
-        ["list"]   = {__pytype="class", name="list", bases={},
-                      methods={}, attrs={}},
-        ["dict"]   = {__pytype="class", name="dict", bases={},
-                      methods={}, attrs={}},
+        -- Primitive type objects are shared singletons so an identity test
+        -- like `t == int` works across interpreters: argparse compares its
+        -- `type=` argument (passed in by the caller) with the `int` it sees.
+        ["object"] = primClass("object"),
+        ["int"]    = primClass("int"),
+        ["float"]  = primClass("float"),
+        ["str"]    = primClass("str"),
+        ["bool"]   = primClass("bool"),
+        ["list"]   = primClass("list"),
+        ["dict"]   = primClass("dict"),
         -- Exception names are class tables (see excClass): usable as a base
         -- class, callable as a constructor, comparable through except and
         -- isinstance. `raise ValueError("boom")` still throws
@@ -2270,6 +2453,9 @@ function Interpreter:getBuiltins()
         ["AssertionError"]   = excClass("AssertionError"),
         ["StopIteration"]    = excClass("StopIteration"),
         ["AttributeError"]   = excClass("AttributeError"),
+        ["OSError"]          = excClass("OSError"),
+        ["FileExistsError"]  = excClass("FileExistsError"),
+        ["FileNotFoundError"] = excClass("FileNotFoundError"),
         ["NotImplementedError"] = excClass("NotImplementedError"),
     }
 end
@@ -2403,7 +2589,8 @@ function Interpreter:eval(node)
     elseif t=="Dict" then
         local d = {__pytype="dict", data={}}
         for _,p in ipairs(node.pairs) do
-            d.data[self:eval(p.key)] = self:eval(p.value)
+            -- dictSet keeps a None key/value (Lua tables cannot store nil)
+            dictSet(d, self:eval(p.key), self:eval(p.value))
         end
         return d
     elseif t=="BinOp" then return self:evalBinOp(node)
@@ -2449,8 +2636,8 @@ function Interpreter:eval(node)
             return obj:sub(i, i)
         elseif type(obj) == "table" then
             if obj.__pytype == "dict" then
-                local v = obj.data[idx]
-                if v == nil then
+                local v, found = dictLookup(obj, idx)
+                if not found then
                     error(makeException("KeyError", pyStr(idx)), 0)
                 end
                 return v
@@ -2524,7 +2711,7 @@ luaToPy = function(v)
     end
     local result = {__pytype = "dict", data = {}}
     for k, val in pairs(v) do
-        result.data[k] = luaToPy(val)
+        dictSet(result, luaToPy(k), luaToPy(val))
     end
     return result
 end
@@ -2539,7 +2726,11 @@ pyToLua = function(v)
     if v.__pytype == "dict" then
         local t = {}
         for k, val in pairs(v.data) do
-            t[pyToLua(k)] = pyToLua(val)
+            -- a None key or value has no Lua representation, so it is
+            -- dropped during the conversion (same rule as a None in *args)
+            local pk = dictUnwrap(k)
+            local pv = dictUnwrap(val)
+            if pk ~= nil then t[pyToLua(pk)] = pyToLua(pv) end
         end
         return t
     end
@@ -2615,7 +2806,7 @@ function Interpreter:evalComprehension(node)
         elseif kind == "dict" then
             local k = self:eval(node.element)
             local v = self:eval(node.value)
-            result.data[k] = v
+            dictSet(result, k, v)
         end
     end)
 
@@ -2722,16 +2913,19 @@ function Interpreter:makeFunction(name, params, body, vararg, kwarg)
         end
         if kwData then
             for k, v in pairs(kwData) do
+                -- a None keyword value is kept as the dict sentinel, so it
+                -- must be unwrapped before it reaches a plain Lua slot
+                local vv = dictUnwrap(v)
                 local matched = false
                 for _, p in ipairs(params) do
                     if p.name == k then
-                        funcScope[p.name] = v
+                        funcScope[p.name] = vv
                         matched = true
                         break
                     end
                 end
                 if not matched and kwarg then
-                    funcScope[kwarg].data[k] = v
+                    dictSet(funcScope[kwarg], k, vv)
                 end
             end
         end
@@ -2845,11 +3039,15 @@ function Interpreter:evalCall(node)
             local v = self:eval(a.expr)
             if type(v) == "table" and v.__pytype == "dict" then
                 if not kwData then kwData = {} end
-                for k, val in pairs(v.data) do kwData[k] = val end
+                -- copy the stored value as-is: a None stays a sentinel in
+                -- kwData and is unwrapped when the parameter is bound
+                for k, val in pairs(v.data) do
+                    kwData[dictUnwrap(k)] = val
+                end
             end
         elseif a.type == "KwArg" then
             if not kwData then kwData = {} end
-            kwData[a.name] = self:eval(a.value)
+            kwData[a.name] = dictWrap(self:eval(a.value))
         else
             argCount = argCount + 1
             args[argCount] = self:eval(a)
@@ -3175,15 +3373,17 @@ function Interpreter:getAttr(obj, name)
         elseif obj.__pytype == "dict" then
             if name=="get" then
                 return function(k,d)
-                    local v=obj.data[k]
-                    if v==nil then return d end
+                    local v, found = dictLookup(obj, k)
+                    if not found then return d end
                     return v
                 end
             end
             if name=="keys" then
                 return function()
                     local o={__pytype="list"}
-                    for k in pairs(obj.data) do table.insert(o, k) end
+                    for k in pairs(obj.data) do
+                        table.insert(o, dictUnwrap(k))
+                    end
                     return o
                 end
             end
@@ -3191,7 +3391,7 @@ function Interpreter:getAttr(obj, name)
                 return function()
                     local o={__pytype="list"}
                     for _,v in pairs(obj.data) do
-                        table.insert(o, v)
+                        table.insert(o, dictUnwrap(v))
                     end
                     return o
                 end
@@ -3200,7 +3400,8 @@ function Interpreter:getAttr(obj, name)
                 return function()
                     local o={__pytype="list"}
                     for k,v in pairs(obj.data) do
-                        table.insert(o, {__pytype="tuple", k, v})
+                        table.insert(o, {__pytype="tuple",
+                                         dictUnwrap(k), dictUnwrap(v)})
                     end
                     return o
                 end
@@ -3208,15 +3409,14 @@ function Interpreter:getAttr(obj, name)
             if name=="update" then
                 return function(other)
                     for k,v in pairs(other.data) do
-                        obj.data[k]=v
+                        dictSet(obj, dictUnwrap(k), dictUnwrap(v))
                     end
                 end
             end
             if name=="pop" then
                 return function(k,d)
-                    local v = obj.data[k]
-                    if v==nil then return d end
-                    obj.data[k] = nil
+                    local v, found = dictDelete(obj, k)
+                    if not found then return d end
                     return v
                 end
             end
@@ -3335,7 +3535,8 @@ function Interpreter:evalBinOp(node)
         end
         if type(r)=="table" then
             if r.__pytype=="dict" then
-                return r.data[l] ~= nil
+                local _, found = dictLookup(r, l)
+                return found
             end
             if r.__pytype == "instance" then
                 local contains = lookupMethod(r.__class, "__contains__")
@@ -3397,7 +3598,7 @@ function Interpreter:execDel(target)
         local idx = self:eval(target.index)
         if type(obj) == "table" then
             if obj.__pytype == "dict" then
-                obj.data[idx] = nil
+                dictDelete(obj, idx)
             elseif obj.__pytype == "list" then
                 table.remove(obj, idx + 1)
             else
@@ -3886,7 +4087,7 @@ function Interpreter:assignTarget(target, value)
         local idx = self:eval(target.index)
         if type(obj)=="table" then
             if obj.__pytype=="dict" then
-                obj.data[idx]=value
+                dictSet(obj, idx, value)
             elseif obj.__pytype == "instance" then
                 local m = lookupMethod(obj.__class, "__setitem__")
                 if m then m(obj, idx, value); return end

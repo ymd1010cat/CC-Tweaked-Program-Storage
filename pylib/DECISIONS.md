@@ -12,8 +12,11 @@
 | `print(None)` 打印空行 | **已修** | `print(f())`（f 无返回值）会静默丢一个参数 |
 | 调用参数里的 `None` 被丢弃 | **已修** | `f(1, None, 3)` 会把 3 当成第二个参数 |
 | 负下标 `l[-1]` | **已修** | 与切片不一致（切片已归一化负界），改 3 处、可完整验证 |
-| `class X(Exception)` | **已实现**（本轮） | 内置异常改成类表 + `raise`/`except`/`isinstance` 走基类链，复用原有 `makeException` 表示（§3.1） |
-| `pathlib.py` 的 `os.path` | **已实现**（本轮） | 新增内置 `os.path` 最小面 7 个函数 + dotted import 按 Python 绑定（§3.2） |
+| `class X(Exception)` | **已实现**（第一轮） | 内置异常改成类表 + `raise`/`except`/`isinstance` 走基类链，复用原有 `makeException` 表示（§3.1） |
+| `pathlib.py` 的 `os.path` | **已实现**（第一轮） | 新增内置 `os.path` 最小面 7 个函数 + dotted import 按 Python 绑定（§3.2） |
+| dict 里的 `None`（键或值） | **已实现**（第二轮） | 哨兵表 `DICT_NONE` + 一对 wrap/unwrap，所有 dict 读写点集中到 5 个 helper；argparse 的 `KeyError: action` 随之消失（§3.3） |
+| `os.makedirs/mkdir/remove/rmdir/rename` | **已实现**（第二轮） | pathlib 写方法的底层；错误名对齐 CPython（FileExistsError/FileNotFoundError/OSError）（§3.4） |
+| 内置类型对象共享单例 `primClass` | **已实现**（第二轮） | argparse 的 `type=int` 是身份比较，每解释器新建的类表永远不相等（§3.5） |
 | 性能槽位化 | **押后** | 实测宿主 VM 上哈希访问不比数组槽快，收益上限约 1–3%（见 §4），重写面却覆盖全部名字解析路径 |
 
 ## 1. 切片下标（已实现）
@@ -86,7 +89,7 @@ COVERAGE.md §2。**行为变化**：位置参数里的 None 现在按 Python �
 **行为变化**：`l[-1]` 从抛错变成返回最后一个元素；越界赋值仍不检查范围（沿用原语义，
 记录在 COVERAGE.md）。
 
-## 3. 上一轮的两个缺口（本轮已实现）
+## 3. 已补齐的缺口（第一轮：异常类 + os.path；第二轮：dict None + os 写操作）
 
 上一轮这两条被列为"未修、保持 fail-loud"；本轮按用户拍板补齐，全部落成断言，
 只改 `pythonlib.lua`，`pkg/pylib/*.py` 零改动。
@@ -158,11 +161,80 @@ COVERAGE.md §2。**行为变化**：位置参数里的 None 现在按 Python �
 （别名/from-import/`import os` 的 `os.path`/裸 `import os.path`），共 28 条；
 另有 pathlib 的 8 条行为断言。
 
-**遗留（本轮不修，已记录）**：`argparse.parse_args` 只有 `action="store_true"` 分支能跑；
-`type=int` 或省略 `action` 的 spec 会在 `spec["action"]` 处报 `KeyError: action`，
-根因是解释器字典存不了 `None`（`{"action": None}` 的键直接消失），属字典限制，
-与异常类/`os.path` 无关。修它要动字典存储（加 None 哨兵或旁路表），影响面远大于本轮缺口，
-且不属于"异常类 + os.path"的验收范围，因此只记录在 `tests/COVERAGE.md` §2 与 README。
+**遗留（第一轮记录，第二轮已修）**：`argparse.parse_args` 当时只有 `action="store_true"`
+分支能跑，`type=int` 或省略 `action` 的 spec 会在 `spec["action"]` 处报 `KeyError: action`，
+根因是解释器字典存不了 `None`。这条在第二轮按"dict 里的 None"修掉了，见 §3.3 / §3.5。
+
+### 3.3 dict 里的 `None`（已实现，第二轮）
+
+**问题**：Lua 表存不了 nil，所以 `{"a": None}` 的键会直接消失（`len` 为 0）。受影响的是
+真实的 `.py` 代码：`argparse` 的 `Action` 规格 dict 用 `{"action": None, "help": None, ...}`
+装一个"没给这个参数"的哨兵，于是 `spec["action"]` 报 `KeyError: action`；
+`json.loads` 的 `null` 同样存不住。
+
+**做法（哨兵 + 集中读写点，不改 `__pytype` 模型）**：
+
+1. 新增内部哨兵 `DICT_NONE`（`{__pytype = "none"}`）。只有 dict 内部会存它，
+   读取时 `dictUnwrap` 还原成 `nil`，写入时 `dictWrap` 把 `nil` 换成它。
+   于是"键存在但值是 None"与"键不存在"在 Lua 层可区分。
+2. 五个 helper 收口所有 dict 访问：`dictWrap` / `dictUnwrap` / `dictLookup`（返回
+   value, found）/ `dictSet` / `dictDelete`（返回 value, found）。调用点全部替换：
+   dict 字面量、`d[k]` 读、`d[k] = v`、`del d[k]`、`in`、`get`/`pop`/`keys`/`values`/
+   `items`/`update`、dict 推导式、`pyRepr`、`len`（`pairs` 天然正确）、`luaToPy`/`pyToLua`、
+   `**kwargs` 的两条路径（`f(a=None)` 与 `f(**dict)`）、`bindArgs`。
+3. `get`/`pop` 用 `found` 而不是"取到 nil 就用默认值"：`{"a": None}.get("a", "x")`
+   返回 `None`（CPython 语义），键不存在才返回 `"x"`。
+4. `pylib_to_lua` 方向：None 键/值在转成 Lua 表时被丢掉（Lua 没有 None），
+   与"None 落进 *args 会被丢"同一条既有边界，记录在 COVERAGE §2。
+
+**边界（未做）**：`None` 仍然不能存进 **list**（`#`/洞问题），所以 `values()`/`items()`
+把含 None 的 dict 展开成 list、`copy.deepcopy` 遇到 None 时会丢那一项，`[None]` 无法表示。
+这次只按用户要求把 **dict** 的键/值做成可存，没有扩大到 list 表示。
+
+**验证**：`t_dict_none.lua` 5 组 20 条（值/键/缺键/json/`**kwargs`）；
+`argparse` 的最小路径断言在 `modules:functional`（`ns.count + 1 == 6`）。
+
+### 3.4 `os.makedirs/mkdir/remove/rmdir/rename`（已实现，第二轮）
+
+**问题**：`pathlib.Path` 的 `mkdir`/`write_text`/`read_text`/`unlink`/`rename` 分别调用
+`os.makedirs`/`os.mkdir`/`os.remove`/`os.rmdir`/`os.rename`，而 `os` 模块只有
+`getcwd`/`listdir`，所以这些方法必崩。
+
+**做法**：
+
+1. `os` 模块新增五个函数：`makedirs(path[, exist_ok])`（逐级创建；叶子已存在时按
+   CPython 的 `exist_ok` 语义：默认 `FileExistsError`，`exist_ok=True` 静默返回）、
+   `mkdir`（单级，父目录缺失报 `FileNotFoundError`）、`remove`（缺失
+   `FileNotFoundError`，目录报 `OSError`）、`rmdir`（非空目录报 `OSError`）、
+   `rename`（源缺失 `FileNotFoundError`）。
+2. 错误名对齐 CPython：新增异常类 `OSError`（父 `Exception`）、`FileExistsError` /
+   `FileNotFoundError`（父 `OSError`），并把 `IOError` 的父改成 `OSError`
+   （Python 里 IOError 就是 OSError 的别名）。于是 `except OSError` 能接住这三类。
+3. **成功判定一律看文件系统状态，不看返回值**：CraftOS-PC 2.8.3 的 `fs.makeDir`
+   建好了目录却返回 `nil`，`fs.move` 被拒时也返回 `nil`。所以 `mkdir` 用
+   `fs.isDir(p)`、`remove`/`rmdir` 用 `fs.exists(p) == true` 复核、`rename` 用
+   "源消失且目标出现"复核。这条坑与本仓库 pyroet-os 里 `fs.move` 的记录同源。
+4. 范围控制：没有做 `stat`/`chmod`/`walk`/`rmtree`，也没有把报错文案写成 CPython 的
+   `[Errno N] ...`（只对齐异常类型）。
+
+**验证**：`os-path:mkdir` 6 条、`os-path:remove-rmdir` 5 条、`os-path:rename` 2 条、
+`os-path:error-hierarchy` 4 条（共 17 条）；`pathlib` 的
+`mkdir(parents=True)`/`write_text`/`read_text`/`unlink`/`rename` 在
+`modules:functional` 各有一条。
+
+### 3.5 内置类型对象共享单例 `primClass`（已实现，第二轮）
+
+**问题**：`getBuiltins()` 每次调用都新建 `int`/`str`/... 的类表，而 argparse 的
+`if spec["type"] == int:` 是**身份比较**（`pyEq` 对表只比引用）。调用方传进来的
+`int` 与 argparse 模块内部的 `int` 不是同一张表，于是 `type=int` 的值不会被转换
+（`parse_args(["--count","5"])` 得到字符串 `"5"`，`ns.count + 1` 抛 TypeError）。
+
+**做法**：新增 `primClass(name)` + `PRIM_CLASSES`，把 `object/int/float/str/bool/list/dict`
+做成进程级共享单例（与第一轮的 `excClass` 同一思路）。`evalCall` 仍按 `func.name` 特判，
+所以构造语义不变；`isinstance` 用 `cls.name`，也不受影响。行为变化只有：内置类型对象
+在跨解释器比较时现在相等（更接近 Python）。
+
+**验证**：`modules:functional` 的 `ns.count + 1 == 6`（若比较失效则得到 `"5" + 1` 的 TypeError）。
 
 ## 4. 性能槽位化：押后（有实测依据）
 
@@ -215,12 +287,15 @@ while+s+i 那一轮每迭代约 10 次名字读写，2450ns 里宿主原语只�
   `manifest` 的哈希与导出时一致（未被改动）。
 - `MANIFEST.md` 追加"post-export fixes"小节记录新字节数/行数/原因；导出段的历史数字
   保持原样（那是还原记录，且比磁盘实测少 1 字节，属导出脚本口径差，不追改）。
-- 本轮（异常类 + `os.path`）后 `pythonlib.lua` 为 144913 字节 / 4021 行，`SHA256SUMS`
-  里的哈希再算一次（`343c78bd4c50378e0afdeb29ce3585898b33b5e94e1f549ed39c999a0a2b330b`）；
+- 第一轮（异常类 + `os.path`）后 `pythonlib.lua` 为 144913 字节 / 4021 行，`SHA256SUMS`
+  里的哈希随之更新（`343c78bd4c50378e0afdeb29ce3585898b33b5e94e1f549ed39c999a0a2b330b`）；
   其余 15 个 `.py`、`py.lua`、`pyrepl.lua`、`manifest` 未改动，哈希不变。
+- 第二轮（dict None + os 写操作 + `primClass`）后为 152406 字节 / 4222 行，哈希再算一次
+  （`1699dcf6e425aa445336ab995f6b92ff0b4d318b29f3d6ae764de6207bbda5d3`）；仍只有
+  `pythonlib.lua` 变化，`SHA256SUMS` 19/19 通过。
 
 ## 6. 复现
 
-    pwsh -NoProfile -File pylib\tests\run-tests.ps1            # PYLIB_PASS 247 / FAIL 0 / GROUPS 34
+    pwsh -NoProfile -File pylib\tests\run-tests.ps1            # PYLIB_PASS 290 / FAIL 0 / GROUPS 43
     pwsh -NoProfile -File pylib\tests\run-tests.ps1 -KeepStaging
     Get-Content pylib\.tests\computer\20\logs\suite.log        # GROUP / NOTE PERF / MODULE 全量

@@ -78,3 +78,69 @@ H.expect('import os.path\nprint(os.path.dirname("/a/b"))', "/a",
     "plain import os.path binds the os package, not the submodule")
 H.expect('import os.path\nprint(os.path.basename("a/b.txt"))', "b.txt",
     "plain import os.path then os.path.<fn>")
+
+-- ---------- os.makedirs / mkdir / remove / rmdir / rename ----------
+-- These are the mutators pathlib's write methods call. Every case uses its own
+-- path so the assertions do not depend on each other's leftovers.
+
+H.group("os-path:mkdir")
+H.expect('import os\nos.makedirs("/pylib-dbg/a/b")\n' ..
+    'print(os.path.isdir("/pylib-dbg/a/b"))', "True",
+    "makedirs creates every missing level")
+H.expect('import os\nos.makedirs("/pylib-dbg/a/b", True)\n' ..
+    'os.makedirs("/pylib-dbg/a/b", True)\nprint("ok")', "ok",
+    "makedirs with exist_ok=True tolerates an existing tree")
+H.expect('import os\nos.makedirs("/pylib-dbg/a/b/exists")\ntry:\n' ..
+    '    os.makedirs("/pylib-dbg/a/b/exists")\nexcept FileExistsError:\n' ..
+    '    print("exists")', "exists",
+    "makedirs without exist_ok raises FileExistsError")
+H.expect('import os\nos.mkdir("/pylib-dbg/single")\n' ..
+    'print(os.path.isdir("/pylib-dbg/single"))', "True", "mkdir creates one level")
+H.expect('import os\nos.mkdir("/pylib-dbg/dup")\ntry:\n' ..
+    '    os.mkdir("/pylib-dbg/dup")\nexcept FileExistsError:\n' ..
+    '    print("exists")', "exists", "mkdir on an existing path is FileExistsError")
+H.expect('import os\ntry:\n    os.mkdir("/pylib-dbg/no-parent/x")\n' ..
+    'except FileNotFoundError:\n    print("noparent")', "noparent",
+    "mkdir with a missing parent is FileNotFoundError")
+
+H.group("os-path:remove-rmdir")
+H.expect('import os\ntry:\n    os.remove("/pylib-dbg/never")\n' ..
+    'except FileNotFoundError:\n    print("missing")', "missing",
+    "remove on a missing path is FileNotFoundError")
+H.expect('import os\nos.makedirs("/pylib-dbg/rm")\n' ..
+    'f = open("/pylib-dbg/rm/f.txt", "w")\nf.write("x")\nf.close()\n' ..
+    'os.remove("/pylib-dbg/rm/f.txt")\n' ..
+    'print(os.path.exists("/pylib-dbg/rm/f.txt"))', "False",
+    "remove deletes a file")
+H.expect('import os\ntry:\n    os.remove("/pylib-dbg/rm")\n' ..
+    'except OSError:\n    print("isdir")', "isdir",
+    "remove on a directory is an OSError")
+H.expect('import os\nos.makedirs("/pylib-dbg/full")\n' ..
+    'f = open("/pylib-dbg/full/f.txt", "w")\nf.write("x")\nf.close()\n' ..
+    'try:\n    os.rmdir("/pylib-dbg/full")\nexcept OSError:\n' ..
+    '    print("notempty")', "notempty", "rmdir on a non-empty directory is OSError")
+H.expect('import os\nos.makedirs("/pylib-dbg/gone")\n' ..
+    'os.rmdir("/pylib-dbg/gone")\n' ..
+    'print(os.path.exists("/pylib-dbg/gone"))', "False",
+    "rmdir removes an empty directory")
+
+H.group("os-path:rename")
+H.expect('import os\nos.makedirs("/pylib-dbg/old")\n' ..
+    'os.rename("/pylib-dbg/old", "/pylib-dbg/new")\n' ..
+    'print(os.path.isdir("/pylib-dbg/new"))\n' ..
+    'print(os.path.exists("/pylib-dbg/old"))', "True\nFalse",
+    "rename moves a directory")
+H.expect('import os\ntry:\n' ..
+    '    os.rename("/pylib-dbg/never", "/pylib-dbg/x")\n' ..
+    'except FileNotFoundError:\n    print("missing")', "missing",
+    "rename on a missing source is FileNotFoundError")
+
+H.group("os-path:error-hierarchy")
+H.expect('print(isinstance(FileExistsError("x"), OSError))', "True",
+    "FileExistsError is an OSError subclass")
+H.expect('print(isinstance(FileNotFoundError("x"), OSError))', "True",
+    "FileNotFoundError is an OSError subclass")
+H.expect('print(isinstance(OSError("x"), Exception))', "True",
+    "OSError is an Exception subclass")
+H.expect('try:\n    raise FileNotFoundError("x")\nexcept OSError:\n' ..
+    '    print("os")', "os", "except OSError catches FileNotFoundError")

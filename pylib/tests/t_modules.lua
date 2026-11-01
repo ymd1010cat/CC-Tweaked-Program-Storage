@@ -145,6 +145,18 @@ H.expect('import argparse\np = argparse.ArgumentParser()\n' ..
     'p.add_argument("--verbose", action="store_true")\n' ..
     'ns = p.parse_args(["--verbose"])\nprint(ns.verbose)', "True",
     "argparse: parse_args with action=store_true populates the namespace")
+-- The full minimal path: ArgumentParser -> add_argument with a type -> the
+-- Action spec dict holds `action=None`/`help=None` -> parse_args reads those
+-- keys (this is the KeyError: action case) and converts the value. The `+ 1`
+-- proves the conversion actually produced an int, not the string "5".
+H.expect('import argparse\np = argparse.ArgumentParser(description="d")\n' ..
+    'p.add_argument("--count", type=int)\n' ..
+    'ns = p.parse_args(["--count", "5"])\nprint(ns.count + 1)', "6",
+    "argparse: parse_args with type=int converts and returns a namespace")
+H.expect('import argparse\np = argparse.ArgumentParser(description="d")\n' ..
+    'p.add_argument("--name")\n' ..
+    'print(p.parse_args(["--name", "x"]).name)', "x",
+    "argparse: parse_args with an untyped option")
 H.expect('import copy\nl = [1, 2]\nm = copy.copy(l)\nm.append(3)\n' ..
     'print(l)\nprint(m)', "[1, 2]\n[1, 2, 3]", "copy: shallow copy is a new list")
 H.expect('import copy\nd = {"a": [1]}\ne = copy.deepcopy(d)\n' ..
@@ -162,3 +174,16 @@ H.expect('import pathlib\n' ..
     'print(pathlib.Path("/pylib/pathlib.py").is_file())\n' ..
     'print(pathlib.Path("/nope-xyz").exists())', "True\nTrue\nFalse",
     "pathlib: Path queries the real filesystem")
+-- pathlib's write methods go through os.makedirs / os.remove / os.rename.
+H.expect('import pathlib\nd = pathlib.Path("/pylib-dbg/pl/deep")\n' ..
+    'd.mkdir(parents=True)\nprint(d.is_dir())', "True",
+    "pathlib: Path.mkdir(parents=True) creates the tree")
+H.expect('import pathlib\nf = pathlib.Path("/pylib-dbg/pl/deep/f.txt")\n' ..
+    'f.write_text("hello")\nprint(f.read_text())', "hello",
+    "pathlib: write_text then read_text round trip")
+H.expect('import pathlib\nf = pathlib.Path("/pylib-dbg/pl/deep/f.txt")\n' ..
+    'f.unlink()\nprint(f.exists())', "False", "pathlib: unlink removes the file")
+H.expect('import pathlib\na = pathlib.Path("/pylib-dbg/pl/deep/a.txt")\n' ..
+    'a.write_text("x")\nb = pathlib.Path("/pylib-dbg/pl/deep/b.txt")\n' ..
+    'a.rename(b)\nprint(b.exists())\nprint(a.exists())', "True\nFalse",
+    "pathlib: rename moves the file")

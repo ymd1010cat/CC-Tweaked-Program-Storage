@@ -33,10 +33,10 @@ Not imported by the interpreter, left out: gen_rsa.py, geometry.py
 
 `pylib/pythonlib.lua` was modified after the export, so the byte/line numbers in
 the "interpreter" section above are the historical extraction record. Measured
-now (after the exception-class and os.path round): 144913 bytes, 4021 lines
-(was 130760 / 3647; the previous round left it at 136733 / 3798). Everything
-else is untouched - the 15 `pylib/*.py`, `py.lua`, `pyrepl.lua` and `manifest`
-hash to the same SHA256 as at export time.
+now (after the dict-None / os-mutator round): 152406 bytes, 4222 lines
+(was 130760 / 3647; round 1 left it at 136733 / 3798, round 2 at 144913 / 4021).
+Everything else is untouched - the 15 `pylib/*.py`, `py.lua`, `pyrepl.lua` and
+`manifest` hash to the same SHA256 as at export time.
 
 Reasons (full write-up in DECISIONS.md):
 
@@ -72,6 +72,26 @@ Reasons (full write-up in DECISIONS.md):
    CPython "/" rules; splitext returns a 2-tuple because pathlib indexes `[1]`).
    `os` now exposes it as `os.path`, and a plain `import os.path` binds the top
    package like Python instead of binding the submodule to the name `os`.
+8. None inside dicts - a Lua table cannot store nil, so `{"a": None}` lost its
+   key and `argparse`'s `Action` spec (`{"action": None, ...}`) raised
+   `KeyError: action`. Dict keys/values now go through a `DICT_NONE` sentinel
+   with `dictWrap`/`dictUnwrap`/`dictLookup`/`dictSet`/`dictDelete`; every dict
+   access point (literal, subscript get/set/del, `in`, get/pop/keys/values/
+   items/update, comprehensions, repr, `luaToPy`/`pyToLua`, `**kwargs` and
+   `bindArgs`) uses them. A stored None now reads back as `None` and is still
+   distinguishable from a missing key. A None cannot live in a *list* yet, so
+   `values()`/`items()`/`copy.deepcopy` drop it (documented in COVERAGE.md).
+9. `os.makedirs/mkdir/remove/rmdir/rename` - pathlib's write methods call these
+   and the `os` module only had getcwd/listdir. Added with CPython error names
+   (`FileExistsError`, `FileNotFoundError`, new `OSError`; IOError is now an
+   OSError subclass). Success is checked from the filesystem state because
+   CraftOS-PC 2.8.3's `fs.makeDir` returns nil after creating the directory and
+   `fs.move` returns nil when it refuses.
+10. shared primitive type objects (`primClass`) - `getBuiltins()` used to build a
+   fresh `int`/`str`/... class table per interpreter, so argparse's identity test
+   `spec["type"] == int` compared different tables and skipped the conversion.
+   `object/int/float/str/bool/list/dict` are now shared singletons like the
+   exception classes; `evalCall` still dispatches on `func.name`.
 
 `SHA256SUMS` was regenerated (new `pythonlib.lua` hash) and its stale
 `legacy-py.lua` row was renamed to `py.lua`: the file was never renamed on disk,

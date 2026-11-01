@@ -7,12 +7,13 @@
 
     pwsh -NoProfile -File pylib\tests\run-tests.ps1
 
-当前基线：**PYLIB_PASS 247 / PYLIB_FAIL 0 / PYLIB_GROUPS 34**（GROUP 明细见 `logs/suite.log`）。
+当前基线：**PYLIB_PASS 290 / PYLIB_FAIL 0 / PYLIB_GROUPS 43**（GROUP 明细见 `logs/suite.log`）。
 PASS 时 staging 自动删除；`-KeepStaging` 保留以便看 `logs/suite.log`。
 
-测试分六个文件：
+测试分七个文件：
 `t_core.lua`（核心语言特性 + 异常类）、`t_slices.lua`（切片）、`t_modules.lua`（15 个 .py 的
-import 覆盖 + 三个旧失败模块的功能验证）、`t_os_path.lua`（内置 `os.path` 与 dotted import）、
+import 覆盖 + 三个旧失败模块的功能验证）、`t_os_path.lua`（内置 `os.path`、`os` 写操作、
+dotted import）、`t_dict_none.lua`（dict 里的 `None` 键/值）、
 `t_legacy.lua`（旧版 `pkg/py.lua` 的状态）、`t_perf.lua`（性能证据 + 将来优化必须保持的语义网）。
 
 ## 1. 15 个 .py 模块的 import 覆盖（逐模块）
@@ -26,7 +27,7 @@ import 覆盖 + 三个旧失败模块的功能验证）、`t_os_path.lua`（内�
 
 | # | 模块 | 状态 | 原因（一句话） |
 |---|------|------|----------------|
-| 1 | argparse.py | ok | `class ArgumentError(Exception)`（第 80 行）现在可用：内置异常名是类表，可作为基类（暴露 3 个名字） |
+| 1 | argparse.py | ok | `class ArgumentError(Exception)`（第 80 行）可用（内置异常名是类表）；`ArgumentParser()+add_argument()+parse_args()` 最小路径也能跑：`Action` 规格 dict 里的 `action=None`/`help=None` 现在能存住，`type=int` 的转换正常（`modules:functional` 断言 `ns.count + 1 == 6`） |
 | 2 | cc.py | ok | 需要 `lua()` / `lua_call()` 内置函数；修复 `luaToPy` 前向引用后可用（暴露 110 个名字） |
 | 3 | cc_utf8.py | ok | — |
 | 4 | collections.py | ok | 依赖切片（第 48 行 `items[0:n]`），切片修好后即可用 |
@@ -37,13 +38,15 @@ import 覆盖 + 三个旧失败模块的功能验证）、`t_os_path.lua`（内�
 | 9 | functools.py | ok | — |
 | 10 | itertools.py | ok | — |
 | 11 | json.py | ok | 依赖切片（第 175 行 `s[start:state[0]]`），切片修好后即可用 |
-| 12 | pathlib.py | ok | `import os.path as _osp`（第 3 行）命中本轮新增的内置 `os.path`（join/basename/dirname/splitext/exists/isfile/isdir，恰好是 pathlib 用到的 7 个） |
+| 12 | pathlib.py | ok | `import os.path as _osp`（第 3 行）命中内置 `os.path`；写方法 `Path.mkdir(parents=True)`/`write_text`/`read_text`/`unlink`/`rename` 经新增的 `os.makedirs/mkdir/remove/rmdir/rename` 跑通（`modules:functional`） |
 | 13 | string.py | ok | 依赖切片（第 18/26 行 `w[1:]`），切片修好后即可用 |
 | 14 | sys.py | ok | — |
 | 15 | typing.py | ok | — |
 
 合计：**15 ok / 0 parse_error / 0 runtime_error**。
-（上一轮是 12 ok / 3 runtime_error，再往前切片修复前是 10 ok / 5 parse_error /
+（状态数在第二轮没有变化——第一轮已把 12 ok / 3 runtime_error 修成 15 ok；第二轮修的是
+import 成功之后才暴露的运行期缺口：argparse 的 `Action` 规格 dict 存 `None`、pathlib 写
+方法缺 `os.makedirs/mkdir/remove/rmdir/rename`。再往前切片修复前是 10 ok / 5 parse_error /
 0 runtime_error：argparse、collections、json、pathlib、string 全部卡在解析阶段。）
 
 `t_modules.lua` 把上表写成断言（`EXPECTED` 表），任一模块状态变化都会让套件失败，
@@ -65,7 +68,8 @@ import 覆盖 + 三个旧失败模块的功能验证）、`t_os_path.lua`（内�
 | `try`/`except`/`as`/`finally`/`raise`/`assert` | 支持（内置异常 + 本轮的用户异常类） | `core:exceptions`（5 条）、`core:exception-classes`（11 条） |
 | **异常类** `class X(Exception)`、`raise X(...)`、`except X`、父类捕获子类、`raise X`（类本身）、`isinstance(e, X)` | 支持（本轮实现） | `core:exception-classes`（11 条）、`core:exception-isinstance`（4 条） |
 | 异常的 `str()`/`repr()` 文案 | 与上一轮**完全一致**（`ValueError: boom`；无消息时只有类型名） | `core:exception-class-values`（5 条） |
-| 内置 `os.path`（join/basename/dirname/splitext/exists/isfile/isdir） | 支持（本轮新增的最小面，CPython 的 "/" 规则） | `os-path:join`/`basename-dirname`/`splitext`/`filesystem`/`imports` 共 28 条 |
+| 内置 `os.path`（join/basename/dirname/splitext/exists/isfile/isdir） | 支持（最小面，CPython 的 "/" 规则） | `os-path:join`/`basename-dirname`/`splitext`/`filesystem`/`imports` 共 28 条 |
+| `os.makedirs/mkdir/remove/rmdir/rename` | 支持（第二轮新增）：`makedirs` 递归 + `exist_ok`；错误用 `FileExistsError`/`FileNotFoundError`/`OSError`（`OSError←Exception`，`FileExistsError`/`FileNotFoundError←OSError`） | `os-path:mkdir`/`remove-rmdir`/`rename`/`error-hierarchy` 共 17 条 |
 | `import os.path as X` / `from os.path import ...` / `import os` 后 `os.path.<fn>` / 裸 `import os.path` | 支持（裸 dotted import 只绑定顶层包并挂上子模块，与 Python 一致） | `os-path:imports`（5 条） |
 | `print(None)` / `f(1, None, 3)` 里的 `None` 位置参数 | 支持（post-export fix） | `core:print`、`core:nil-arguments` |
 | **切片** `seq[a:b:c]`（省略上下界、负界、负步长） | 支持（post-export fix） | `slice:*` 共 27 条 |
@@ -76,7 +80,9 @@ import 覆盖 + 三个旧失败模块的功能验证）、`t_os_path.lua`（内�
 | 异常值的属性（`e.value`、`e.args`） | **不支持**：异常表不是实例，属性访问报 `object has no attribute`；类型/消息用 `str(e)` | 未断言，记录在此 |
 | `type(x)` | 返回**类名字符串**（`"int"`/`"tuple"`），不是类对象；异常类名与 `exception.type` 都是类名字符串 | `core:classes`、`slice:tuple`；与 Python 的差异已记录 |
 | `None` 落在 `*args` 里 | **不支持**：打包时被丢掉（Lua 表的洞会让 `#` 行为未定义） | `core:nil-arguments` 里的 `LIMITATION` 行（不断言数值，避免依赖 Lua 的 `#` 边界规则） |
-| 字典的值为 `None` | **不支持**：`{"a": None}` 和 `d["a"] = None` 都会让键直接消失（Lua 表存不了 nil），`len(d)` 为 0 | 未断言，记录在此；这也是 `argparse.parse_args` 的 `type=` / 省略 `action` 分支报 `KeyError: action` 的根因（与异常类、os.path 无关；`action="store_true"` 路径正常） |
+| **字典里的 `None`**（键或值） | 支持（第二轮实现）：`{"a": None}` 的键保留、读回 `None`；`{None: 1}` / `None in d` / `d[None]` 可用；`get`/`pop` 能区分"存的是 None"与"键不存在"（不存在仍是 `KeyError`） | `dict-none:value`（7 条）、`dict-none:key`（6 条）、`dict-none:absent`（3 条）、`dict-none:json`（2 条）、`dict-none:kwargs`（2 条） |
+| `None` 存进 **list** | **不支持**（本轮未做）：Lua 表存不了 nil，所以把含 None 的 dict 展开成 list（`values()`/`items()`/`copy.deepcopy`）会丢掉那一项，`[None]` 也无法表示 | 未断言，记录在此（`t_dict_none.lua` 头注释也写明这条边界） |
+| 内置类型对象 `int`/`str`/... 的身份 | 共享单例（第二轮随 dict None 一起改）：`t == int` 跨解释器成立，argparse 的 `type=int` 比较才有效 | `modules:functional` 的 `ns.count + 1 == 6` |
 | `l[99] = x`（越界赋值） | 不检查范围（沿用原有 Lua 表语义），仅负下标被归一化 | 未断言，记录在此 |
 
 ## 3. 旧版留档文件 `pkg/py.lua`
