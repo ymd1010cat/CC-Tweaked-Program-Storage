@@ -1133,6 +1133,22 @@ enter install q=back
 
 30.4 **数字**：离线 **4,786 pass / 0 fail / 240 groups**；`install.set` **29 条**；TOTAL 见 sizecheck（比上一轮少 ~16 KB）。真机验法：launcher 列表不再有 `net`；把 `examples/net.app` 放到 `/pkgs/net.app/` 后，installer 显示 `p net 0.2.0` 可安装、桌面 Update 也能列出并安装。
 
+31. 浏览器默认页 `about:home` 与 `local:` 前缀（T10）
+
+31.1 **背景**：默认首页原来是 `http://pastebin.com/raw/0` —— 那不是有效 paste，且常被白名单/网络挡掉，进浏览器第一帧就是 `failed:`。
+
+31.2 **新默认**：`M.DEFAULT_HOME = "about:home"`，内容由 `M.help_lines()` 内置生成（不需要网络）：标题、版本、键位（enter / up/down / b / r / q）、`/etc/browser.home` 的写法、支持的两类地址（`http(s)://`、`local:/path`），以及"没有网络时用 local:"。首帧永远有内容。
+
+31.3 **地址分类**（`M.scheme`）：`about:home` / `local:/path` / `http(s)://…` / 其它显式 scheme / 无 scheme。`enter` 打开 `state.target`；无 scheme 才补 `http://`，任何显式 scheme 原样保留（所以错 scheme 不会被静默改成 http）。
+
+31.4 **`local:/path`**：用 `api.fs.read(path)` 读本机纯文本，成功状态 `local <bytes> bytes <n> lines`；文件不存在/读失败 → 状态行 `local: no such file: /etc/page.txt`（不崩、不退出）。未知 scheme → `unsupported scheme: ftp`。
+
+31.5 **首页解析**：`/etc/browser.home` 第一行（去尾空白）> `about:home`；配置里无 scheme 的地址补 `http://`，坏地址（DNS/连接失败）显示 `failed: <err>`，改文件即可换页（无需重启，`r` 重读）。空文件/缺失 → `about:home`。
+
+31.6 **测试**：`tests/t_web.lua` 重写为 7 组（`web.manifest`、`web.helpers`、`web.about`、`web.local`、`web.http`、`web.config`、`web.keys`）：`about:home` 首帧逐字（help 页含键位与 local: 提示、状态行 `about:home`、提示行）、`local:/tests/page.txt` 渲染正文、`local:` 缺文件提示、`unsupported scheme: ftp`、`/etc/browser.home` 覆盖与坏地址可读状态、http 200/404/连接失败（假 http）、`b` 历史返回与 `r`/`q`/滚动。
+
+31.7 **数字**：离线 **4,808 pass / 0 fail / 242 groups**；web.app 体积变化见 sizecheck（仍远低于 629,145）。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1167,3 +1183,4 @@ enter install q=back
 - 2026-11-01: **安装/OTA 来源改为 `/pkgs` 为主、`/disk` 可选**（口径见 §28；手持电脑没有软驱，`/disk` 永远不存在）。`kernel/installer.lua` 新增 `I.INTERNAL="/pkgs"`、`I.roots_for`、`I:source_for`（`media_root` 默认 `/pkgs`，`/disk/apps` 仅在 `/disk` 存在时参与）；`kernel/apps.lua` 的 OTA 源同步（`A.OTA_INTERNAL`，条目带 `source=internal|disk`，返回 `source` 摘要 `internal|internal+disk|none`，无源日志记检查路径）；installer 应用 header/提示由 `disk ok/none` 改为 `source ..` 与 `no source: checked /pkgs,/disk`，tag `p`=internal。可选 rednet 源（`/etc/update.rednet`）记为 TODO，未实现。新增 `t_sys_ota.ota.internal`（内部源列出/安装/卸载、无 `/disk` 无 `disk none`、合并 `internal+disk`、无源为空 problems）。离线 **4,737 pass / 0 fail / 235 groups**（4,713/234）；未 commit。
 - 2026-11-01: **内置文字浏览器 `web.app`**（口径见 §29）。新包 `system/system/web.app/{manifest.lua,main.lua}`（caps `fs.read`+`http`+`input`+`terminal`，约 13 KB），事件驱动：`enter` 打开地址（自动补 `http://`）、`up/down` 滚动、`b` 历史返回、`r` 重载、`q` 退出（不用 Esc）；正文纯文本按屏宽折行，非 2xx/传输失败/无 http 都有可读状态行，不崩；launcher 自动扫到它并因其声明 `input` 直接交接键盘。新增 `tests/t_web.lua`（5 组 52 断言，假 http 三种返回）；`install.set` 29→31 条、`t_budget` 同步；`t_desktop`/`t_desktop_loop`/`t_apps_ui`/`t_sys_ota` 的 3 包计数改 4。离线 **4,789 pass / 0 fail / 240 groups**（4,737/235）；未 commit。
 - 2026-11-01: **net 改为可选示例包**（口径见 §30）。`git mv system/system/net.app examples/net.app`（内容不变），`install.set` 去掉 net 两行 → 镜像 29 条；`system/net/{hosts,service}.lua` 服务层仍在镜像。测试：`/system/system` 回 3 包（launcher/settings/web），`t_desktop`/`t_desktop_loop` 的启动与日志断言改 settings，`t_net_app`/`t_apps_ui` 改从 `/tests/net.app` fixture 加载，`run-tests.ps1` 改 stage `examples\net.app` → `/tests/net.app`，`t_budget` 29 条且 payload 断言翻转。离线 **4,786 pass / 0 fail / 240 groups**；sizecheck 见上。未 commit。
+- 2026-11-01: **浏览器默认页改内置 `about:home`，新增 `local:` 前缀**（口径见 §31）。`web.app` 默认首页改为内置帮助页（零网络即可显示，含键位与 local: 提示）；新增 `M.scheme` 地址分类（about / local / http(s) / 未知 scheme）、`local:/path` 走 `api.fs.read`（缺文件 → `local: no such file: <path>`）、未知 scheme → `unsupported scheme: <name>`；`now_url` 只在无 scheme 时补 `http://`；`/etc/browser.home` 首行优先、坏地址显示 `failed:` 且可改文件。`tests/t_web.lua` 重写为 7 组（about/local/http/config/keys + manifest/helpers）。离线 **4,808 pass / 0 fail / 242 groups**。未 commit。

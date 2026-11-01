@@ -23,10 +23,49 @@ M.VIEW = { cols = 51, rows = 19 }
 M.MIN_COLS = 12
 M.MIN_ROWS = 6
 M.HOME_PATH = "/etc/browser.home"
-M.DEFAULT_HOME = "http://pastebin.com/raw/0"
+M.DEFAULT_HOME = "about:home"
 M.HISTORY_MAX = 8
 M.MAX_BODY = 65536
 M.HINT = "up/dn b back r reload q quit"
+
+-- the built-in start page: always available, never a `failed:` first frame
+function M.help_lines()
+    return {
+        "Browser " .. M.VERSION,
+        "a text browser for Pyroet OS",
+        "",
+        "keys:",
+        "  enter   open the address below",
+        "  up/down scroll the page",
+        "  b       back (history)",
+        "  r       reload",
+        "  q       quit to the desktop",
+        "",
+        "addresses:",
+        "  http://host/path   http (api.http)",
+        "  https://host/path  https (api.http)",
+        "  local:/etc/page.txt  a file on this computer",
+        "  about:home         this page",
+        "",
+        "home page: put one URL on the first line of",
+        "  /etc/browser.home",
+        "",
+        "no network? use local: -- the file system",
+        "always works, and the page is plain text.",
+    }
+end
+
+-- "about:home" / "local:/path" / "http(s)://..." / no scheme at all
+function M.scheme(url)
+    local text = tostring(url == nil and "" or url):lower()
+    if text == "about:home" then return "about" end
+    local name = text:match("^([%a][%w+.-]*):")
+    if name == nil then return "" end
+    if name == "http" or name == "https" then return "http" end
+    if name == "local" then return "local" end
+    if name == "about" then return "about" end
+    return name
+end
 
 function M.fit(text, cols)
     local value = tostring(text == nil and "" or text)
@@ -39,7 +78,7 @@ function M.now_url(url)
     local text = tostring(url == nil and "" or url)
     text = text:gsub("^%s+", ""):gsub("%s+$", "")
     if text == "" then return "" end
-    if text:match("^%a[%w+.-]*://") then return text end
+    if M.scheme(text) ~= "" then return text end
     return "http://" .. text
 end
 
@@ -69,8 +108,13 @@ function M.home(api)
     if called and type(text) == "string" then
         local line = text:match("^%s*([^\r\n]+)")
         if line ~= nil then
-            local url = M.now_url(line)
-            if url ~= "" then return url end
+            line = line:gsub("%s+$", "")
+            if line ~= "" then
+                -- a URL in the config is used as written; only a scheme-less
+                -- address gets http:// (that is what "bad url" then reports)
+                if M.scheme(line) == "" then line = M.now_url(line) end
+                return line
+            end
         end
     end
     return M.DEFAULT_HOME
@@ -97,7 +141,90 @@ end
 -- one fetch: a 2xx body is the page, anything else is a readable status line
 function M.open(state, api, url, opts)
     local o = opts or {}
-    local target = M.now_url(url)
+    local raw = tostring(url == nil and "" or url):gsub("^%s+", ""):gsub("%s+$", "")
+    if raw == "" then
+        state.status = "empty address"
+        return "none"
+    end
+    local kind = M.scheme(raw)
+    -- 1) the built-in page: no fs, no network
+    if kind == "about" then
+        if raw:lower() ~= "about:home" then
+            state.error = "unsupported scheme: " .. tostring(kind)
+            state.status = state.error
+            return "error"
+        end
+        state.url = "about:home"
+        state.target = "about:home"
+        local help = {}
+        local source = M.help_lines()
+        for i = 1, #source do
+            local line = tostring(source[i])
+            if #line <= M.VIEW.cols then
+                help[#help + 1] = line
+            else
+                local parts = M.wrap(line, M.VIEW.cols)
+                for j = 1, #parts do help[#help + 1] = parts[j] end
+            end
+        end
+        state.lines = help
+        state.error = nil
+        state.status = "about:home " .. tostring(#state.lines) .. " lines"
+        state.scroll = 0
+        M.note(api, "BROWSER_OPEN url=about:home ok=true")
+        return "open"
+    end
+    -- 2) a local file: plain text from this computer's own file system
+    if kind == "local" then
+        local path = raw:match("^[Ll][Oo][Cc][Aa][Ll]:(.*)$") or ""
+        path = path:gsub("^%s+", ""):gsub("%s+$", "")
+        local body, err = nil, nil
+        local fsx = type(api) == "table" and api.fs or nil
+        if path == "" then
+            err = "no path"
+        elseif type(fsx) ~= "table" or type(fsx.read) ~= "function" then
+            err = "no fs host"
+        else
+            local called, value = pcall(fsx.read, path)
+            if not called then body, err = nil, tostring(value)
+            elseif type(value) ~= "string" then body, err = nil, "no such file: " .. path
+            else body = value end
+        end
+        if body == nil then
+            state.url = raw
+            state.target = raw
+            state.error = "local: " .. tostring(err)
+            state.status = "local: " .. tostring(err)
+            M.note(api, "BROWSER_OPEN url=" .. M.fit(raw, 60) .. " ok=false err="
+                .. tostring(err))
+            return "error"
+        end
+        if o.push ~= false then
+            if state.url ~= "" then
+                state.history[#state.history + 1] = state.url
+                while #state.history > M.HISTORY_MAX do table.remove(state.history, 1) end
+            end
+        end
+        state.url = raw
+        state.target = raw
+        state.lines = M.wrap(body, M.VIEW.cols)
+        state.error = nil
+        state.status = "local " .. tostring(#body) .. " bytes "
+            .. tostring(#state.lines) .. " lines"
+        state.scroll = 0
+        M.note(api, "BROWSER_OPEN url=" .. M.fit(raw, 60) .. " ok=true lines="
+            .. tostring(#state.lines))
+        return "open"
+    end
+    -- 3) anything else with an explicit scheme is not ours
+    if kind ~= "" and kind ~= "http" then
+        state.error = "unsupported scheme: " .. tostring(kind)
+        state.status = state.error
+        M.note(api, "BROWSER_OPEN url=" .. M.fit(raw, 60) .. " ok=false unsupported="
+            .. tostring(kind))
+        return "error"
+    end
+    local target = M.now_url(raw)
     if target == "" then
         state.status = "empty address"
         return "none"

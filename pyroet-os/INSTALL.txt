@@ -90,8 +90,10 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 hosts, probe target), q back
      net        (optional example package, not in the image) copy examples/net.app
                 to /pkgs/net.app, then install it from the installer or Update
-     web        built-in text browser: enter opens the address (/etc/browser.home
-                or the default home), up/down scroll, b back, r reload, q quit
+     web        built-in text browser: the default page is about:home (built in,
+                no network needed), enter opens the address from /etc/browser.home,
+                addresses are http(s)://..., local:/path (a file on this computer)
+                or about:home; up/down scroll, b back, r reload, q quit
      installer  up/down (or a digit) pick a package, enter installs /
                 removes / reports "locked" via the host bridge, c cancels,
                 q back. No source shows "no source: checked /pkgs,/disk", no bridge
