@@ -991,7 +991,7 @@ function A:build_api(record)
         exists = gate(self, record, "fs.read", fsx and function(path)
             return fsx.exists(path)
         end),
-        -- "is this path a directory": read-only, so it rides on fs.read. pkgget
+        -- "is this path a directory": read-only, so it rides on fs.read. appstore
         -- needs it to tell a mounted /disk (a drive) from a file (T22).
         isDir = gate(self, record, "fs.read",
             fsx and type(fsx.isDir) == "function" and function(path)

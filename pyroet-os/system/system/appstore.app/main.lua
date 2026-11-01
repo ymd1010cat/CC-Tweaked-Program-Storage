@@ -1,7 +1,7 @@
---[[- pyroet-os/system/system/pkgget.app/main.lua -- download a package over http.
+--[[- pyroet-os/system/system/appstore.app/main.lua -- download a package over http.
 
 The server is chosen by the user: `a` edits the address line (the first line of
-/etc/pkg.servers is the default). Any static file server works -- the layout is
+/etc/appstore.servers is the default). Any static file server works -- the layout is
 plain text, there is no zip and no JSON:
 
     GET <base>/index.txt              -> one "app <name> <version> <dir>" per line
@@ -29,7 +29,7 @@ append, backspace deletes, enter accepts, c cancels (q is a letter there).
 `l` arms the receiver described below.
 
 Receiver mode (the other computer runs tools/pushpkg.lua): press `l` to listen
-on rednet channel 4101 under protocol PYROET-PKG/1; /etc/pkg.recv may override
+on rednet channel 4101 under protocol PYROET-PKG/1; /etc/appstore.recv may override
 `channel=` and `protocol=`. While armed the status row shows `listening ch=4101`
 plus this computer's id, and `q` stops listening. One package is one stream:
 
@@ -43,7 +43,7 @@ after every file read back and the end digest (if sent) matched; any failure
 deletes the .part tree, so a half package never becomes visible. A published
 package is installed through the kernel bridge when the host has one.
 
-No non-ASCII bytes in this file. `_G.PYROET_PKGGET_TEST` returns the module.
+No non-ASCII bytes in this file. `_G.PYROET_APPSTORE_TEST` returns the module.
 ]]
 
 local M = {}
@@ -52,7 +52,7 @@ M.VERSION = "0.1.0"
 M.VIEW = { cols = 51, rows = 19 }
 M.MIN_COLS = 18
 M.MIN_ROWS = 8
-M.CONF = "/etc/pkg.servers"
+M.CONF = "/etc/appstore.servers"
 M.PLACEHOLDER = "http://example.invalid/"
 M.PKGS = "/pkgs"
 M.DISK = "/disk"
@@ -66,7 +66,7 @@ M.MAX_BODY = 262144
 M.HINT = "up/dn enter r reload a url q quit l recv t target"
 M.RECV_PROTOCOL = "PYROET-PKG/1"
 M.RECV_CHANNEL = 4101
-M.RECV_CONF = "/etc/pkg.recv"
+M.RECV_CONF = "/etc/appstore.recv"
 M.RECV_TIMEOUT = 0.1
 M.RECV_IDLE = 120
 M.MAX_CHUNK = 8192
@@ -111,7 +111,7 @@ function M.join(base, rest)
 end
 
 -- ---------------------------------------------------------------------------
--- configuration: /etc/pkg.servers, one URL per line (the first is the default)
+-- configuration: /etc/appstore.servers, one URL per line (the first is the default)
 -- ---------------------------------------------------------------------------
 
 function M.servers(api)
@@ -276,7 +276,7 @@ function M.render(state, cols, rows)
     if cols < 1 then cols = 1 end
     if rows < 1 then rows = 1 end
     if cols < M.MIN_COLS or rows < M.MIN_ROWS then
-        return { M.fit("pkgget " .. tostring(#(state.entries or {})) .. " apps", cols) }
+        return { M.fit("appstore " .. tostring(#(state.entries or {})) .. " apps", cols) }
     end
     local out = {}
     local function add(text)
@@ -284,7 +284,7 @@ function M.render(state, cols, rows)
         out[#out + 1] = M.fit(text, cols)
         return true
     end
-    add("pkgget " .. M.VERSION)
+    add("appstore " .. M.VERSION)
     if state.editing then
         add("server> " .. tostring(state.edit_text or "") .. "_")
     else
@@ -337,7 +337,7 @@ function M.load_index(state, api)
         state.entries = {}
         state.index = 1
         state.status = "index " .. tostring(err or status)
-        M.note(api, "PKGGET_INDEX ok=false server=" .. M.plain(base, 60)
+        M.note(api, "APPSTORE_INDEX ok=false server=" .. M.plain(base, 60)
             .. " err=" .. tostring(err or status))
         return "error"
     end
@@ -346,7 +346,7 @@ function M.load_index(state, api)
     if state.index > #entries + 1 then state.index = 1 end
     state.status = #entries .. " apps"
     if bad > 0 then state.status = state.status .. " bad lines: " .. tostring(bad) end
-    M.note(api, "PKGGET_INDEX ok=true entries=" .. tostring(#entries)
+    M.note(api, "APPSTORE_INDEX ok=true entries=" .. tostring(#entries)
         .. " bad=" .. tostring(bad))
     return #entries > 0 and "open" or "none"
 end
@@ -383,13 +383,13 @@ function M.cycle_target(state, api)
         state.disk = false
         state.target = "self"
         state.status = "no disk drive"
-        M.note(api, "PKGGET_TARGET ok=false err=no_disk")
+        M.note(api, "APPSTORE_TARGET ok=false err=no_disk")
         return "repaint"
     end
     state.disk = true
     state.target = (M.target_of(state) == "disk") and "self" or "disk"
     state.status = ""
-    M.note(api, "PKGGET_TARGET ok=true target=" .. state.target
+    M.note(api, "APPSTORE_TARGET ok=true target=" .. state.target
         .. " root=" .. M.pkgs_root(state))
     return "repaint"
 end
@@ -397,13 +397,13 @@ end
 function M.edit_begin(state, api)
     state.editing = true
     state.edit_text = M.server_of(state)
-    M.note(api, "PKGGET_EDIT begin url=" .. M.plain(state.edit_text, 60))
+    M.note(api, "APPSTORE_EDIT begin url=" .. M.plain(state.edit_text, 60))
     return "repaint"
 end
 
 function M.edit_end(state, api, why)
     state.editing = nil
-    M.note(api, "PKGGET_EDIT end reason=" .. tostring(why or "cancel"))
+    M.note(api, "APPSTORE_EDIT end reason=" .. tostring(why or "cancel"))
     return "repaint"
 end
 
@@ -427,8 +427,8 @@ function M.edit_submit(state, api)
     state.server_index = 1
     state.server = value
     state.editing = nil
-    M.note(api, "PKGGET_EDIT end reason=accept url=" .. M.plain(value, 60))
-    M.note(api, "PKGGET_SERVER url=" .. M.plain(value, 60))
+    M.note(api, "APPSTORE_EDIT end reason=accept url=" .. M.plain(value, 60))
+    M.note(api, "APPSTORE_SERVER url=" .. M.plain(value, 60))
     return M.load_index(state, api)
 end
 
@@ -585,7 +585,7 @@ function M.download(state, api, entry)
             state.progress = nil
             state.status = "failed " .. rel .. ": " .. tostring(err or status)
             M.rm_tree(fsx, partial)
-            M.note(api, "PKGGET_FETCH name=" .. entry.name .. " ok=false file="
+            M.note(api, "APPSTORE_FETCH name=" .. entry.name .. " ok=false file="
                 .. M.plain(rel, 40) .. " err=" .. tostring(err or status))
             return nil, state.status
         end
@@ -597,7 +597,7 @@ function M.download(state, api, entry)
                     state.progress = nil
                     state.status = "sha unavailable for " .. rel
                     M.rm_tree(fsx, partial)
-                    M.note(api, "PKGGET_FETCH name=" .. entry.name
+                    M.note(api, "APPSTORE_FETCH name=" .. entry.name
                         .. " ok=false file=" .. M.plain(rel, 40) .. " err=sha_missing")
                     return nil, state.status
                 end
@@ -605,7 +605,7 @@ function M.download(state, api, entry)
                     state.progress = nil
                     state.status = "hash check failed: " .. rel
                     M.rm_tree(fsx, partial)
-                    M.note(api, "PKGGET_FETCH name=" .. entry.name
+                    M.note(api, "APPSTORE_FETCH name=" .. entry.name
                         .. " ok=false file=" .. M.plain(rel, 40) .. " err=hash")
                     return nil, state.status
                 end
@@ -616,7 +616,7 @@ function M.download(state, api, entry)
             state.progress = nil
             state.status = "failed " .. rel .. ": " .. tostring(info)
             M.rm_tree(fsx, partial)
-            M.note(api, "PKGGET_FETCH name=" .. entry.name .. " ok=false file="
+            M.note(api, "APPSTORE_FETCH name=" .. entry.name .. " ok=false file="
                 .. M.plain(rel, 40) .. " err=" .. tostring(info))
             return nil, state.status
         end
@@ -643,7 +643,7 @@ function M.download(state, api, entry)
         -- write only: the block computer cannot install onto the handheld
         state.status = "written to disk " .. root .. " (" .. tostring(bytes)
             .. " B" .. vtext .. ")"
-        M.note(api, "PKGGET_WRITE ok=true target=disk name=" .. entry.name
+        M.note(api, "APPSTORE_WRITE ok=true target=disk name=" .. entry.name
             .. " files=" .. tostring(#files) .. " bytes=" .. tostring(bytes))
     else
         state.status = "staged " .. root .. " (" .. tostring(bytes) .. " B" .. vtext .. ")"
@@ -651,7 +651,7 @@ function M.download(state, api, entry)
         if type(sysax) == "table" and type(sysax.install) == "function" then
             local called, ok2, detail = pcall(sysax.install, entry.name)
             install_ok = called and ok2 == true
-            M.note(api, "PKGGET_INSTALL name=" .. entry.name .. " ok="
+            M.note(api, "APPSTORE_INSTALL name=" .. entry.name .. " ok="
                 .. tostring(install_ok) .. (install_ok and "" or (" err="
                     .. M.plain(detail, 40))))
             if install_ok then
@@ -661,11 +661,11 @@ function M.download(state, api, entry)
             end
         else
             state.status = "staged in /pkgs" .. vtext
-            M.note(api, "PKGGET_INSTALL name=" .. entry.name
+            M.note(api, "APPSTORE_INSTALL name=" .. entry.name
                 .. " ok=false err=no_bridge")
         end
     end
-    M.note(api, "PKGGET_FETCH name=" .. entry.name .. " files=" .. tostring(#files)
+    M.note(api, "APPSTORE_FETCH name=" .. entry.name .. " files=" .. tostring(#files)
         .. " bytes=" .. tostring(bytes) .. " ok=true")
     return true, { files = #files, bytes = bytes, verified = verified,
         install = install_ok, target = target, root = root }
@@ -675,7 +675,7 @@ end
 -- receiver: a package streamed over rednet by pushpkg on another computer
 -- ---------------------------------------------------------------------------
 
--- /etc/pkg.recv (optional): `channel=<1..65532>` and `protocol=<name>` lines.
+-- /etc/appstore.recv (optional): `channel=<1..65532>` and `protocol=<name>` lines.
 -- A missing or unreadable file is the normal case and means the defaults.
 function M.recv_conf(api)
     local out = { channel = M.RECV_CHANNEL, protocol = M.RECV_PROTOCOL,
@@ -761,7 +761,7 @@ function M.recv_arm(state, api)
         conf.protocol)
     if net == nil then
         state.status = "no rednet"
-        M.note(api, "PKGGET_RECV_ARM ok=false err=" .. tostring(why))
+        M.note(api, "APPSTORE_RECV_ARM ok=false err=" .. tostring(why))
         return "denied", why
     end
     local opened = M.open_modems(net)
@@ -769,7 +769,7 @@ function M.recv_arm(state, api)
         path = conf.path, net = net, clock = state.recv_clock or os.clock }
     state.status = "listening ch=" .. tostring(conf.channel)
         .. " id=" .. tostring(M.computer_id())
-    M.note(api, "PKGGET_RECV_ARM ch=" .. tostring(conf.channel)
+    M.note(api, "APPSTORE_RECV_ARM ch=" .. tostring(conf.channel)
         .. " protocol=" .. M.plain(conf.protocol, 32)
         .. " modems=" .. tostring(opened))
     if sender ~= nil then M.recv_message(state, api, sender, message) end
@@ -782,7 +782,7 @@ function M.recv_stop(state, api)
     if recv.pkg then M.recv_cleanup(api, recv) end
     state.recv = nil
     state.status = "receiver stopped"
-    M.note(api, "PKGGET_RECV_STOP")
+    M.note(api, "APPSTORE_RECV_STOP")
     return "repaint"
 end
 
@@ -857,7 +857,7 @@ function M.recv_fail(state, api, recv, sender, err, extra)
     local files = pkg and pkg.files or 0
     local bytes = pkg and pkg.bytes or 0
     M.recv_cleanup(api, recv)
-    M.note(api, "PKGGET_RECV name=" .. tostring(name) .. " files="
+    M.note(api, "APPSTORE_RECV name=" .. tostring(name) .. " files="
         .. tostring(files) .. " bytes=" .. tostring(bytes) .. " ok=false err="
         .. M.plain(err, 40))
     M.recv_ack(recv, sender, false, err, extra)
@@ -1003,7 +1003,7 @@ function M.recv_end(state, api, recv, sender, msg)
         if not install_ok then state.install_error = M.plain(why, 40) end
     end
     M.recv_ack(recv, sender, true, nil, { name = pkg.name })
-    M.note(api, "PKGGET_RECV name=" .. pkg.name .. " files=" .. tostring(pkg.files)
+    M.note(api, "APPSTORE_RECV name=" .. pkg.name .. " files=" .. tostring(pkg.files)
         .. " bytes=" .. tostring(pkg.bytes) .. " ok=true"
         .. (install_ok and "" or " install=false"))
     state.recv_pkg = { name = pkg.name, files = pkg.files, bytes = pkg.bytes,
@@ -1018,7 +1018,7 @@ function M.recv_abort(state, api, recv, sender, msg)
     local name = recv.pkg and recv.pkg.name or "?"
     M.recv_cleanup(api, recv)
     M.recv_ack(recv, sender, true, nil, { name = name })
-    M.note(api, "PKGGET_RECV_ABORT name=" .. tostring(name))
+    M.note(api, "APPSTORE_RECV_ABORT name=" .. tostring(name))
     state.status = "aborted " .. tostring(name)
     return "repaint"
 end
@@ -1046,12 +1046,12 @@ function M.recv_poll(state, api)
     if recv.pkg and (clock() - (recv.pkg.at or clock())) > M.RECV_IDLE then
         local name = recv.pkg.name
         M.recv_fail(state, api, recv, nil, "timeout", { name = name })
-        M.note(api, "PKGGET_RECV_TIMEOUT name=" .. tostring(name))
+        M.note(api, "APPSTORE_RECV_TIMEOUT name=" .. tostring(name))
         return "error"
     end
     local ok, sender, msg = pcall(recv.net.receive, recv.protocol, M.RECV_TIMEOUT)
     if not ok then
-        M.note(api, "PKGGET_RECV_ERR err=" .. M.plain(sender, 40))
+        M.note(api, "APPSTORE_RECV_ERR err=" .. M.plain(sender, 40))
         return "none"
     end
     if type(sender) ~= "number" then return "none" end
@@ -1238,9 +1238,9 @@ function M.body(manifest, api)
     local input = type(api) == "table" and api.input or nil
     local pull = type(input) == "table" and input.pullEvent or nil
     if M.http_of(api) == nil then
-        state.status = "pkgget unavailable: no http"
+        state.status = "appstore unavailable: no http"
         M.paint_once(state, api, term)
-        M.note(api, "PKGGET_UNAVAILABLE reason=no_http")
+        M.note(api, "APPSTORE_UNAVAILABLE reason=no_http")
         if type(pull) ~= "function" then return M.idle(api) end
         while true do
             local event, p1 = pull()
@@ -1260,7 +1260,7 @@ function M.body(manifest, api)
             end
         end
     end
-    M.note(api, "PKGGET_SERVER url=" .. M.plain(M.server_of(state), 60))
+    M.note(api, "APPSTORE_SERVER url=" .. M.plain(M.server_of(state), 60))
     M.load_index(state, api)
     M.paint_once(state, api, term)
     if type(pull) ~= "function" then return M.idle(api) end
@@ -1276,7 +1276,7 @@ function M.body(manifest, api)
         else
             local action, detail = M.dispatch_event(state, event, p1, api)
             if action == "quit" then
-                M.note(api, "PKGGET_QUIT key=" .. tostring(detail))
+                M.note(api, "APPSTORE_QUIT key=" .. tostring(detail))
                 return "quit"
             end
             if action ~= "none" then M.paint_once(state, api, term) end
@@ -1285,7 +1285,7 @@ function M.body(manifest, api)
     end
 end
 
-if rawget(_G, "PYROET_PKGGET_TEST") then return M end
+if rawget(_G, "PYROET_APPSTORE_TEST") then return M end
 
 return function(manifest, api)
     return M.body(manifest, api)

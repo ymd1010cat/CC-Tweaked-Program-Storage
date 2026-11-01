@@ -216,7 +216,7 @@ return function(H)
         local state = LAUNCHER.build(api)
         H.eq("entries", #state.entries, 2)
         H.eq("entry_names", table.concat({
-            state.entries[1].name, state.entries[2].name }, ","), "pkgget,settings")
+            state.entries[1].name, state.entries[2].name }, ","), "appstore,settings")
         H.eq("settings_version", state.entries[2].version, "0.2.0")
         local lines_first = LAUNCHER.render(state, 26, 20)
         H.eq("render_rows", #lines_first, 20)

@@ -2,22 +2,22 @@
 
 This file is a DEVELOPMENT TOOL: it is not part of the image and it is not in
 install.set. Copy it to the OTHER computer (CraftOS or Pyromputer OS), keep the
-handheld on this side running pkgget with its receiver armed (press `l`; the
+handheld on this side running appstore with its receiver armed (press `l`; the
 status row shows `listening ch=<n> id=<computer id>`), then run:
 
     pushpkg <target-id|broadcast> [name]
 
-    target-id   the rednet id pkgget prints, or `broadcast` for every receiver
+    target-id   the rednet id appstore prints, or `broadcast` for every receiver
     name        one package from index.txt; omitted = every package in it
 
 /etc/pushpkg.conf (optional, one key=value per line, '#' starts a comment):
 
     server=<http base>    default http://example.invalid/
-    protocol=<name>       default PYROET-PKG/1 (pkgget may override its side)
+    protocol=<name>       default PYROET-PKG/1 (appstore may override its side)
     channel=<n>           informational; rednet has no numeric channel here
     timeout=<seconds>     ack timeout, default 5
 
-Server layout, the same one pkgget reads:
+Server layout, the same one appstore reads:
 
     GET <base>/index.txt          "app <name> <version> <dir>" per line
                                   or "lua <name> <version> <file.lua>"

@@ -346,7 +346,7 @@ compat：manifest **不写** `capabilities` = 声明空列表 = 全部拒绝，*
 | `launcher.app` | 0.2.0 | `fs.read`, `fs.write`（写只用于 `/etc/launcher.recent`，被拒就忽略）, `input`, `terminal`（D1：常驻桌面对话循环） |
 | `settings.app` | 0.2.0 | `fs.read`（**严格只读**，没有写路径） |
 | `installer.app` | 0.2.0 | `fs.read`, `fs.write`（读 `/pkgs` 与两个已装根；写只发生在安装事务里）, `input`, `terminal` |
-| `pkgget.app` | 0.1.0 | `http`, `fs.read`, `fs.write`（写 `/pkgs`，有驱动器时可切到 `/disk/pkgs`，见 §5.7）, `input`, `terminal`, `net.rednet`（T20 接收模式） |
+| `appstore.app` | 0.1.0 | `http`, `fs.read`, `fs.write`（写 `/pkgs`，有驱动器时可切到 `/disk/pkgs`，见 §5.7）, `input`, `terminal`, `net.rednet`（T20 接收模式） |
 | `net.app` (可选示例，不在镜像) | 0.2.0 | `net.rpv`, `fs.read` |
 
 ### 5.5 安装器 UI（`installer.app`）
@@ -401,8 +401,8 @@ p2 i1 s2 sel 1/5
 
 手持机不联网也能装包：另一台电脑（CraftOS / Pyromputer OS）从 http 服务器拉包，再用 rednet 写进手持机的 `/pkgs`。
 
-**手持机**：打开 `pkgget`，按 `l` 进入接收模式，状态行显示
-`listening ch=4101 id=<本机 id>`；`q` 停止。`/etc/pkg.recv`（可选）可以覆盖 `channel=` /
+**手持机**：打开 `appstore`，按 `l` 进入接收模式，状态行显示
+`listening ch=4101 id=<本机 id>`；`q` 停止。`/etc/appstore.recv`（可选）可以覆盖 `channel=` /
 `protocol=`（非法值忽略）。manifest 已增加 `net.rednet`；未授权时按 `l` 只显示
 `no rednet`，不崩。
 
@@ -416,7 +416,7 @@ pushpkg 7 hello      # 只推 hello
 
 `/etc/pushpkg.conf`（可选）：`server=<http base>`、`protocol=`、`channel=`（仅日志）、`timeout=`。
 
-**服务器目录**（和 `pkgget` 一样是纯文本）：
+**服务器目录**（和 `appstore` 一样是纯文本）：
 
 ```
 index.txt         app <name> <version> <dir>      # 目录包：manifest.lua + main.lua + ...
@@ -432,17 +432,17 @@ index.txt         app <name> <version> <dir>      # 目录包：manifest.lua + m
 `{kind="abort"}`。接收端把文件写进 `/pkgs/<name>.app.part`、逐文件回读校验，全部成功才
 改名成 `/pkgs/<name>.app` 并尝试 `api.sys.install(name)`；任何失败（坏 sha、坏路径、坏块序、
 写回读失败、120 s 空闲超时）都删掉 `.part`，不会留下半个包。日志：手持机
-`PKGGET_RECV_ARM ...` / `PKGGET_RECV name=.. files=.. bytes=.. ok=..`；推送端
+`APPSTORE_RECV_ARM ...` / `APPSTORE_RECV name=.. files=.. bytes=.. ok=..`；推送端
 `PUSHPKG_BEGIN/FILE/RETRY/END/FAIL`。
 
 ### 5.7 磁盘目标：手持机插进方块电脑的驱动器（T22）
 
-`pkgget` 启动时探测 `/disk`（`fs.exists` + `fs.isDir`，两个 API 缺失或抛错都算无盘）。有驱动器时状态行
+`appstore` 启动时探测 `/disk`（`fs.exists` + `fs.isDir`，两个 API 缺失或抛错都算无盘）。有驱动器时状态行
 可显示 `target self`（写本机 `/pkgs`）或 `target disk`（写 `/disk/pkgs`），按 `t` 切换；**disk 目标写完后
 不调用 `api.sys.install`**（方块电脑装不到手持机上），状态行显示 `written to disk`，日志
-`PKGGET_WRITE ok=true target=disk name=.. files=.. bytes=..`；self 目标仍走原来的 install 路径。没有
+`APPSTORE_WRITE ok=true target=disk name=.. files=.. bytes=..`；self 目标仍走原来的 install 路径。没有
 `/disk` 时目标固定 `self`，按 `t` 只提示 `no disk drive`。用法：**手持机塞入驱动器 → 在方块电脑上跑
-`pkgget` → 按 `t` 选 disk → 下载写入 `/disk/pkgs`（＝手持机的盘）→ 取出后手持机用 installer 安装**。
+`appstore` → 按 `t` 选 disk → 下载写入 `/disk/pkgs`（＝手持机的盘）→ 取出后手持机用 installer 安装**。
 接收模式（`l` / `pushpkg`）仍写 `/pkgs`，不参与目标切换。
 
 ---

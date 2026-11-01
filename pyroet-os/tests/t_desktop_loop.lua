@@ -930,7 +930,7 @@ end
         local f = first.frames[1]
         H.table("ready_frame", f)
         H.contains("ready_title", (f or {})[1] or "", "ver ")
-        H.eq("ready_sel_row", ((f or {})[3] or ""):sub(1, 8), "> pkgget")
+        H.eq("ready_sel_row", ((f or {})[3] or ""):sub(1, 10), "> appstore")
         H.eq("ready_hint_row", ((f or {})[18] or ""):sub(1, 15), "up/dn enter run")
         H.contains("ready_status", (f or {})[19] or "", "sel 1/")
         H.absent("ready_no_boot_log", table.concat(f or {}, "\n"), "STARTUP_COMMITTED")

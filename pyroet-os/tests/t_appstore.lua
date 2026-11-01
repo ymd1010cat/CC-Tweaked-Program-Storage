@@ -1,4 +1,4 @@
---[[- pyroet-os/tests/t_pkgget.lua -- the package downloader (system/system/pkgget.app).
+--[[- pyroet-os/tests/t_appstore.lua -- the package downloader (system/system/appstore.app).
 
 The server is plain http + plain text: index.txt, <dir>/files.txt, the files
 themselves and an optional SHA256.txt. http is faked here (a URL -> body map)
@@ -7,9 +7,9 @@ and the file system is the real one, so the staged package is inspected on disk.
 No non-ASCII bytes in this file.
 ]]
 
-_G.PYROET_PKGGET_TEST = true
-local P = assert(loadfile("/system/system/pkgget.app/main.lua"))()
-_G.PYROET_PKGGET_TEST = nil
+_G.PYROET_APPSTORE_TEST = true
+local P = assert(loadfile("/system/system/appstore.app/main.lua"))()
+_G.PYROET_APPSTORE_TEST = nil
 
 local KEYS = { up = 10, down = 11, enter = 14, q = 16, a = 17, r = 19,
     backspace = 21 }
@@ -80,23 +80,23 @@ return function(H)
     end
 
     -- -----------------------------------------------------------------
-    H.group("pkgget.manifest")
+    H.group("appstore.manifest")
     do
-        local raw = assert(loadfile("/system/system/pkgget.app/manifest.lua"))()
+        local raw = assert(loadfile("/system/system/appstore.app/manifest.lua"))()
         local caps = {}
         for i = 1, #(raw.capabilities or {}) do caps[raw.capabilities[i]] = true end
-        H.eq("pkgget_name", raw.name, "pkgget")
-        H.eq("pkgget_version", raw.version, "0.1.0")
-        H.eq("pkgget_http", caps.http, true)
-        H.eq("pkgget_write", caps["fs.write"], true)
-        H.eq("pkgget_read", caps["fs.read"], true)
-        H.eq("pkgget_input", caps.input, true)
-        H.eq("pkgget_terminal", caps.terminal, true)
-        H.eq("pkgget_rednet", caps["net.rednet"], true)
+        H.eq("appstore_name", raw.name, "appstore")
+        H.eq("appstore_version", raw.version, "0.1.0")
+        H.eq("appstore_http", caps.http, true)
+        H.eq("appstore_write", caps["fs.write"], true)
+        H.eq("appstore_read", caps["fs.read"], true)
+        H.eq("appstore_input", caps.input, true)
+        H.eq("appstore_terminal", caps.terminal, true)
+        H.eq("appstore_rednet", caps["net.rednet"], true)
     end
 
     -- -----------------------------------------------------------------
-    H.group("pkgget.index")
+    H.group("appstore.index")
     do
         local http = http_from(server())
         local api = api_with(http)
@@ -133,7 +133,7 @@ return function(H)
         H.eq("index_ok_entries", #state2.entries, 2)
         H.contains("index_ok_status", state2.status, "bad lines: 2")
         local frame = P.render(state2, 51, 19)
-        H.contains("index_row1", frame[1] or "", "pkgget 0.1.0")
+        H.contains("index_row1", frame[1] or "", "appstore 0.1.0")
         H.contains("index_server_row", frame[2] or "", "server: " .. BASE)
         H.contains("index_app_row", table.concat(frame, "\n"), "demo 1.0.0")
         H.contains("index_hint", frame[19] or "", "up/dn enter r reload a url q quit")
@@ -145,7 +145,7 @@ return function(H)
     end
 
     -- -----------------------------------------------------------------
-    H.group("pkgget.download")
+    H.group("appstore.download")
     do
         H.rmrf("/pkgs")
         local calls
@@ -174,8 +174,8 @@ return function(H)
             "return function(manifest, api)")
         H.eq("download_no_part", F.exists("/pkgs/demo.app.part"), false)
         H.eq("download_installed", installed[1], "demo")
-        H.has(lines, "PKGGET_FETCH name=demo files=2")
-        H.has(lines, "PKGGET_INSTALL name=demo ok=true")
+        H.has(lines, "APPSTORE_FETCH name=demo files=2")
+        H.has(lines, "APPSTORE_INSTALL name=demo ok=true")
         H.contains("download_status", state.status, "installed demo")
 
         -- a server without the optional SHA256.txt is honest about it
@@ -190,13 +190,13 @@ return function(H)
         state2.index = 2
         H.eq("download_nobridge", P.enter(state2, api2), "install")
         H.contains("download_unverified", state2.status, "unverified")
-        H.has(lines2, "PKGGET_INSTALL name=demo ok=false err=no_bridge")
+        H.has(lines2, "APPSTORE_INSTALL name=demo ok=false err=no_bridge")
         H.contains("download_staged", state2.status, "staged in /pkgs")
         H.rmrf("/pkgs")
     end
 
     -- -----------------------------------------------------------------
-    H.group("pkgget.sha")
+    H.group("appstore.sha")
     do
         H.rmrf("/pkgs")
         -- a wrong hash fails and leaves nothing behind
@@ -240,7 +240,7 @@ return function(H)
     end
 
     -- -----------------------------------------------------------------
-    H.group("pkgget.edit")
+    H.group("appstore.edit")
     do
         H.rmrf("/pkgs")
         local http, calls = http_from(server())
@@ -252,7 +252,7 @@ return function(H)
         H.eq("edit_begin", P.dispatch_event(state, "key", "a", api), "repaint")
         H.eq("edit_on", state.editing, true)
         H.eq("edit_prefill", state.edit_text, BASE)
-        H.has(lines, "PKGGET_EDIT begin url=" .. P.plain(BASE, 60))
+        H.has(lines, "APPSTORE_EDIT begin url=" .. P.plain(BASE, 60))
         local frame = P.render(state, 51, 19)
         H.contains("edit_row", frame[2] or "", "server> " .. BASE .. "_")
         H.contains("edit_hint", frame[19] or "", "enter accept c cancel bs del")
@@ -265,7 +265,7 @@ return function(H)
         H.eq("edit_back_text", state.edit_text, "http://")
         H.eq("edit_off", P.dispatch_event(state, "key", "c", api), "repaint")
         H.eq("edit_cancelled", state.editing, nil)
-        H.has(lines, "PKGGET_EDIT end reason=cancel")
+        H.has(lines, "APPSTORE_EDIT end reason=cancel")
 
         -- enter accepts: the new server replaces the first line and the index loads
         state.editing = true
@@ -273,7 +273,7 @@ return function(H)
         local action = P.dispatch_event(state, "key", "enter", api)
         H.eq("edit_submit", action, "open")
         H.eq("edit_new_server", P.server_of(state), BASE)
-        H.has(lines, "PKGGET_SERVER url=" .. P.plain(BASE, 60))
+        H.has(lines, "APPSTORE_SERVER url=" .. P.plain(BASE, 60))
         H.eq("edit_no_space", P.valid_url("two words"), false)
         H.eq("edit_no_empty", P.valid_url("   "), false)
         H.eq("edit_too_long", P.valid_url(string.rep("x", 200)), false)
@@ -331,10 +331,10 @@ return function(H)
     local MANIFEST = 'return { name = "demo", version = "1.0.0" }\n'
     local MAIN = "return function(manifest, api) return nil end\n"
 
-    H.group("pkgget.recv.arm")
+    H.group("appstore.recv.arm")
     do
         H.rmrf("/pkgs")
-        H.rmrf("/etc/pkg.recv")
+        H.rmrf("/etc/appstore.recv")
         local net = fake_rednet()
         local api, lines = recv_api(net)
         local state = P.new_state(api)
@@ -345,8 +345,8 @@ return function(H)
         H.eq("arm_protocol", state.recv and state.recv.protocol, "PYROET-PKG/1")
         H.contains("arm_status", state.status, "listening ch=4101")
         H.eq("arm_default_protocol", P.RECV_PROTOCOL, "PYROET-PKG/1")
-        H.eq("arm_conf_path", P.RECV_CONF, "/etc/pkg.recv")
-        H.has(lines, "PKGGET_RECV_ARM ch=4101 protocol=PYROET-PKG/1")
+        H.eq("arm_conf_path", P.RECV_CONF, "/etc/appstore.recv")
+        H.has(lines, "APPSTORE_RECV_ARM ch=4101 protocol=PYROET-PKG/1")
         -- the hint row switches to the receiver vocabulary
         local frame = P.render(state, 51, 19)
         H.eq("arm_rows", #frame, 19)
@@ -357,7 +357,7 @@ return function(H)
         H.eq("stop_action", P.dispatch_event(state, "key", "q", api), "repaint")
         H.eq("stop_state", state.recv, nil)
         H.eq("stop_status", state.status, "receiver stopped")
-        H.has(lines, "PKGGET_RECV_STOP")
+        H.has(lines, "APPSTORE_RECV_STOP")
         H.eq("arm_again", P.recv_arm(state, api), "repaint")
         P.recv_stop(state, api)
         -- a char event arms too
@@ -382,7 +382,7 @@ return function(H)
         H.eq("no_rednet_action", P.recv_arm(state3, api3), "denied")
         H.eq("no_rednet_status", state3.status, "no rednet")
         H.eq("no_rednet_state", state3.recv, nil)
-        H.has(lines3, "PKGGET_RECV_ARM ok=false err=no_rednet")
+        H.has(lines3, "APPSTORE_RECV_ARM ok=false err=no_rednet")
         -- a host with no rednet table at all
         local saved_net = rawget(_G, "rednet")
         rawset(_G, "rednet", nil)
@@ -390,15 +390,15 @@ return function(H)
         local state4 = P.new_state(api4)
         H.eq("no_net_table", P.recv_arm(state4, api4), "denied")
         H.eq("no_rednet_table_state", state4.recv, nil)
-        H.has(lines4, "PKGGET_RECV_ARM ok=false err=no_rednet")
+        H.has(lines4, "APPSTORE_RECV_ARM ok=false err=no_rednet")
         rawset(_G, "rednet", saved_net)
     end
 
-    H.group("pkgget.recv.conf")
+    H.group("appstore.recv.conf")
     do
         H.rmrf("/pkgs")
         H.mkdirp("/etc")
-        H.write("/etc/pkg.recv",
+        H.write("/etc/appstore.recv",
             "# receiver settings\nchannel=4200\nprotocol=PYROET-PKG/9\n")
         local api, lines = recv_api(fake_rednet())
         local state = P.new_state(api)
@@ -406,10 +406,10 @@ return function(H)
         H.eq("conf_channel", state.recv and state.recv.channel, 4200)
         H.eq("conf_protocol", state.recv and state.recv.protocol, "PYROET-PKG/9")
         H.contains("conf_status", state.status, "listening ch=4200")
-        H.has(lines, "PKGGET_RECV_ARM ch=4200 protocol=PYROET-PKG/9")
+        H.has(lines, "APPSTORE_RECV_ARM ch=4200 protocol=PYROET-PKG/9")
         P.recv_stop(state, api)
         -- bad values are ignored: the defaults stay
-        H.write("/etc/pkg.recv", "channel=0\nchannel=abc\nprotocol=two words\n")
+        H.write("/etc/appstore.recv", "channel=0\nchannel=abc\nprotocol=two words\n")
         local api2 = recv_api(fake_rednet())
         local state2 = P.new_state(api2)
         H.eq("conf_bad_arm", P.recv_arm(state2, api2), "repaint")
@@ -417,11 +417,11 @@ return function(H)
         H.eq("conf_bad_protocol", state2.recv and state2.recv.protocol,
             "PYROET-PKG/1")
         P.recv_stop(state2, api2)
-        F.delete("/etc/pkg.recv")
-        H.eq("conf_removed", F.exists("/etc/pkg.recv"), false)
+        F.delete("/etc/appstore.recv")
+        H.eq("conf_removed", F.exists("/etc/appstore.recv"), false)
     end
 
-    H.group("pkgget.recv.package")
+    H.group("appstore.recv.package")
     do
         H.rmrf("/pkgs")
         local net = fake_rednet()
@@ -464,7 +464,7 @@ return function(H)
         H.eq("part_cleaned", F.exists("/pkgs/demo.app.part"), false)
         H.eq("installed_once", installed[1], "demo")
         H.eq("installed_count", #installed, 1)
-        H.has(lines, "PKGGET_RECV name=demo files=2 bytes=")
+        H.has(lines, "APPSTORE_RECV name=demo files=2 bytes=")
         H.eq("recv_report_name", state.recv_pkg and state.recv_pkg.name, "demo")
         H.eq("recv_report_files", state.recv_pkg and state.recv_pkg.files, 2)
         H.eq("recv_report_install", state.recv_pkg and state.recv_pkg.install, true)
@@ -488,13 +488,13 @@ return function(H)
             "not published")
         H.eq("solo_install", state2.recv_pkg and state2.recv_pkg.install, false)
         H.contains("solo_status", state2.status, "staged /pkgs/solo.app")
-        H.has(lines2, "PKGGET_RECV name=solo files=1 bytes=")
+        H.has(lines2, "APPSTORE_RECV name=solo files=1 bytes=")
         H.has(lines2, "install=false")
         P.recv_stop(state2, api2)
         H.rmrf("/pkgs")
     end
 
-    H.group("pkgget.recv.chunks")
+    H.group("appstore.recv.chunks")
     do
         H.rmrf("/pkgs")
         local net = fake_rednet()
@@ -530,7 +530,7 @@ return function(H)
         H.rmrf("/pkgs")
     end
 
-    H.group("pkgget.recv.abort")
+    H.group("appstore.recv.abort")
     do
         H.rmrf("/pkgs")
         local net = fake_rednet()
@@ -547,12 +547,12 @@ return function(H)
         H.eq("abort_published", F.exists("/pkgs/gone.app"), false)
         H.eq("abort_status", state.status, "aborted gone")
         H.check("abort_still_armed", type(state.recv) == "table", "disarmed")
-        H.has(lines, "PKGGET_RECV_ABORT name=gone")
+        H.has(lines, "APPSTORE_RECV_ABORT name=gone")
         P.recv_stop(state, api)
         H.rmrf("/pkgs")
     end
 
-    H.group("pkgget.recv.failures")
+    H.group("appstore.recv.failures")
     do
         local function ready(name)
             H.rmrf("/pkgs")
@@ -573,7 +573,7 @@ return function(H)
         H.contains("sha_bad_err", net.sent[#net.sent].msg.err, "hash check failed")
         H.eq("sha_bad_part", F.exists("/pkgs/demo.app.part"), false)
         H.eq("sha_bad_published", F.exists("/pkgs/demo.app"), false)
-        H.has(lines, "PKGGET_RECV name=demo files=1 bytes=")
+        H.has(lines, "APPSTORE_RECV name=demo files=1 bytes=")
         H.has(lines, "ok=false")
         H.check("sha_bad_armed", type(state.recv) == "table", "disarmed")
         -- a malformed digest is refused before anything is compared
@@ -633,7 +633,7 @@ return function(H)
         H.rmrf("/pkgs")
     end
 
-    H.group("pkgget.recv.timeout")
+    H.group("appstore.recv.timeout")
     do
         H.rmrf("/pkgs")
         local now = 0
@@ -647,7 +647,7 @@ return function(H)
         now = 200
         H.eq("timeout_action", P.recv_poll(state, api), "error")
         H.eq("timeout_part", F.exists("/pkgs/slow.app.part"), false)
-        H.has(lines, "PKGGET_RECV_TIMEOUT name=slow")
+        H.has(lines, "APPSTORE_RECV_TIMEOUT name=slow")
         H.eq("timeout_acks", #net.sent, 1)   -- only the begin ack from before
         H.check("timeout_armed", type(state.recv) == "table", "disarmed")
         -- a plain receive timeout is not an error and does not drop the stream
@@ -660,7 +660,7 @@ return function(H)
         H.rmrf("/pkgs")
     end
 
-    H.group("pkgget.keys")
+    H.group("appstore.keys")
     do
         local api = api_with(http_from(server()), nil)
         local state = P.new_state(api)
@@ -685,7 +685,7 @@ return function(H)
         state.entries = {}
         state.index = 5
         H.eq("keys_empty_enter", P.dispatch_event(state, "key", "enter", api), "none")
-        H.eq("pkgget_hint", P.HINT,
+        H.eq("appstore_hint", P.HINT,
             "up/dn enter r reload a url q quit l recv t target")
     end
 
@@ -694,7 +694,7 @@ return function(H)
     -- computer has no /disk, so only the drive case can be selected; the file
     -- system is real, so a disk write is inspected on /disk/pkgs.
     -- -----------------------------------------------------------------
-    H.group("pkgget.target")
+    H.group("appstore.target")
     do
         -- no drive: `t` only says so and the target stays self
         H.rmrf("/pkgs")
@@ -714,8 +714,8 @@ return function(H)
         H.eq("target_none_status", state.status, "no disk drive")
         local frame = P.render(state, 51, 19)
         H.contains("target_none_row", frame[18] or "", "target self  no disk drive")
-        H.has(lines, "PKGGET_TARGET ok=false err=no_disk")
-        H.lacks("target_none_no_write", lines, "PKGGET_WRITE")
+        H.has(lines, "APPSTORE_TARGET ok=false err=no_disk")
+        H.lacks("target_none_no_write", lines, "APPSTORE_WRITE")
         -- a self download still goes through the bridge
         state.servers = { BASE }
         state.server_index = 1
@@ -724,7 +724,7 @@ return function(H)
         H.eq("target_self_action", P.enter(state, api), "install")
         H.eq("target_self_installed", installed[1], "demo")
         H.check("target_self_file", F.exists("/pkgs/demo.app/main.lua"), "not staged")
-        H.has(lines, "PKGGET_INSTALL name=demo ok=true")
+        H.has(lines, "APPSTORE_INSTALL name=demo ok=true")
 
         -- a drive: `t` selects disk, the package is written and never installed
         H.rmrf("/pkgs")
@@ -744,16 +744,16 @@ return function(H)
         H.eq("target_disk_pkgs", P.pkgs_root(state2), "/disk/pkgs")
         local frame2 = P.render(state2, 51, 19)
         H.contains("target_disk_row", frame2[18] or "", "target disk")
-        H.has(lines2, "PKGGET_TARGET ok=true target=disk root=/disk/pkgs")
+        H.has(lines2, "APPSTORE_TARGET ok=true target=disk root=/disk/pkgs")
         state2.servers = { BASE }
         state2.server_index = 1
         P.load_index(state2, api2)
         state2.index = 2
         H.eq("target_disk_action", P.enter(state2, api2), "install")
         H.eq("target_disk_no_bridge", #installed2, 0)
-        H.lacks("target_disk_no_install_log", lines2, "PKGGET_INSTALL")
-        H.has(lines2, "PKGGET_WRITE ok=true target=disk name=demo files=2 bytes=")
-        H.has(lines2, "PKGGET_FETCH name=demo files=2")
+        H.lacks("target_disk_no_install_log", lines2, "APPSTORE_INSTALL")
+        H.has(lines2, "APPSTORE_WRITE ok=true target=disk name=demo files=2 bytes=")
+        H.has(lines2, "APPSTORE_FETCH name=demo files=2")
         H.contains("target_disk_status", state2.status, "written to disk")
         local map = server()
         H.eq("target_disk_manifest", H.read("/disk/pkgs/demo.app/manifest.lua"),

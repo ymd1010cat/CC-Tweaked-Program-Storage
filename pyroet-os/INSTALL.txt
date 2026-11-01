@@ -112,7 +112,7 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 creates it), q back
      net        up/down scroll the hosts, enter or r refresh (rpv status,
                 hosts, probe target), q back
-     pkgget     built-in package downloader: a edits the server line, enter
+     appstore   built-in package downloader: a edits the server line, enter
                 downloads the selected package into /pkgs and installs it.
                 Server layout (plain text, any static file server):
                   index.txt           "app <name> <version> <dir>" per line
@@ -122,12 +122,12 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                                       without it the status says unverified
                 l arms the rednet receiver: the status row shows
                 "listening ch=4101 id=<computer id>", q stops listening, and
-                /etc/pkg.recv may override channel= / protocol=. Another
+                /etc/appstore.recv may override channel= / protocol=. Another
                 computer runs tools/pushpkg.lua (below) to stream a package
                 into /pkgs; a failed transfer leaves no .part tree behind.
                 t switches the target when /disk exists (a handheld sitting in
                 a disk drive of a block computer): the status row reads
-                "target self" (/pkgs) or "target disk" (/disk/pkgs). Run pkgget
+                "target self" (/pkgs) or "target disk" (/disk/pkgs). Run appstore
                 on the block computer, press t to pick disk and download: the
                 package is written to /disk/pkgs/<name>.app and api.sys.install
                 is NOT called (a block computer cannot install onto the

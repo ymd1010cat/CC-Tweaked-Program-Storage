@@ -588,7 +588,7 @@ end
         H.has(lines, "APP_LOG app=surface msg=peripheral=table")
 
         -- fs.isDir answers for a granted app: true for a directory, false for a
-        -- path that is not one (pkgget's disk probe rides on this, T22)
+        -- path that is not one (appstore's disk probe rides on this, T22)
         local dirprobe = H.app_package(dir .. "/apps/dirprobe.app", {
             manifest = 'return { name = "dirprobe", capabilities = { "fs.read" } }',
             main = "return function(manifest, api)\n"

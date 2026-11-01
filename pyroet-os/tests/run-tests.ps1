@@ -61,7 +61,7 @@ foreach ($required in @("startup.lua", "system\startup.lua", "system\boot.lua",
         "system\net\hosts.lua", "system\net\service.lua",
                 "system\system\launcher.app\manifest.lua", "system\system\launcher.app\main.lua",
         "system\system\settings.app\manifest.lua", "system\system\settings.app\main.lua",
-    "system\system\pkgget.app\manifest.lua", "system\system\pkgget.app\main.lua",
+    "system\system\appstore.app\manifest.lua", "system\system\appstore.app\main.lua",
             "system\system\installer.app\manifest.lua", "system\system\installer.app\main.lua",
         "recovery\proto.lua", "recovery\flash.lua", "recovery\bootstrap.lua",
         "ota\server.lua", "install.set", "tools\pushpkg.lua")) {
@@ -91,7 +91,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "tests\net.app") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\launcher.app") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\settings.app") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\pkgget.app") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $comp "system\system\appstore.app") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $comp "tests\web.app") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $comp "tests\files.app") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $comp "tests")  | Out-Null
@@ -120,7 +120,7 @@ Copy-Item (Join-Path $osRoot "examples\net.app\*") (Join-Path $comp "tests\net.a
     Copy-Item (Join-Path $osRoot "install.set")                (Join-Path $comp "install.set")        -Force
     Copy-Item (Join-Path $osRoot "system\system\launcher.app\*") (Join-Path $comp "system\system\launcher.app") -Force
     Copy-Item (Join-Path $osRoot "system\system\settings.app\*") (Join-Path $comp "system\system\settings.app") -Force
-Copy-Item (Join-Path $osRoot "system\system\pkgget.app\*") (Join-Path $comp "system\system\pkgget.app") -Force
+Copy-Item (Join-Path $osRoot "system\system\appstore.app\*") (Join-Path $comp "system\system\appstore.app") -Force
 Copy-Item (Join-Path $osRoot "examples\web.app\*") (Join-Path $comp "tests\web.app") -Force
 Copy-Item (Join-Path $osRoot "examples\files.app\*") (Join-Path $comp "tests\files.app") -Force
     Copy-Item (Join-Path $here "*.lua")                 (Join-Path $comp "tests")               -Force
