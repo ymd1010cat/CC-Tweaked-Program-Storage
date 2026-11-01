@@ -122,7 +122,7 @@ local fake = { store = {
     ["powergrid.watchdog.high"] = "12",
     ["powergrid.watchdog.window"] = "120",
     ["powergrid.watchdog.poll"] = "10",
-    ["powergrid.watchdog.input_side"] = "back",
+    ["powergrid.watchdog.input_side"] = "bottom",
     ["powergrid.watchdog.alarm_side"] = "right",
 } }
 function fake.get(key) return fake.store[key] end
@@ -185,7 +185,7 @@ local rs = newRedstone(15)
 local log = newLog()
 local appR = A.new({
     config = { low = 2, high = 10, window = 30, poll = 10, alarm_side = "left",
-        input_side = "back" },
+        input_side = "bottom" },
     redstone = rs,
     logger = log,
     clock = clock.now,
@@ -198,7 +198,7 @@ H.eq(#rs.calls, 1, "exactly one relay write at start")
 H.eq(rs.calls[1].side, "left", "the alarm side is left")
 H.eq(rs.calls[1].value, false, "the relay starts in the safe state")
 H.eq(count(log, "WATCHDOG_START"), 1, "start is logged")
-H.contains(findLine(log, "WATCHDOG_START"), "input=back", "start log has the input side")
+H.contains(findLine(log, "WATCHDOG_START"), "input=bottom", "start log has the input side")
 H.contains(findLine(log, "WATCHDOG_START"), "window=30", "start log has the window")
 
 rs.level = 1

@@ -106,7 +106,7 @@
 | `powergrid.watchdog.high` | `10` | 整数 0–15，且必须大于 `low` | 达到它算健康/恢复 |
 | `powergrid.watchdog.window` | `300` | 秒，`> 0` 且 `<= 604800` | 持续低多久才告警并切备用 |
 | `powergrid.watchdog.poll` | `10` | 秒，`>= 0.1` 且 `<= 86400` | 采样间隔 |
-| `powergrid.watchdog.input_side` | `back` | `top/bottom/left/right/front/back` | 读 `getAnalogInput` 的面 |
+| `powergrid.watchdog.input_side` | `bottom` | `top/bottom/left/right/front/back` | 读 `getAnalogInput` 的面 |
 | `powergrid.watchdog.alarm_side` | `left` | 同上 | 告警继电器输出面 |
 | `powergrid.watchdog.switch_to` | `2` | 整数 0–3 | 报警时切到哪个模式（2=备用电池；0=关闭；3=外部电网） |
 | `powergrid.watchdog.restore` | `true` | `true/false/1/0/yes/no/on/off` | 恢复时是否切回报警前的模式；`false` 则保持 `switch_to` |
@@ -137,7 +137,7 @@
 ### 接线建议
 
 - **输入**：把电网健康度（电压/电量比例）用比较器或能量感应器变成 0–15 的模拟红石，
-  接到 `input_side`（默认背面）。断网/空载时读数自然掉到 0，正好落在"低"。
+  接到 `input_side`（默认下方）。断网/空载时读数自然掉到 0，正好落在"低"。
 - **告警**：`alarm_side`（默认左面）接红石灯、警报器或红石无线发送器；告警时输出 `true`，
   恢复/启动时输出 `false`。
 - **电源输出**：watchdog 切换模式时用的是它自己这台电脑背面的模拟输出（和控制器同一套
