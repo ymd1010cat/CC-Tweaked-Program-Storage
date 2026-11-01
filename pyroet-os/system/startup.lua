@@ -158,6 +158,24 @@ function P.default_log(fsx, path)
     end
 end
 
+-- D1-fix: the log without the console. Once the desktop owns the screen, a
+-- `print` per event scrolls the launcher's frame away (measured: every
+-- DESKTOP_EVENT / APP_LOG line repaints the console and pushes the desktop up),
+-- so the resident phase keeps appending to /kernel.log and stops writing to the
+-- screen. Only the *default* logger is swapped; a caller that injected its own
+-- `log` (tests) keeps it, because its sink is how the assertions see the events.
+function P.quiet_log(fsx, path)
+    local file = path or P.LOG_PATH
+    return function(line)
+        if not fsx then return end
+        local ok, handle = pcall(fsx.open, file, "a")
+        if ok and handle then
+            pcall(handle.write, line .. "\n")
+            pcall(handle.close)
+        end
+    end
+end
+
 function P.default_frame(opts)
     local o = opts or {}
     return function(plan, status)
@@ -893,7 +911,15 @@ function P.run(opts)
         if not okl then log("STARTUP_LOOP_FAIL err=" .. short(lerr)) end
         dreason = "handover"
     else
-        local okr, dmod, dwhy = pcall(P.start_desktop_loop, ctx, o, log)
+        -- the console now belongs to the desktop: a print per event would scroll
+        -- its frame away (D1-fix). Only the *default* logger is quieted; an
+        -- injected `log` (tests) stays, because its sink carries the assertions.
+        local desk_log = log
+        if o.log == nil then
+            desk_log = P.quiet_log(fsx, o.log_path)
+            desk_log("STARTUP_DESKTOP_QUIET path=" .. short(o.log_path or P.LOG_PATH, 40))
+        end
+        local okr, dmod, dwhy = pcall(P.start_desktop_loop, ctx, o, desk_log)
         if not okr then
             log("STARTUP_DESKTOP_FAIL err=" .. short(dmod))
             dreason = "failed"

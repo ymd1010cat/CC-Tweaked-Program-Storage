@@ -474,11 +474,66 @@ end
 local UP = { up = true, left = true }
 local DOWN = { down = true, right = true }
 
+-- ---------------------------------------------------------------------------
+-- key names (D1-fix: both shapes are accepted)
+-- ---------------------------------------------------------------------------
+--
+-- The desktop dispatcher delivers `key` events with a *name* ("up"/"down"), but
+-- a raw keycode can still reach the launcher (a `key_up` event, a different
+-- host, or a test). The code -> name map is built from the ROM's own keys table
+-- through `api.input.keys`, so it is right on every ROM instead of being a
+-- hardcoded list of numbers: CraftOS-PC sends up=200/down=208, Minecraft's
+-- CC:Tweaked sends 265/264, and both resolve to the same names.
+
+M.KEY_NAMES = { "up", "down", "left", "right", "enter", "escape", "backspace",
+    "tab", "delete", "space" }
+
+function M.key_map(keysx)
+    local out = {}
+    if type(keysx) ~= "table" then return out end
+    for i = 1, #M.KEY_NAMES do
+        local name = M.KEY_NAMES[i]
+        local code = keysx[name]
+        if type(code) == "number" and out[code] == nil then out[code] = name end
+    end
+    for name, code in pairs(keysx) do
+        if type(name) == "string" and type(code) == "number" and out[code] == nil then
+            out[code] = name
+        end
+    end
+    return out
+end
+
+-- the keys table this app can see: the granted `input` host first, the ROM
+-- global as the fallback (a denied capability still answers with an empty table)
+function M.keys_table(api)
+    local input = type(api) == "table" and api.input or nil
+    local keysx = type(input) == "table" and input.keys or nil
+    if type(keysx) == "table" and next(keysx) ~= nil then return keysx end
+    return rawget(_G, "keys")
+end
+
+-- numeric keycode -> name, cached per keys table (the table never changes)
+function M.code_name(code, api)
+    local keysx = M.keys_table(api)
+    if M.map_source ~= keysx then
+        M.map_source = keysx
+        M.map = M.key_map(keysx)
+    end
+    return (M.map or {})[code]
+end
+
 -- pure key handling: one key in, one action out. Returns the action
 -- ("move"|"select"|"launch"|"error"|"denied"|"none") and the app name when the
--- action started something.
+-- action started something. A number is normalized through the ROM's keys table
+-- first, so a raw keycode works exactly like the name the dispatcher sends.
 function M.handle_key(state, key, api)
     local count = #(state.entries or {})
+    if type(key) == "number" then
+        local name = M.code_name(key, api)
+        if name == nil then return "none" end
+        key = name
+    end
     if type(key) ~= "string" then return "none" end
     if UP[key] or DOWN[key] then
         if count == 0 then
@@ -583,12 +638,18 @@ function M.paint_once(state, api, term)
 end
 
 -- one normalized event in, one action out. The dispatcher delivers `key`
--- events with a key *name* ("up", "enter", "escape"), everything else raw.
+-- events with a key *name* ("up", "enter", "escape"), everything else raw; a
+-- raw keycode is accepted as well and normalized through the ROM's keys table.
 -- Returns "quit" when the desktop has to end, otherwise the handle_key action
 -- ("move" | "select" | "launch" | "error" | "denied" | "repaint" | "none").
 function M.dispatch_event(state, event, p1, p2, api)
     if event == "key" then
-        local key = tostring(p1 == nil and "" or p1)
+        local key = p1
+        if type(key) == "number" then
+            key = M.code_name(key, api)
+            if key == nil then return "none" end
+        end
+        key = tostring(key == nil and "" or key)
         if key == "escape" then return "quit", "escape" end
         local action, detail = M.handle_key(state, key, api)
         M.note_key(api, state, key, action, detail)

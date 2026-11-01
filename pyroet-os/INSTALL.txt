@@ -69,6 +69,11 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
    longer declares "input". A stale /etc/perms/launcher.cfg written by an older
    image is migrated on the next boot: the log shows PERMS_STALE ...
    caps=input,terminal and PERMS_SAVED ... granted=4 denied=0.
+   Enter on an app that cannot take the keyboard (settings, installer, net: none
+   of them declare "input") parks it: the screen keeps the launcher, the hint
+   says "started <name>" and /kernel.log shows DESKTOP_PARK ... The desktop owns
+   the screen, so from STARTUP_DESKTOP_QUIET on the boot log only goes to
+   /kernel.log -- that is normal, not a hang.
 3. Check: cat /boot.ok ; tail /kernel.log
    /boot.ok is one line:
      PYROET-BOOT-OK-2 version=0.2.0 manifest_sha=none ts=<ms>

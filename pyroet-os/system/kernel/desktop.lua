@@ -28,6 +28,17 @@ declares `input` started during the step -- then the keyboard is handed to that
 app (the launcher started a full-screen application), and handed back when it
 stops. `DESKTOP_FOREGROUND` records each handover.
 
+Parking (D1-fix): an app that was started during the step and does NOT declare
+`input` can never become the foreground, so it is parked (`DESKTOP_PARK`,
+handed to `rt:tick` as a skip map). It stays `running` but never gets a time
+slice, because a time slice is all a launched app needs to paint over a console
+it does not own: on the real machine the image's `installer` (started by a stray
+Enter) repainted its own `s <pkg>` frame on every tick the launcher did not
+repaint on -- the `key_up` after each key press -- which looked like "an S in
+front of every row" plus "the selection does not move". A desktop is one screen
+and one keyboard; background work belongs to a kernel service, not to a launched
+app.
+
 Exit semantics: the loop ends when
   * an app the dispatcher is following returns from its body -- `"quit"` gives
     `reason=quit`, anything else is reported back verbatim, and a crash is
@@ -135,6 +146,10 @@ function D.new(opts)
     self.ticked = 0
     self.handovers = 0
     self.foreground = self.name
+    -- apps the desktop parked: launched, but they cannot own the console (no
+    -- `input`), so they never get a time slice and can never paint over it
+    self.parked = {}
+    self.parked_count = 0
     self.reason = nil
     self.exited = false
     return self
@@ -169,16 +184,17 @@ function D:state()
         ticked = self.ticked,
         handovers = self.handovers,
         foreground = self.foreground,
+        parked = self.parked_count,
         reason = self.reason,
         exited = self.exited,
     }
 end
 
 -- ---------------------------------------------------------------------------
--- the app runtime as a name -> running input app map
+-- the app runtime as name -> running app / running input app maps
 -- ---------------------------------------------------------------------------
 
-function D:running_inputs()
+function D:running_all()
     local out = {}
     local rt = self.rt
     if type(rt) ~= "table" or type(rt.status) ~= "function" then return out end
@@ -188,13 +204,25 @@ function D:running_inputs()
     for i = 1, #apps do
         local entry = apps[i]
         if type(entry) == "table" and entry.name ~= nil and entry.state == "running" then
-            local caps = entry.capabilities
-            local wants = false
-            for j = 1, #(caps or {}) do
-                if caps[j] == "input" then wants = true break end
-            end
-            if wants then out[entry.name] = entry end
+            out[entry.name] = entry
         end
+    end
+    return out
+end
+
+function D.has_cap(entry, cap)
+    local caps = type(entry) == "table" and entry.capabilities or nil
+    for i = 1, #(caps or {}) do
+        if caps[i] == cap then return true end
+    end
+    return false
+end
+
+function D:running_inputs()
+    local out = {}
+    local all = self:running_all()
+    for name, entry in pairs(all) do
+        if D.has_cap(entry, "input") then out[name] = entry end
     end
     return out
 end
@@ -249,7 +277,9 @@ end
 function D:tick()
     if type(self.rt.tick) ~= "function" then return false end
     self.ticked = self.ticked + 1
-    local ok, advanced = pcall(self.rt.tick, self.rt)
+    -- parked apps are handed to the scheduler as a skip map: they stay running
+    -- but never get a time slice, so they cannot paint over the foreground
+    local ok, advanced = pcall(self.rt.tick, self.rt, self.parked)
     if not ok then
         self:log("DESKTOP_TICK_FAIL err=" .. short(advanced))
         return false
@@ -281,7 +311,33 @@ function D:detach_reason()
     return short(record.result, 24)
 end
 
--- runs after the tick: did the desktop leave, and who owns the keyboard now
+-- Park every app that was started during this step and cannot own the console.
+-- The desktop is one screen and one keyboard: an app without `input` can never
+-- become the foreground, so giving it a time slice only lets it fight over a
+-- console it does not own. That is exactly what happened on the real machine:
+-- pressing Enter on `installer` started it, and on every tick the launcher did
+-- not repaint (the `key_up` after each key press) the installer's own frame
+-- (`s <pkg>` rows, its stale marker) landed on the screen -- which the user saw
+-- as "an S in front of every entry" and "the selection does not move".
+-- Background work belongs to a kernel service, not to a launched desktop app.
+function D:park(before_all)
+    local rt = self.rt
+    if type(rt) ~= "table" or type(rt.status) ~= "function" then return end
+    local after = self:running_all()
+    for name, entry in pairs(after) do
+        if before_all[name] == nil and name ~= self.name
+            and not D.has_cap(entry, "input") and not self.parked[name] then
+            self.parked[name] = true
+            self.parked_count = self.parked_count + 1
+            self:log("DESKTOP_PARK app=" .. short(name, 24)
+                .. " reason=no_input caps="
+                .. tostring(#(entry.capabilities or {})))
+        end
+    end
+end
+
+-- runs after the tick: did the desktop leave, who owns the keyboard, and did a
+-- launched app have to be parked (it can never own the console)
 function D:settle(before)
     local after = self:running_inputs()
 
@@ -332,6 +388,7 @@ function D:dispatch(event, p1, p2, p3)
         return true, "terminate"
     end
     local before = self:running_inputs()
+    local before_all = self:running_all()
     local target = self.foreground
     if before[target] == nil then
         target = self:pick(before, target)
@@ -350,6 +407,7 @@ function D:dispatch(event, p1, p2, p3)
         .. " arg=" .. short(a1, 20) .. " app=" .. short(target, 24))
     self:deliver(name, a1, a2, a3)
     self:tick()
+    self:park(before_all)
     return self:settle(before)
 end
 

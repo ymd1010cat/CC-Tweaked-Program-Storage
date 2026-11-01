@@ -915,12 +915,17 @@ function A:step(name)
     return true
 end
 
-function A:tick()
+-- `skip` is an optional name -> true map: the desktop event loop uses it to keep
+-- an app it parked (a launched app that cannot own the console) out of the
+-- scheduler, so a background app can never paint over the foreground screen
+-- (D1-fix: the installer's own `s <pkg>` frame used to land on every tick the
+-- launcher did not repaint on).
+function A:tick(skip)
     self.ticks = self.ticks + 1
     local advanced = 0
     for i = 1, #self.records do
         local record = self.records[i]
-        if record.state == "running" and record.co then
+        if record.state == "running" and record.co and not (skip and skip[record.name]) then
             if self:step(record.name) then advanced = advanced + 1 end
         end
     end

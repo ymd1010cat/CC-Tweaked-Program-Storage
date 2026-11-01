@@ -14,6 +14,11 @@ Two halves, because the loop has two jobs that fail differently:
      through `api.input.pullEvent`, the launched app really starts, and Esc
      unwinds `startup.run` with `desktop_reason=quit` so the console gets the
      machine back.
+  3. `desktop_loop.screen`: the same chain driven with `tests/screen.lua`
+     installed as `_G.term`, which is the only way to catch a *painting* bug
+     (D1-fix: a launched app that cannot own the console used to repaint the
+     screen on every tick the launcher did not, so every row grew an `s` tag and
+     the selection looked stuck).
 
 `tests/run.lua` sets `_G.PYROET_DESKTOP_TEST`, which keeps every other suite
 headless; supplying `pull_event` is what turns the loop on here.
@@ -27,6 +32,7 @@ rawset(_G, "PYROET_STARTUP_TEST", nil)
 
 local DESKTOP = dofile("/system/kernel/desktop.lua")
 local APPS = dofile("/system/kernel/apps.lua")
+local S = dofile("/tests/screen.lua")
 
 rawset(_G, "PYROET_LAUNCHER_TEST", true)
 local LAUNCHER = assert(loadfile("/system/system/launcher.app/main.lua"))()
@@ -504,6 +510,170 @@ return function(H)
         H.eq("terminal_denied_input_granted",
             result2.apps:app("launcher").perms and result2.apps:app("launcher").perms.input,
             true)
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("desktop_loop.screen")
+    -- The D1-fix regression, at the only level where the bug is visible: the
+    -- screen. A launched app that cannot own the console must not paint over the
+    -- desktop. `_G.term` is the buffer here, so an app that grabs the ROM
+    -- terminal directly (which the image's installer/settings apps do) paints
+    -- into the same frame the user would see.
+    do
+        H.rmrf("/etc/perms")
+        H.rmrf("/apps")
+        -- a stand-in for the real installer: it paints every row with an `s` tag
+        -- and never takes the keyboard, exactly like the image's `installer.app`
+        H.app_package("/apps/aaa.app", {
+            manifest = 'return { name = "aaa", version = "0.1.0",'
+                .. ' capabilities = { "fs.read" } }',
+            main = [[
+return function(manifest, api)
+    local t = rawget(_G, "term")
+    while true do
+        for y = 1, 6 do
+            t.setCursorPos(1, y)
+            t.write("s row " .. tostring(y) .. "                    ")
+        end
+        api.yield()
+    end
+end
+]],
+        })
+        local dir = H.case_dir("loop", "screen")
+        bootable(dir)
+        local host = new_host()
+        host.keys = KEYS
+        local log, lines = H.logger()
+        local K = rawget(_G, "keys")
+        -- the real event stream: CraftOS-PC sends key + key_up for every press,
+        -- and the key_up tick is the one the launcher does not repaint on
+        local events = {
+            { "key", 14 },                -- enter: index 1 is "aaa"
+            { "key_up", 14 },
+            { "key", 11 },                -- down: the marker must move
+            { "key_up", 11 },
+            { "key", 10 },                -- up
+            { "key_up", 10 },
+            { "terminate" },
+        }
+        local pulls = 0
+        local frames = {}
+        local buf = nil
+        local function snap()
+            local out = {}
+            for y = 1, 19 do out[y] = buf.row(y) end
+            return out
+        end
+        local pull = function()
+            frames[pulls + 1] = snap()
+            pulls = pulls + 1
+            local event = events[pulls]
+            if event == nil then return "terminate" end
+            return event[1], event[2]
+        end
+        buf = S.buffer(51, 19)
+        local saved_nopaint = rawget(_G, "PYROET_APP_NOPAINT")
+        rawset(_G, "PYROET_APP_NOPAINT", nil)
+        local result = nil
+        local okrun, why = pcall(function()
+            local okw, value = S.with_term(buf, function()
+                return startup.run({
+                    fs = F,
+                    root = dir,
+                    log = log,
+                    apps_root = "/apps",   -- the launcher scans the literal roots
+                    input = host,
+                    pull_event = pull,
+                    terminal = buf,
+                    reboot = function() error("rebooted unexpectedly") end,
+                    frame = function() return true end,
+                })
+            end)
+            result = value
+            return okw
+        end)
+        rawset(_G, "PYROET_APP_NOPAINT", saved_nopaint)
+        H.check("screen_run_ok", okrun and why == true, tostring(result))
+        H.eq("screen_desktop_reason", result and result.desktop_reason, "terminate")
+
+        -- the list the launcher draws: aaa(1) launcher(2) net(3) settings(4)
+        local list_rows = { 3, 4, 5, 6 }
+        local function markers(frame)
+            local count, where = 0, nil
+            for i = 1, #list_rows do
+                local row = (frame and frame[list_rows[i]]) or ""
+                if row:sub(1, 1) == ">" then count = count + 1; where = i end
+            end
+            return count, where
+        end
+
+        -- the launched app is parked, not scheduled: it never paints
+        H.has(lines, "DESKTOP_PARK app=aaa reason=no_input")
+        H.eq("screen_parked_count", result.desktop and result.desktop.parked_count, 1)
+
+        -- frame after enter + its key_up (the tick that used to show the app's
+        -- `s` rows): still the launcher's list, one marker, no `s` prefix
+        local after_enter = frames[3]
+        H.table("screen_frame3", after_enter)
+        H.eq("screen_one_marker_after_launch", markers(after_enter), 1)
+        for i = 1, #list_rows do
+            local row = (after_enter and after_enter[list_rows[i]]) or ""
+            local head = row:sub(1, 2)
+            H.check("screen_row" .. tostring(list_rows[i]) .. "_marker",
+                head == "> " or head == "  ", "row=[" .. row .. "]")
+            H.check("screen_row" .. tostring(list_rows[i]) .. "_no_s_tag",
+                row:sub(1, 2) ~= "s ", "row=[" .. row .. "]")
+        end
+        H.contains("screen_list_intact", (after_enter and after_enter[4]) or "",
+            "launcher")
+        local joined3 = table.concat(after_enter or {}, "\n")
+        H.absent("screen_no_painter_rows", joined3, "s row")
+
+        -- and the selection really moves: after `down` the marker is one row lower
+        local after_down = frames[4]
+        local mcount, mwhere = markers(after_down)
+        H.eq("screen_marker_row_index", mwhere, 2)
+        H.eq("screen_marker_count_after_down", mcount, 1)
+        H.contains("screen_marker_text", (after_down and after_down[4]) or "",
+            "> launcher")
+        -- the terminal accepted the mark: first characters, verbatim
+        H.eq("screen_row3_head", ((after_down and after_down[3]) or ""):sub(1, 2), "  ")
+        H.eq("screen_row4_head", ((after_down and after_down[4]) or ""):sub(1, 2), "> ")
+        H.eq("screen_row5_head", ((after_down and after_down[5]) or ""):sub(1, 2), "  ")
+        H.eq("screen_row6_head", ((after_down and after_down[6]) or ""):sub(1, 2), "  ")
+
+        -- both key shapes move the selection: the *name* the dispatcher sends and
+        -- the raw *keycode* a key_up / another host / a test can carry. The map
+        -- comes from the ROM's own keys table, so nothing is hardcoded.
+        local api = {
+            input = { keys = K },
+            fs = F,
+            sys = { apps = function() return {} end },
+        }
+        local state = LAUNCHER.build(api)
+        state.entries = { { name = "a", version = "1" }, { name = "b", version = "1" } }
+        state.index = 1
+        H.eq("keys_name_down", LAUNCHER.handle_key(state, "down", api), "move")
+        H.eq("keys_name_index", state.index, 2)
+        H.eq("keys_name_up", LAUNCHER.handle_key(state, "up", api), "move")
+        H.eq("keys_name_index_back", state.index, 1)
+        H.eq("keys_code_mapped", LAUNCHER.code_name(K.down, api), "down")
+        H.eq("keys_code_down", LAUNCHER.handle_key(state, K.down, api), "move")
+        H.eq("keys_code_index", state.index, 2)
+        H.eq("keys_code_up", LAUNCHER.handle_key(state, K.up, api), "move")
+        H.eq("keys_code_index_back", state.index, 1)
+        H.eq("keys_code_event", LAUNCHER.dispatch_event(state, "key", K.down, nil, api),
+            "move")
+        H.eq("keys_code_event_index", state.index, 2)
+        -- a different keys table is honoured too (no hardcoded numbers anywhere)
+        local fake = { input = { keys = { up = 10, down = 11, enter = 12 } } }
+        state.index = 1
+        H.eq("keys_code_fake_down", LAUNCHER.handle_key(state, 11, fake), "move")
+        H.eq("keys_code_fake_index", state.index, 2)
+        H.eq("keys_code_fake_unknown", LAUNCHER.handle_key(state, 999, fake), "none")
+        H.ascii_check("screen_logs_ascii", H.joined(lines))
+        H.rmrf("/apps")
     end
 
     -- -----------------------------------------------------------------
