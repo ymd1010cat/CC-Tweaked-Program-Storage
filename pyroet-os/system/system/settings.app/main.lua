@@ -35,6 +35,7 @@ No non-ASCII bytes in this file.
 
 local M = {}
 
+M.HINT = "up/dn enter q=back"
 M.VERSION = "0.2.0"
 M.VIEW = { cols = 26, rows = 20 }
 M.MIN_COLS = 16
@@ -397,31 +398,47 @@ function M.render(state, cols, rows)
     add("Settings " .. M.VERSION)
     -- the editable rows (D1-fix round 3): one line per config key, `>` on the
     -- selected one, and the hint row right under them
+    -- T17: the whole page is a scrolling window, never a "+N more" cut. The
+    -- selected item is always kept inside the window; `^`/`v` say which way
+    -- there is more, and the hint row carries `items i/N`.
     local items = M.items(state)
+    local lines = {}
     if #items == 0 then
-        add("no editable settings")
-        add("need " .. M.conf_path(state))
+        lines[#lines + 1] = "no editable settings"
+        lines[#lines + 1] = "need " .. M.conf_path(state)
     else
         for i = 1, #items do
             local item = items[i]
             local marker = (i == (state.item or 1)) and ">" or " "
-            add(marker .. " " .. item.label .. " " .. item.value)
+            lines[#lines + 1] = marker .. " " .. item.label .. " " .. item.value
         end
-        add("up/dn enter q=back")
     end
-    if state.message and state.message ~= "" then add(state.message) end
     local body = M.sections(state)
-    local capacity = rows - #out - 1
-    if capacity > 0 then
-        if #body > capacity then
-            local keep = capacity - 1
-            for i = 1, keep do add(body[i]) end
-            add("+" .. tostring(#body - keep) .. " more")
-        else
-            for i = 1, #body do add(body[i]) end
-            while #out < rows - 1 do add("") end
-        end
+    for i = 1, #body do lines[#lines + 1] = body[i] end
+    if state.message and state.message ~= "" then lines[#lines + 1] = state.message end
+    local visible = math.max(1, rows - 3) -- title + hint + status
+    local count = #lines
+    local max_first = math.max(1, count - visible + 1)
+    local selected = math.min(#items, math.max(1, state.item or 1))
+    local first = math.min(math.max(1, state.scroll or 1), max_first)
+    if selected >= 1 and selected <= #items then
+        if selected < first then first = selected end
+        if selected > first + visible - 1 then first = selected - visible + 1 end
+        if first > max_first then first = max_first end
+        if first < 1 then first = 1 end
     end
+    state.scroll = first
+    for i = first, first + visible - 1 do
+        add(lines[i] or "")
+    end
+    -- the scroll indicators: `^` above and `v` below when the window is inside
+    if first > 1 then
+        out[2] = M.fit("^", cols)
+    end
+    if first + visible - 1 < count then
+        out[#out] = M.fit("v", cols)
+    end
+    add(M.HINT)
     add(M.status_line(state, cols, rows))
     return out
 end

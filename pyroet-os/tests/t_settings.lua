@@ -258,8 +258,20 @@ return function(H)
 
         -- a 20 row view truncates the body with a +N more line
         local text20 = H.joined(lines)
-        H.contains("truncated_marker", text20, "more")
+        H.absent("no_more_marker", text20, "more")
         H.contains("truncated_start", text20, "=== system ===")
+
+        -- a short window scrolls instead of cutting the page with "+N more"
+        local small = M.render(state, 26, 8)
+        H.eq("small_rows", #small, 8)
+        H.contains("small_title", small[1] or "", "Settings 0.2.0")
+        H.contains("small_marker", small[2] or "", "> prefix 24")
+        H.contains("small_more_below", (small[6] or "") .. (small[7] or ""), "v")
+        H.absent("small_no_more", table.concat(small, "\n"), "more")
+        state.item = 2
+        local moved = M.render(state, 26, 8)
+        H.contains("small_moved", moved[3] or "", "> iface")
+        state.item = 1
 
         -- narrower than 26: same body, padded to the narrower width
         local narrow = M.render(state, 20, 20)

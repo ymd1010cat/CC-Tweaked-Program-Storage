@@ -163,7 +163,7 @@ return function(H)
         H.eq("settings_title", first[1]:sub(1, 14), "Settings 0.2.0")
         H.eq("settings_first_row2", first[2]:sub(1, 12), "> prefix 24 ")
         H.eq("settings_first_row3", first[3]:sub(1, 14), "  iface back  ")
-        H.eq("settings_first_row4", first[4]:sub(1, 18), "up/dn enter q=back")
+        H.eq("settings_first_row4", first[18]:sub(1, 18), "up/dn enter q=back")
 
         -- 2) down + enter + q: the marker moves, enter cycles the value, the
         --    change is written to /etc/network.conf and q returns "quit"
@@ -177,7 +177,7 @@ return function(H)
         local frame = snap(buf)
         H.eq("settings_row2", frame[2]:sub(1, 12), "  prefix 24 ")
         H.eq("settings_row3", frame[3]:sub(1, 14), "> iface top   ")
-        H.eq("settings_row4", frame[4]:sub(1, 18), "up/dn enter q=back")
+        H.eq("settings_row4", frame[18]:sub(1, 18), "up/dn enter q=back")
         local slog = H.joined(lines)
         H.contains("settings_move", slog, "key=down action=move item=2")
         H.contains("settings_change", slog, "key=enter action=change item=2 detail=top")
