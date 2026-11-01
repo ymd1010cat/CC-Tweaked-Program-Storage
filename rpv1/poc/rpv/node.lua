@@ -109,6 +109,11 @@ function M.node_new(path)    local n = {
         return self.ipid
     end
 
+    -- duplicate address detection state (dad.lua): counters, peers and a one-line
+    -- report used by routectl/panel
+    function n:dad_status() return M.dad_status and M.dad_status(self) or { enabled = false } end
+    function n:dad_report() return M.dad_report and M.dad_report(self) or "dad=off" end
+
     function n:after(sec, fn)
         local t = os.startTimer(sec)
         self.timers[t] = fn
@@ -119,6 +124,7 @@ function M.node_new(path)    local n = {
     -- even when no app scheduled a timer of its own
     function n:tick()
         M.arp_tick(self)
+        if M.dad_tick then M.dad_tick(self) end
         if M.reasm_expire(self.reasm) > 0 then self:log("REASM_EXPIRED some") end
         if self.fabric then M.fabric_tick(self, self.fabric) end
         if self.wan then M.wan_tick(self, self.wan) end
@@ -274,6 +280,19 @@ function M.node_new(path)    local n = {
         self.echo_icmp = self.cfg.echo_icmp ~= "0"
         self.icmp_port_unreachable = self.cfg.icmp_port_unreachable == "1"
         self.capture_on = self.cfg.capture == "1"
+        -- ip_cksum=0 disables IPv4 header checksum verification on the receive path
+        -- (the field is still WRITTEN correctly; only the check is skipped). The
+        -- default is to verify: a modem on the wrong channel can hand us frames that
+        -- decode into nonsense headers, and dropping them early is cheap.
+        self.verify_cksum = self.cfg.ip_cksum ~= "0"
+        self.dad = M.dad_new and M.dad_new({
+            enabled = self.cfg.dad ~= "0",
+            policy = self.cfg.dad_policy,
+            probes = tonumber(self.cfg.dad_probes),
+            interval = tonumber(self.cfg.dad_interval),
+        }) or nil
+        if self.dad and not self.dad.enabled then self:log("DAD_OFF (cfg dad=0)") end
+        if not self.verify_cksum then self:log("IP_CKSUM_OFF (cfg ip_cksum=0)") end
 
         for _, spec in ipairs(self.iface_specs) do
             local ipstr, prefix = spec.cidr:match("^([%d%.]+)/(%d+)$")
@@ -417,6 +436,10 @@ function M.node_new(path)    local n = {
             end
         end
         self:log("ADDR_WARN_SUMMARY warnings=%d loopback=%s class_private=%s", addrWarns, M.int2ip(self.lo.ip), tostring(#self.ifaces > 0 and M.ip_is_private(self.ifaces[1].ip)))
+        -- duplicate address detection (dad.lua): queue the probe burst now that every
+        -- interface has a socket. The probes are drained by this:tick(), so a node
+        -- that never enters run() (a unit test) simply sends nothing.
+        if M.dad_start then M.dad_start(self) end
         self:log("NODE id=%d mac=%d role=%s ifaces=%d routes=%d version=%s", self.id, self.mac, self.role, #self.ifaces, #self.routes.entries, M.RPV_VERSION or "?")
         self:after(0.25, function() self:tick() end)
 
@@ -564,12 +587,12 @@ function M.node_new(path)    local n = {
             return self:ip_deliver(self.lo, { ttl = ttl, proto = proto, src = self.lo.ip, dst = dst, id = 0, ihl = 20 }, payload)
         end
         for _, iface in ipairs(self.ifaces) do
-            if iface.ip == dst then
+            if iface.ip == dst and not iface.conflicted then
                 return self:ip_deliver(iface, { ttl = ttl, proto = proto, src = dst, dst = dst, id = 0, ihl = 20 }, payload)
             end
             -- directed broadcast (the subnet all-ones address): one frame on that subnet
             -- only, with the L2 broadcast MAC and the directed address as the IP dst
-            if M.ip_is_directed_broadcast(dst, iface) then
+            if not iface.conflicted and M.ip_is_directed_broadcast(dst, iface) then
                 M.link_send(self, iface, M.MAC_BCAST, M.ET_IP,
                     M.ip_build(iface.ip, dst, proto, ttl or 64, self:next_ipid(), false, 0, payload))
                 self.stats.broadcasts = (self.stats.broadcasts or 0) + 1
@@ -613,7 +636,7 @@ function M.node_new(path)    local n = {
     function n:send_broadcast(proto, payload, ttl)
         local n_if = 0
         for _, iface in ipairs(self.ifaces) do
-            if not iface.is_wan and not iface.is_fabric then
+            if not iface.is_wan and not iface.is_fabric and not iface.conflicted then
                 M.link_send(self, iface, M.MAC_BCAST, M.ET_IP,
                     M.ip_build(iface.ip, M.IP_BCAST, proto, ttl or 64, self:next_ipid(), false, 0, payload))
                 n_if = n_if + 1
@@ -625,6 +648,13 @@ function M.node_new(path)    local n = {
 
     -- transmit out of one local interface (ARP + fragmentation, honouring DF)
     function n:send_local(iface, next_hop, src, dst, proto, ttl, payload, df)
+        if iface.conflicted then
+            -- dad policy=yield: another node won this address, so we must not keep
+            -- sourcing traffic from it (the operator has to renumber)
+            self.stats.dad_send_blocked = (self.stats.dad_send_blocked or 0) + 1
+            self:log("DAD_SEND_BLOCKED dst=%s out=%s addr=%s", int2ip(dst), tostring(iface.name), tostring(iface.cidr))
+            return false
+        end
         M.arp_resolve(self, iface, next_hop, function(mac, err)
             if not mac then
                 self:log("SEND_FAIL dst=%s next_hop=%s arp=%s", int2ip(dst), int2ip(next_hop), tostring(err))
@@ -696,9 +726,18 @@ function M.node_new(path)    local n = {
     end
 
     function n:ip_input(iface, pkt)
-        local h = M.ip_parse(pkt)
+        local h, why = M.ip_parse(pkt, self.verify_cksum ~= false)
         if not h then
-            self.stats.ip_bad = self.stats.ip_bad + 1
+            if why == "hdr_cksum" then
+                -- a decoded header whose checksum does not add up to 0xFFFF: keep it
+                -- apart from "does not parse at all" so a bad modem/link is visible
+                self.stats.ip_cksum_bad = (self.stats.ip_cksum_bad or 0) + 1
+                if self.cfg.trace == "1" then
+                    self:log("IP_CKSUM_DROP bytes=%d on=%s", #pkt, tostring(iface and iface.name))
+                end
+            else
+                self.stats.ip_bad = self.stats.ip_bad + 1
+            end
             return
         end
         if self.cfg.trace == "1" then
@@ -779,7 +818,8 @@ function M.node_new(path)    local n = {
             owner = iface
         else
             for _, i in ipairs(self.ifaces) do
-                if i.ip == h.dst then owner = i end
+                -- a yielded address (dad policy=yield) is no longer ours to claim
+                if i.ip == h.dst and not i.conflicted then owner = i end
             end
             if not owner and self.lo and self.lo.ip == h.dst then owner = self.lo end
         end
@@ -848,7 +888,12 @@ function M.node_new(path)    local n = {
         self.stats.bytes_rx = self.stats.bytes_rx + #frame
         if self.capture_on then self:cap_push("rx", iface, dstmac, etype, frame) end
         if etype == M.ET_FABRIC and self.fabric then return M.fabric_input(self, self.fabric, body, srcmac) end
-        if etype == M.ET_ARP then return M.arp_input(self, iface, body) end
+        if etype == M.ET_ARP then
+            -- dad runs first: it only inspects claims for our own addresses, and it
+            -- must see the frame even if arp_input decides to do nothing with it
+            if M.dad_input then M.dad_input(self, iface, body) end
+            return M.arp_input(self, iface, body)
+        end
         if etype == M.ET_IP then return self:ip_input(iface, body) end
         self:log("DROP_ETHERTYPE 0x%04X", etype)
     end
@@ -876,6 +921,7 @@ function M.node_new(path)    local n = {
                     if not ok then self:log("TIMER_ERROR %s", tostring(err)) end
                 end
                 M.arp_tick(self)
+                if M.dad_tick then M.dad_tick(self) end
                 if M.reasm_expire(self.reasm) > 0 then self:log("REASM_EXPIRED some") end
             end
             -- hand the event to coroutine tasks (blocking-style apps, rednet shim)

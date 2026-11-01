@@ -68,7 +68,7 @@ M.app_entry = app_entry
 -- reboot watchdog. A real computer never sets the flag, so boot carries on.
 if type(_G) == "table" and _G.RPV_BOOT_TEST then return M end
 
-for _, mod in ipairs({ "crypto", "util", "ip", "route", "arp", "link", "icmp", "udp", "conn", "fabric", "wan", "services", "dv", "nat", "mcast", "qos", "wansec", "compat", "topo" }) do
+for _, mod in ipairs({ "crypto", "util", "ip", "route", "arp", "dad", "link", "icmp", "udp", "conn", "fabric", "wan", "services", "dv", "nat", "mcast", "qos", "wansec", "compat", "topo" }) do
     load_module("rpv/" .. mod .. ".lua")
 end
 load_module("rpv/node.lua")

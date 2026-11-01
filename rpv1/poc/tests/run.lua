@@ -25,7 +25,7 @@ end
 local M = { RPV_VERSION = "RPV1", tests = {} }
 
 -- the library is loaded exactly like node2/startup.lua does it, minus the network
-for _, mod in ipairs({ "crypto", "util", "ip", "route", "arp", "link", "icmp", "udp",
+for _, mod in ipairs({ "crypto", "util", "ip", "route", "arp", "dad", "link", "icmp", "udp",
                        "conn", "fabric", "wan", "services", "dv", "nat", "mcast", "qos",
                        "wansec", "compat", "topo", "node" }) do
     local ok, err = pcall(load_module, "rpv/" .. mod .. ".lua", M)
@@ -98,6 +98,7 @@ local files = {
     "tests/t_hosts.lua", "tests/t_wan_acl.lua", "tests/t_router.lua",
     "tests/t_rhtp_server.lua", "tests/t_rhtp_client.lua", "tests/t_backup_router.lua", "tests/t_core_router_ha.lua",
     "tests/t_ha_e2e.lua", "tests/t_pool_iface.lua", "tests/t_ha_ctl.lua",
+    "tests/t_dad.lua",
 }
 local groups = 0
 for _, path in ipairs(files) do

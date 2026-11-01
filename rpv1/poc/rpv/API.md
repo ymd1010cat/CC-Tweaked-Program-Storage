@@ -50,6 +50,11 @@ local node = rpv.node_new({
     icmp_port_unreachable = 0,           -- 1 answers with ICMP port unreachable
     capture  = 0,                        -- 1 records the last 64 frames
     stats_at = 30,                       -- seconds; log a stats snapshot once
+    dad      = 1,                        -- 0 disables duplicate address detection
+    dad_policy = "detect",               -- "detect" (count+log) | "yield" (stop claiming)
+    dad_probes = 3,                      -- probes per interface (1..10)
+    dad_interval = 0.5,                  -- seconds between probes (>= 0.1)
+    ip_cksum = 1,                        -- 0 skips IPv4 header checksum verification
 })
 node:setup()
 node:run()                               -- event loop (never returns)
@@ -86,11 +91,12 @@ any role.txt key works as a table field too.
 | `node:dump_stats()` | log forwarding, ARP, socket and PMTU telemetry |
 | `node:log(fmt, ...)` | write one flushed line to `rpv-log.txt` (and the screen) |
 | `node:capture(count)` | return the last captured frames (needs `capture=1`) |
+| `node:dad_status()` / `node:dad_report()` | duplicate address detection state (counters, peers) / one-line report for `routectl` |
 | `node:send_ip(dst, proto, payload, ttl, src, df)` | send a raw IP payload |
 | `node:effective_mtu(iface, dst)` | MTU after PMTU discovery |
 | `node:on_echo_reply` | callback `(src, seq, rtt_us, bytes)` for ICMP echo replies |
 | `node.on_icmp_error` | callback `(src, type, code, inner, qseq, mtu)` |
-| `node.stats` | counters: `frames_tx/rx`, `bytes_tx/rx`, `ip_rx`, `ip_bad`, `fwd`, `ttl_drop`, `no_route`, `frags`, `reasm_drops`, `icmp_*` |
+| `node.stats` | counters: `frames_tx/rx`, `bytes_tx/rx`, `ip_rx`, `ip_bad`, `ip_cksum_bad`, `dad_conflicts`, `dad_yielded`, `dad_send_blocked`, `fwd`, `ttl_drop`, `no_route`, `frags`, `reasm_drops`, `icmp_*` |
 | `node.ifaces`, `node.routes`, `node.arp`, `node.udp`, `node.cfg`, `node.mac`, `node.id` | state (read-only by convention) |
 
 ## Module functions
@@ -102,9 +108,12 @@ any role.txt key works as a table field too.
 
 ### IPv4 (`ip`)
 `rpv.ip_build(src, dst, proto, ttl, id, mf, offset8, payload, df)`,
-`rpv.ip_parse(str) -> hdr[, payload]`, `rpv.ip_max_payload(mtu)`,
+`rpv.ip_parse(str, verify_cksum) -> hdr[, why]`, `rpv.ip_max_payload(mtu)`,
 `rpv.reasm_new(max_entries, max_bytes)`, `rpv.reasm_push(r, hdr, payload)`,
 `rpv.reasm_expire(r)`.
+`verify_cksum == false` skips the header checksum check (`ip_cksum=0`); `why` is
+`"hdr_cksum"` or `"structure"` when the header is rejected, so a corrupt link is
+distinguishable from a corrupt checksum field.
 
 ### routing (`route`)
 `rpv.route_new()`, `rpv.route_add(rt, prefix, net, iface, gw, kind)`,
@@ -115,6 +124,26 @@ any role.txt key works as a table field too.
 `rpv.arp_new()`, `rpv.arp_send(node, iface, op, tmac, tip)`,
 `rpv.arp_input(node, iface, frame)`, `rpv.arp_resolve(node, iface, ip, cb)`,
 `rpv.arp_tick(node)`.
+
+### duplicate address detection (`dad`)
+RFC 5227 subset for a shared modem channel. After `node:setup()` each real
+interface queues `dad_probes` ARP probes (sender address `0.0.0.0`, so they never
+poison a neighbour cache) plus one gratuitous announce, drained by `node:tick()` /
+the timer loop.
+`rpv.dad_new(opts)`, `rpv.dad_start(node)`, `rpv.dad_tick(node)`,
+`rpv.dad_input(node, iface, body)`, `rpv.dad_probe_body(node, iface)`,
+`rpv.dad_announce_body(node, iface)`, `rpv.dad_claim_wins(mine, theirs)`,
+`rpv.dad_yield(node, iface, ip, peer)`, `rpv.dad_status(node)`, `rpv.dad_report(node)`.
+A foreign claim for one of our addresses is logged as
+`DAD_CONFLICT addr=... claimer=... op=... count=... winner=us|them` and answered
+with **one** defensive announce per peer (no ping-pong). The lower computer id
+keeps the address, so both ends compute the same verdict without a packet.
+`dad_policy="detect"` (default) only counts and logs; `dad_policy="yield"` also
+marks the interface `conflicted` (`DAD_ADDRESS_YIELD`), after which the node no
+longer claims that address: local delivery, broadcast sourcing and `send_local`
+refuse it (`DAD_SEND_BLOCKED`, `stats.dad_send_blocked`). Interfaces are probed
+again only when they are not conflicted; WAN and loopback interfaces are never
+probed (no shared medium).
 
 ### link layer (`link`)
 `rpv.link_open(iface)`, `rpv.link_send(node, iface, dstmac, etype, body)`,

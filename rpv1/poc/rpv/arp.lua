@@ -28,7 +28,11 @@ function M.arp_input(node, iface, frame)
     local op = r16(frame, 1)
     local smac, sip = r32(frame, 3), r32(frame, 7)
     local tip = r32(frame, 15)
-    node.arp.cache[sip] = { mac = smac, expires = os.clock() + CACHE_TTL }
+    -- a DAD probe (see dad.lua) carries sender address 0.0.0.0: it says nothing
+    -- about who owns what, so it must not fill the cache or resolve a pending entry
+    if sip ~= 0 then
+        node.arp.cache[sip] = { mac = smac, expires = os.clock() + CACHE_TTL }
+    end
     if op == 1 and tip == iface.ip then
         node.arp.replies = node.arp.replies + 1
         M.arp_send(node, iface, 2, smac, sip)

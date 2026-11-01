@@ -301,7 +301,14 @@
    [poc/tests/t_addr.lua](poc/tests/t_addr.lua) + CraftOS-PC [poc/run-addr.ps1](poc/run-addr.ps1)（PASS）。
 4. **规模可行性固化**：`run-scale.ps1` 的 Stage Z 已在 CI；A/B/D 作为按需长测（B 70%、D 46.7% 已记录）。
 5. **真机大规模**：真机上跑 20–30 台路由器网格 + 主机，验证同样的 3 跳路径在真实 tick 下的表现。
-6. **地址冲突检测（可选加固）**：库内加同频道重复 IP 检测/免费 ARP 式 DAD 与可选 IP 头校验和校验。
+6. ✅ **地址冲突检测 + 可选 IP 头校验和**（已完成，离线可回归）：`poc/rpv/dad.lua` —— DAD
+   探测（sender 地址 `0.0.0.0` 的 ARP 请求 ×3 + 一条免费 ARP 公告，由 tick/定时器排空）、外来占用
+   检测（`DAD_CONFLICT addr=.. claimer=.. op=.. count=.. winner=us|them`，按 computer id 小者胜出，
+   每个对端只回一次防御公告，不成环）、`dad_policy=yield` 时败方把接口标 `conflicted` 并停止用该
+   地址收发（`DAD_ADDRESS_YIELD` / `DAD_SEND_BLOCKED`）；`ip_cksum=0` 可关 IPv4 头校验和校验，
+   坏校验和单独计 `stats.ip_cksum_bad`（与"根本解析不出头"的 `ip_bad` 分开）。验收：离线
+   [poc/tests/t_dad.lua](poc/tests/t_dad.lua)，套件 `OFFLINE_PASS 2968 / FAIL 0 / GROUPS 32`、
+   lint 0 错 51 警；17 个新断言组覆盖探测帧布局、调度、冲突/让位/上限、`ip_parse` 开关与 node 接线。
 7. **可观测性**：`routectl`/`panel` 增加多跳路径可视化（结合 `topo` 的网络图输出每条流实际走的下一跳）。
 
 
@@ -324,6 +331,7 @@ poc/rpv/util.lua        字节打包 / 校验和 / 地址工具
 poc/rpv/ip.lua          IPv4 式头 + 分片 + 有上限的重组（并发条目 / 字节上限）
 poc/rpv/route.lua       路由表 + 最长前缀匹配 + path 解析
 poc/rpv/arp.lua         邻居发现：请求排队 + 重试 + 超时
+poc/rpv/dad.lua         重复地址检测（RFC 5227 子集）：探测/公告/冲突裁决 + 让位
 poc/rpv/link.lua        modem 频道链路层（dstMAC/srcMAC/ethertype 帧）
 poc/rpv/icmp.lua        echo / time-exceeded / unreachable / frag-needed
 poc/rpv/udp.lua         UDP + socket API（bind / sendto / reply / on_receive / close）

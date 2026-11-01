@@ -12,15 +12,19 @@ function M.ip_build(src, dst, proto, ttl, id, mf, offset8, payload, df)
     return sub(hdr, 1, 10) .. u16(cksum(hdr)) .. sub(hdr, 13) .. payload
 end
 
-function M.ip_parse(s)
-    if #s < 20 then return nil end
+-- verify_cksum=false skips the header checksum check (cfg ip_cksum=0). The second
+-- return value names the failure: "hdr_cksum" or "structure", so the caller can
+-- keep its counters apart ("a corrupted header" is not the same as "a corrupted
+-- checksum field" when you are debugging a link).
+function M.ip_parse(s, verify_cksum)
+    if #s < 20 then return nil, "structure" end
     local vihl = M.byte(s, 1)
-    if floor(vihl / 16) ~= 4 then return nil end
+    if floor(vihl / 16) ~= 4 then return nil, "structure" end
     local ihl = (vihl % 16) * 4
-    if ihl < 20 or #s < ihl then return nil end
+    if ihl < 20 or #s < ihl then return nil, "structure" end
     local total = r16(s, 3)
-    if total > #s then return nil end
-    if rawsum(sub(s, 1, ihl)) ~= 0xFFFF then return nil end
+    if total > #s then return nil, "structure" end
+    if verify_cksum ~= false and rawsum(sub(s, 1, ihl)) ~= 0xFFFF then return nil, "hdr_cksum" end
     local fo = r16(s, 7)
     return {
         ihl = ihl, total = total, id = r16(s, 5),
