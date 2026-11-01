@@ -1149,6 +1149,28 @@ enter install q=back
 
 31.7 **数字**：离线 **4,808 pass / 0 fail / 242 groups**；web.app 体积变化见 sizecheck（仍远低于 629,145）。
 
+32. 浏览器可编辑地址栏（T11）
+
+32.1 **问题**：地址只能来自 `/etc/browser.home`，用户无法输入 IP/域名。
+
+32.2 **改法**：阅读模式按 `a`（或 `/`）进入编辑，预填当前地址（`state.edit_text = url or target`），日志 `BROWSER_EDIT begin url=..`；编辑模式独占键盘：
+
+| 键 | 行为 |
+| --- | --- |
+| 可打印 `char`（32..126） | 追加到地址末尾（超 `MAX_URL=160` 时状态行 `address too long`，不再追加） |
+| `backspace`（键名或 `\8`） | 删一个字符 |
+| `enter` | 校验后打开（`source=typed`）；空行 → `empty address` 并**留在编辑模式**；含空格 → `address has a space`；超长 → `address too long` |
+| `c` | 取消编辑回阅读（日志 `BROWSER_EDIT end reason=cancel`） |
+| `q` | **编辑模式下是普通字符**（只追加，不退出）；`q` 只在阅读模式退出 |
+
+编辑态渲染：第 18 行 `edit> <地址>_`（行尾光标），第 19 行 `enter open c cancel bs del`；正文区保持上一页可见。归一化沿用 `M.now_url`：看起来像主机/IP（无 scheme）补 `http://`，`local:`/`about:`/`http(s)://` 原样。
+
+32.3 **日志**：`BROWSER_EDIT begin|end reason=..`、`BROWSER_OPEN url=.. source=typed|home|history`（首次进页 `source=home`，`b` 返回 `source=history`，编辑打开 `source=typed`）。
+
+32.4 **测试**：`t_web` 新增 `web.edit`：`a` 进入且预填、编辑态行首行尾逐字（`edit> about:home_`、提示行）、逐字符输入 `192.168.1.10` → enter 后 http 收到 `http://192.168.1.10`（断言 url + `source=typed` 日志）、端口+路径、`local:` 与 `about:` 仍可用、backspace、空行 `empty address` 且仍在编辑、`c` 取消、编辑模式 `q` 追加字符（阅读模式 `q` 才退出）、含空格/超长被拒且不崩。
+
+32.5 **数字**：离线 **4,844 pass / 0 fail / 243 groups**；web.app 体积见 sizecheck（仍低于 629,145）。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1184,3 +1206,4 @@ enter install q=back
 - 2026-11-01: **内置文字浏览器 `web.app`**（口径见 §29）。新包 `system/system/web.app/{manifest.lua,main.lua}`（caps `fs.read`+`http`+`input`+`terminal`，约 13 KB），事件驱动：`enter` 打开地址（自动补 `http://`）、`up/down` 滚动、`b` 历史返回、`r` 重载、`q` 退出（不用 Esc）；正文纯文本按屏宽折行，非 2xx/传输失败/无 http 都有可读状态行，不崩；launcher 自动扫到它并因其声明 `input` 直接交接键盘。新增 `tests/t_web.lua`（5 组 52 断言，假 http 三种返回）；`install.set` 29→31 条、`t_budget` 同步；`t_desktop`/`t_desktop_loop`/`t_apps_ui`/`t_sys_ota` 的 3 包计数改 4。离线 **4,789 pass / 0 fail / 240 groups**（4,737/235）；未 commit。
 - 2026-11-01: **net 改为可选示例包**（口径见 §30）。`git mv system/system/net.app examples/net.app`（内容不变），`install.set` 去掉 net 两行 → 镜像 29 条；`system/net/{hosts,service}.lua` 服务层仍在镜像。测试：`/system/system` 回 3 包（launcher/settings/web），`t_desktop`/`t_desktop_loop` 的启动与日志断言改 settings，`t_net_app`/`t_apps_ui` 改从 `/tests/net.app` fixture 加载，`run-tests.ps1` 改 stage `examples\net.app` → `/tests/net.app`，`t_budget` 29 条且 payload 断言翻转。离线 **4,786 pass / 0 fail / 240 groups**；sizecheck 见上。未 commit。
 - 2026-11-01: **浏览器默认页改内置 `about:home`，新增 `local:` 前缀**（口径见 §31）。`web.app` 默认首页改为内置帮助页（零网络即可显示，含键位与 local: 提示）；新增 `M.scheme` 地址分类（about / local / http(s) / 未知 scheme）、`local:/path` 走 `api.fs.read`（缺文件 → `local: no such file: <path>`）、未知 scheme → `unsupported scheme: <name>`；`now_url` 只在无 scheme 时补 `http://`；`/etc/browser.home` 首行优先、坏地址显示 `failed:` 且可改文件。`tests/t_web.lua` 重写为 7 组（about/local/http/config/keys + manifest/helpers）。离线 **4,808 pass / 0 fail / 242 groups**。未 commit。
+- 2026-11-01: **浏览器可编辑地址栏**（口径见 §32）。阅读模式 `a`/`/` 进入编辑（预填当前地址），编辑模式：可打印字符追加、`backspace` 删一个、`enter` 校验后打开（空行/含空格/超长给可读状态且留在编辑）、`c` 取消；**编辑时 `q` 是普通字符**，只有阅读模式 `q` 才退出。归一化沿用 `M.now_url`（无 scheme 补 `http://`，`local:`/`about:`/`http(s)://` 原样）；日志新增 `BROWSER_EDIT begin|end` 与 `BROWSER_OPEN ... source=typed|home|history`。新增 `t_web.web.edit`（20 组断言）。离线 **4,844 pass / 0 fail / 243 groups**。未 commit。

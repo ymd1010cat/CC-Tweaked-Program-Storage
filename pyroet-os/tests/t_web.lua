@@ -81,10 +81,10 @@ return function(H)
         H.contains("about_reload", text, "r       reload")
         H.contains("about_quit", table.concat(state.lines, "\n"), "q       quit to the desktop")
         H.contains("about_config", table.concat(state.lines, "\n"), "/etc/browser.home")
-        H.contains("about_local", text, "local:/etc/page.txt")
+        H.contains("about_local", table.concat(state.lines, "\n"), "local:/etc/page.txt")
         H.contains("about_nonet", table.concat(state.lines, "\n"), "no network? use local:")
         H.contains("about_status", frame[18] or "", "about:home")
-        H.eq("about_hint", (frame[19] or ""):sub(1, 24), "up/dn b back r reload q ")
+        H.eq("about_hint", (frame[19] or ""):sub(1, 30), "up/dn b back r reload a edit q")
         H.contains("about_log", H.joined(lines), "BROWSER_OPEN url=about:home")
         H.eq("about_no_http", state.error, nil)
     end
@@ -188,6 +188,95 @@ return function(H)
         H.write("/etc/browser.home", "local:/tests/page.txt\n")
         H.eq("config_reread", WEB.home(api), "local:/tests/page.txt")
         H.rmrf("/etc/browser.home")
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("web.edit")
+    -- T11: the address bar is editable. `a` (or `/`) enters edit mode prefilled
+    -- with the current address; printable chars append, backspace deletes, enter
+    -- opens and `c` cancels. `q` is a letter while editing, never a quit.
+    do
+        local requests = {}
+        local api, lines = api_with({
+            get = function(url)
+                requests[#requests + 1] = url
+                return { ok = true, status = 200, body = TEXT }
+            end,
+        })
+        local state = WEB.new_state(api)
+        WEB.open(state, api, "about:home", { source = "home" })
+
+        -- a) `a` enters edit mode prefilled with the current address
+        H.eq("edit_begin", WEB.dispatch_event(state, "key", "a", api), "repaint")
+        H.eq("edit_on", state.edit, true)
+        H.eq("edit_prefill", state.edit_text, "about:home")
+        H.has(lines, "BROWSER_EDIT begin url=about:home")
+
+        -- b) the editor row: prompt, text and a cursor; the hint changes too
+        local frame = WEB.render(state, 51, 19)
+        H.contains("edit_row", frame[18] or "", "edit> about:home_")
+        H.contains("edit_hint", frame[19] or "", "enter open c cancel bs del")
+
+        -- c) typing an IP, then enter: the normalisation adds http://
+        WEB.dispatch_event(state, "key", "c", api)   -- cancel, back to reading
+        H.eq("edit_off", state.edit, nil)
+        H.has(lines, "BROWSER_EDIT end reason=cancel")
+        H.eq("edit_again", WEB.dispatch_event(state, "char", "a", api), "repaint")
+        H.eq("edit_prefill2", state.edit_text, "about:home")
+        state.edit_text = ""
+        for i = 1, #"192.168.1.10" do
+            local ch = ("192.168.1.10"):sub(i, i)
+            WEB.dispatch_event(state, "char", ch, api)
+        end
+        H.eq("edit_text", state.edit_text, "192.168.1.10")
+        H.eq("edit_submit", WEB.dispatch_event(state, "key", "enter", api), "open")
+        H.eq("edit_off2", state.edit, nil)
+        H.eq("edit_url", requests[#requests], "http://192.168.1.10")
+        H.has(lines, "BROWSER_OPEN url=" .. WEB.fit("http://192.168.1.10", 60)
+            .. " ok=true source=typed")
+
+        -- d) editing accepts a port/path and the `local:` / `about:` forms
+        state.edit = true
+        state.edit_text = "192.168.1.10:8080/path"
+        H.eq("edit_port_submit", WEB.dispatch_event(state, "key", "enter", api), "open")
+        H.eq("edit_port_url", requests[#requests], "http://192.168.1.10:8080/path")
+        state.edit = true
+        state.edit_text = "local:/tests/page.txt"
+        H.write("/tests/page.txt", "page body\n")
+        H.eq("edit_local_submit", WEB.dispatch_event(state, "key", "enter", api), "open")
+        H.contains("edit_local_body", table.concat(state.lines, " "), "page body")
+        state.edit = true
+        state.edit_text = "about:home"
+        H.eq("edit_about_submit", WEB.dispatch_event(state, "key", "enter", api), "open")
+        H.contains("edit_about_row", (WEB.render(state, 51, 19)[1] or ""), "Browser 0.1.0")
+
+        -- e) backspace deletes one character; an empty line says so and stays
+        state.edit = true
+        state.edit_text = "abc"
+        H.eq("edit_back", WEB.dispatch_event(state, "key", "backspace", api), "move")
+        H.eq("edit_back_text", state.edit_text, "ab")
+        state.edit_text = ""
+        H.eq("edit_empty", WEB.dispatch_event(state, "key", "enter", api), "denied")
+        H.eq("edit_empty_status", state.status, "empty address")
+        H.eq("edit_empty_still", state.edit, true)
+
+        -- f) `q` types a letter while editing (no quit), and `c` cancels
+        H.eq("edit_q", WEB.dispatch_event(state, "char", "q", api), "move")
+        H.eq("edit_q_text", state.edit_text, "q")
+        H.eq("edit_c", WEB.dispatch_event(state, "key", "c", api), "repaint")
+        H.eq("edit_c_off", state.edit, nil)
+        H.eq("edit_q_reading_quits", WEB.dispatch_event(state, "char", "q", api), "quit")
+
+        -- g) illegal addresses are refused with a readable status
+        state.edit = true
+        state.edit_text = "two words"
+        H.eq("edit_space", WEB.dispatch_event(state, "key", "enter", api), "denied")
+        H.eq("edit_space_status", state.status, "address has a space")
+        state.edit_text = string.rep("x", 161)
+        H.eq("edit_long", WEB.dispatch_event(state, "key", "enter", api), "denied")
+        H.eq("edit_long_status", state.status, "address too long")
+        H.eq("edit_still_on", state.edit, true)
+        H.rmrf("/tests/page.txt")
     end
 
     -- -----------------------------------------------------------------

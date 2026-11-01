@@ -25,8 +25,13 @@ M.MIN_ROWS = 6
 M.HOME_PATH = "/etc/browser.home"
 M.DEFAULT_HOME = "about:home"
 M.HISTORY_MAX = 8
+-- the editable address bar (T11): `a` (or `/`) enters edit mode, `c` leaves it.
+-- While editing, `q` is a letter, not a quit: typing "q" must not close the app.
+M.MAX_URL = 160
+M.EDIT_PROMPT = "edit> "
+M.EDIT_HINT = "enter open c cancel bs del"
 M.MAX_BODY = 65536
-M.HINT = "up/dn b back r reload q quit"
+M.HINT = "up/dn b back r reload a edit q quit"
 
 -- the built-in start page: always available, never a `failed:` first frame
 function M.help_lines()
@@ -38,6 +43,8 @@ function M.help_lines()
         "  enter   open the address below",
         "  up/down scroll the page",
         "  b       back (history)",
+        "  a       edit the address (or /)",
+        "  c       cancel editing",
         "  r       reload",
         "  q       quit to the desktop",
         "",
@@ -56,6 +63,61 @@ function M.help_lines()
 end
 
 -- "about:home" / "local:/path" / "http(s)://..." / no scheme at all
+-- an address may be a host/IP with an optional port and path, or any of the
+-- supported schemes; spaces and absurd lengths are refused before any fetch
+function M.valid_address(text)
+    local value = tostring(text == nil and "" or text)
+    if value == "" then return false, "empty address" end
+    if #value > M.MAX_URL then return false, "address too long" end
+    if value:find("%s") then return false, "address has a space" end
+    return true
+end
+
+-- edit mode owns the keyboard: printable chars append, backspace deletes, enter
+-- opens, c cancels; q is just a letter here
+function M.edit_begin(state, api)
+    state.edit = true
+    state.edit_text = (state.url ~= "" and state.url) or (state.target or "")
+    M.note(api, "BROWSER_EDIT begin url=" .. M.fit(state.edit_text, 60))
+    return "repaint"
+end
+
+function M.edit_end(state, api, why)
+    state.edit = nil
+    M.note(api, "BROWSER_EDIT end reason=" .. tostring(why or "cancel"))
+    return "repaint"
+end
+
+function M.edit_update(state, ch)
+    local text = tostring(state.edit_text or "")
+    if #text >= M.MAX_URL then
+        state.status = "address too long"
+        return "none"
+    end
+    state.edit_text = text .. tostring(ch)
+    state.status = "typing " .. tostring(#state.edit_text) .. " chars"
+    return "move"
+end
+
+function M.edit_delete(state)
+    local text = tostring(state.edit_text or "")
+    if text == "" then return "none" end
+    state.edit_text = text:sub(1, -2)
+    return "move"
+end
+
+function M.edit_submit(state, api)
+    local text = tostring(state.edit_text or "")
+    local ok, why = M.valid_address(text)
+    if not ok then
+        state.status = why
+        return "denied", why
+    end
+    state.edit = nil
+    M.note(api, "BROWSER_EDIT end reason=open")
+    return M.open(state, api, text, { source = "typed" })
+end
+
 function M.scheme(url)
     local text = tostring(url == nil and "" or url):lower()
     if text == "about:home" then return "about" end
@@ -141,6 +203,7 @@ end
 -- one fetch: a 2xx body is the page, anything else is a readable status line
 function M.open(state, api, url, opts)
     local o = opts or {}
+    local source = tostring(o.source or "typed")
     local raw = tostring(url == nil and "" or url):gsub("^%s+", ""):gsub("%s+$", "")
     if raw == "" then
         state.status = "empty address"
@@ -157,9 +220,9 @@ function M.open(state, api, url, opts)
         state.url = "about:home"
         state.target = "about:home"
         local help = {}
-        local source = M.help_lines()
-        for i = 1, #source do
-            local line = tostring(source[i])
+        local help_source = M.help_lines()
+        for i = 1, #help_source do
+            local line = tostring(help_source[i])
             if #line <= M.VIEW.cols then
                 help[#help + 1] = line
             else
@@ -171,7 +234,7 @@ function M.open(state, api, url, opts)
         state.error = nil
         state.status = "about:home " .. tostring(#state.lines) .. " lines"
         state.scroll = 0
-        M.note(api, "BROWSER_OPEN url=about:home ok=true")
+        M.note(api, "BROWSER_OPEN url=about:home ok=true source=" .. source)
         return "open"
     end
     -- 2) a local file: plain text from this computer's own file system
@@ -195,8 +258,8 @@ function M.open(state, api, url, opts)
             state.target = raw
             state.error = "local: " .. tostring(err)
             state.status = "local: " .. tostring(err)
-            M.note(api, "BROWSER_OPEN url=" .. M.fit(raw, 60) .. " ok=false err="
-                .. tostring(err))
+            M.note(api, "BROWSER_OPEN url=" .. M.fit(raw, 60) .. " ok=false source="
+                .. source .. " err=" .. tostring(err))
             return "error"
         end
         if o.push ~= false then
@@ -212,16 +275,16 @@ function M.open(state, api, url, opts)
         state.status = "local " .. tostring(#body) .. " bytes "
             .. tostring(#state.lines) .. " lines"
         state.scroll = 0
-        M.note(api, "BROWSER_OPEN url=" .. M.fit(raw, 60) .. " ok=true lines="
-            .. tostring(#state.lines))
+        M.note(api, "BROWSER_OPEN url=" .. M.fit(raw, 60) .. " ok=true source="
+            .. source .. " lines=" .. tostring(#state.lines))
         return "open"
     end
     -- 3) anything else with an explicit scheme is not ours
     if kind ~= "" and kind ~= "http" then
         state.error = "unsupported scheme: " .. tostring(kind)
         state.status = state.error
-        M.note(api, "BROWSER_OPEN url=" .. M.fit(raw, 60) .. " ok=false unsupported="
-            .. tostring(kind))
+        M.note(api, "BROWSER_OPEN url=" .. M.fit(raw, 60) .. " ok=false source="
+            .. source .. " unsupported=" .. tostring(kind))
         return "error"
     end
     local target = M.now_url(raw)
@@ -245,7 +308,8 @@ function M.open(state, api, url, opts)
     if type(res) ~= "table" then
         state.error = tostring(err or "failed")
         state.status = "failed: " .. state.error
-        M.note(api, "BROWSER_OPEN url=" .. M.fit(target, 60) .. " ok=false err=" .. state.status)
+        M.note(api, "BROWSER_OPEN url=" .. M.fit(target, 60) .. " ok=false source="
+            .. source .. " err=" .. state.status)
         return "error"
     end
     local status = tonumber(res.status) or (res.ok == false and 0 or 200)
@@ -257,8 +321,8 @@ function M.open(state, api, url, opts)
         state.status = "http " .. tostring(status)
         state.lines = M.wrap(body, M.VIEW.cols)
         state.scroll = 0
-        M.note(api, "BROWSER_OPEN url=" .. M.fit(target, 60) .. " ok=false status="
-            .. tostring(status))
+        M.note(api, "BROWSER_OPEN url=" .. M.fit(target, 60) .. " ok=false source="
+            .. source .. " status=" .. tostring(status))
         return "error"
     end
     if o.push ~= false then
@@ -274,8 +338,9 @@ function M.open(state, api, url, opts)
     state.status = tostring(status) .. " " .. tostring(#body) .. " bytes "
         .. tostring(#state.lines) .. " lines"
     state.scroll = 0
-    M.note(api, "BROWSER_OPEN url=" .. M.fit(target, 60) .. " ok=true status="
-        .. tostring(status) .. " lines=" .. tostring(#state.lines))
+    M.note(api, "BROWSER_OPEN url=" .. M.fit(target, 60) .. " ok=true source="
+        .. source .. " status=" .. tostring(status)
+        .. " lines=" .. tostring(#state.lines))
     return "open"
 end
 
@@ -302,7 +367,7 @@ function M.back(state, api)
         return "none"
     end
     state.history[#state.history] = nil
-    local action = M.open(state, api, previous, { push = false })
+    local action = M.open(state, api, previous, { push = false, source = "history" })
     if action == "open" then state.status = "back " .. tostring(state.status) end
     return action
 end
@@ -330,8 +395,13 @@ function M.render(state, cols, rows)
         local line = lines[first + i]
         add(line == nil and "" or line)
     end
-    add(state.status ~= "" and state.status or M.HINT)
-    add(M.HINT)
+    if state.edit then
+        add(M.EDIT_PROMPT .. tostring(state.edit_text or "") .. "_")
+        add(M.EDIT_HINT)
+    else
+        add(state.status ~= "" and state.status or M.HINT)
+        add(M.HINT)
+    end
     return out
 end
 
@@ -377,6 +447,35 @@ M.ESCAPE_CODE = 256
 
 -- one delivered event -> one action; "quit" ends the app
 function M.dispatch_event(state, event, p1, api)
+    -- edit mode first: `q` is a letter here, backspace edits, enter opens and
+    -- `c` cancels (Esc is not delivered by the ROM, see DECISIONS.md)
+    if state.edit then
+        if event == "char" then
+            local ch = tostring(p1 == nil and "" or p1)
+            if ch == "" or ch == "\8" then return M.edit_delete(state) end
+            local code = ch:byte(1)
+            if code ~= nil and code >= 32 and code <= 126 then
+                return M.edit_update(state, ch)
+            end
+            return "none"
+        end
+        if event == "key" then
+            local key = p1
+            if type(key) == "number" then
+                key = M.code_name(key, api)
+                if key == nil then return "none" end
+            end
+            key = tostring(key == nil and "" or key):lower()
+            if key == "enter" then return M.edit_submit(state, api) end
+            if key == "backspace" then return M.edit_delete(state) end
+            if key == "c" then return M.edit_end(state, api, "cancel") end
+            if key == "a" then return M.edit_update(state, "a") end
+            if key == "up" or key == "down" then return "none" end
+            return "none"
+        end
+        if event == "desk_focus" or event == "term_resize" then return "repaint" end
+        return "none"
+    end
     if event == "key" then
         if M.quit_key(p1, api) then return "quit", "q" end
         local key = p1
@@ -389,14 +488,16 @@ function M.dispatch_event(state, event, p1, api)
         if key == "up" then return M.scroll(state, -1) end
         if key == "down" then return M.scroll(state, 1) end
         if key == "b" then return M.back(state, api) end
-        if key == "r" then return M.open(state, api, state.url) end
+        if key == "r" then return M.open(state, api, state.url, { source = "history" }) end
+        if key == "a" or key == "/" then return M.edit_begin(state, api) end
         return "none"
     end
     if event == "char" then
         local ch = tostring(p1 == nil and "" or p1):lower()
         if ch == "q" then return "quit", "q" end
         if ch == "b" then return M.back(state, api) end
-        if ch == "r" then return M.open(state, api, state.url) end
+        if ch == "r" then return M.open(state, api, state.url, { source = "history" }) end
+        if ch == "a" or ch == "/" then return M.edit_begin(state, api) end
         return "none"
     end
     if event == "desk_focus" or event == "term_resize" then return "repaint" end
@@ -474,7 +575,7 @@ function M.body(manifest, api)
             api.yield()
         end
     end
-    M.open(state, api, state.target)
+    M.open(state, api, state.target, { source = "home" })
     M.paint_once(state, api, term)
     M.note(api, "BROWSER_READY url=" .. M.fit(state.url, 60)
         .. " lines=" .. tostring(#(state.lines or {})))

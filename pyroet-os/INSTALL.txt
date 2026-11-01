@@ -93,7 +93,9 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
      web        built-in text browser: the default page is about:home (built in,
                 no network needed), enter opens the address from /etc/browser.home,
                 addresses are http(s)://..., local:/path (a file on this computer)
-                or about:home; up/down scroll, b back, r reload, q quit
+                or about:home; a (or /) edits the address, c cancels editing,
+                enter opens, backspace deletes; up/down scroll, b back, r reload,
+                q quits (in reading mode only -- while editing q is a letter)
      installer  up/down (or a digit) pick a package, enter installs /
                 removes / reports "locked" via the host bridge, c cancels,
                 q back. No source shows "no source: checked /pkgs,/disk", no bridge
