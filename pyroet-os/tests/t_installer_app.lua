@@ -241,7 +241,7 @@ return function(H)
         local disk_entries, disk_problems, has_disk = M.scan(no_disk)
         H.eq("no_disk_ok", has_disk, false)
         H.eq("no_disk_entries", #disk_entries, 3)
-        H.contains("no_disk_problem", H.joined(disk_problems), "no disk")
+        H.absent("no_disk_problem", H.joined(disk_problems), "no disk")
 
         -- a refused fs.read is named as such, not as a missing directory
         local denied = fake_api({ list_denied = true })
@@ -296,7 +296,7 @@ return function(H)
         H.eq("rows", #lines, 20)
         for i = 1, #lines do H.eq("width_" .. tostring(i), #lines[i], 26) end
         H.contains("row1_version", lines[1], "installer 0.1.0")
-        H.contains("row2_disk", lines[2], "disk ok")
+        H.contains("row2_disk", lines[2], "source disk")
         H.contains("row2_installed", lines[2], "3 installed")
         H.contains("row3_marker", lines[3], "> d box")
         H.contains("row3_version", lines[3], "0.2.0")
@@ -380,7 +380,7 @@ return function(H)
             ["/apps"] = {}, ["/system/system"] = {} } }), { version = "0.1.0" })
         H.contains("empty_hint", M.render(empty_state, 26, 20)[19], "no apps to install")
         H.contains("empty_status", M.render(empty_state, 26, 20)[20], "d0 i0 s0 sel 0/0")
-        H.contains("empty_disk_text", M.render(empty_state, 26, 20)[2], "disk ok")
+        H.contains("empty_disk_text", M.render(empty_state, 26, 20)[2], "source ")
         local no_disk_dirs = copy_map(BASE_DIRS)
         no_disk_dirs["/disk/apps"] = nil
         no_disk_dirs["/apps"] = {}
@@ -388,8 +388,8 @@ return function(H)
         local no_disk_state = M.build(machine({ dirs = no_disk_dirs }),
             { version = "0.1.0" })
         H.contains("no_disk_hint", M.render(no_disk_state, 26, 20)[19],
-            "no disk, no apps")
-        H.contains("no_disk_header", M.render(no_disk_state, 26, 20)[2], "disk none")
+            "no source: checked ")
+        H.contains("no_disk_header", M.render(no_disk_state, 26, 20)[2], "source none")
         local denied_state = M.build(fake_api({ list_denied = true }),
             { version = "0.1.0" })
         H.contains("denied_hint", M.render(denied_state, 26, 20)[19],
@@ -717,11 +717,11 @@ return function(H)
         -- default interval keeps the next four frames from scanning again
         local throttled = machine()
         M.run(nil, throttled, { max_frames = 4, paint = false })
-        H.eq("scan_once", throttled.calls.list, 3)
+        H.eq("scan_once", throttled.calls.list, 4)
         -- interval 1 rescans on every frame: build + three loop frames
         local eager = machine()
         M.run(nil, eager, { max_frames = 3, scan_interval = 1, paint = false })
-        H.eq("scan_every_frame", eager.calls.list, 12)
+        H.eq("scan_every_frame", eager.calls.list, 16)
 
         -- keys as an iterator work the same way
         local iter_rec = recorder({ install_ok = true })

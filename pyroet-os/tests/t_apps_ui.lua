@@ -312,7 +312,7 @@ return function(H)
         -- this app is driven through its body, so the sink carries the raw line
         -- (the runtime prepends APP_LOG when the app really runs)
         local logtext = H.joined(lines)
-        H.contains("installer_ready", logtext, "ready entries=3 disk=no")
+        H.contains("installer_ready", logtext, "ready entries=3 source=none")
         H.contains("installer_move", logtext, "key=down action=move")
         -- the selected row is a system package: pressing enter says it is locked
         -- (a real answer, not a fake install)
@@ -322,7 +322,7 @@ return function(H)
         local text = table.concat(frame, "\n")
         H.contains("installer_list_launcher", text, "launcher")
         H.contains("installer_list_settings", text, "settings")
-        H.contains("installer_no_source", text, "disk none")
+        H.contains("installer_no_source", text, "source none")
         H.ascii_check("installer_logs_ascii", H.joined(lines))
     end
 

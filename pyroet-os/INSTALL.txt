@@ -65,8 +65,10 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
    "Ctrl+T opens power menu" and the list stays. Ctrl+T (the ROM terminate
    event) opens the power menu -- Shutdown / Reboot / Cancel, up/down picks,
    enter runs, Esc or q cancels -- so there is no key that drops you back to
-   the CraftOS shell. The menu also has "Update": it lists what the source
-   medium offers (/disk/ota/meta.txt image, /disk/apps packages), applies a
+   the CraftOS shell. The menu also has "Update": it lists what the sources
+   offer -- /pkgs/*.app on this computer's own disk (the primary source; a
+   pocket computer has no disk drive at all), plus /disk/apps and
+   /disk/ota/meta.txt only when a disk is mounted -- and applies a
    package through the kernel bridge, and says "no updates" with a reason when
    there is nothing to apply (q goes back; no Esc needed). Inside an app Ctrl+T leaves that app first (back to the
    desktop); press it again on the desktop to get the menu.
@@ -88,7 +90,7 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
                 hosts, probe target), q back
      installer  up/down (or a digit) pick a package, enter installs /
                 removes / reports "locked" via the host bridge, c cancels,
-                q back. No source medium shows "disk none", no bridge
+                q back. No source shows "no source: checked /pkgs,/disk", no bridge
                 shows "unavailable" -- it never pretends to install.
    A third-party package that declares no "input" gets a screen that is cleared
    before it is shown (and cleared again before the desktop comes back), so the

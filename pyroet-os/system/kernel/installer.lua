@@ -50,6 +50,41 @@ local function short(v, max)
     return s == "" and "-" or s
 end
 
+-- the source roots that actually exist right now: /pkgs first (always
+-- checked), /disk/apps only when a disk is mounted
+function I.roots_for(fsx, explicit)
+    if type(explicit) == "table" then return explicit end
+    local roots = { I.INTERNAL }
+    if type(fsx) == "table" and type(fsx.exists) == "function" then
+        local called, here = pcall(fsx.exists, "/disk")
+        if called and here then
+            local ok_dir, is_dir = pcall(fsx.isDir, I.DISK)
+            if ok_dir and is_dir then roots[#roots + 1] = I.DISK end
+        end
+    end
+    return roots
+end
+
+function I:source_for(name)
+    local roots = I.roots_for(self.fs, self.media_roots)
+    for i = 1, #roots do
+        local base = roots[i]
+        if base:sub(-1) == "/" then base = base:sub(1, -2) end
+        local dir = base .. "/" .. name .. ".app"
+        local called, here = pcall(self.fs.exists, dir)
+        if called and here then return dir end
+    end
+    -- an explicit media_root (tests, or a host with its own layout) still counts
+    if self.media_root ~= nil and self.media_root ~= I.INTERNAL then
+        local base = self.media_root
+        if base:sub(-1) == "/" then base = base:sub(1, -2) end
+        local dir = base .. "/" .. name .. ".app"
+        local called, here = pcall(self.fs.exists, dir)
+        if called and here then return dir end
+    end
+    return nil
+end
+
 local function join(dir, name)
     local head = tostring(dir):gsub("/+$", "")
     return (head == "" and "/" or head) .. "/" .. name
@@ -153,7 +188,11 @@ function I.new(opts)
     self.fs, self.sink, self.logs, self.rt = o.fs or rawget(_G, "fs"), o.log, {}, nil
     self.loadfile = o.loadfile or rawget(_G, "loadfile")
     self.apps = o.apps
-    self.media_root, self.packages = o.media_root or "/disk/apps", o.packages or {}
+    -- T7: a pocket computer has no disk drive, so the primary source is the
+    -- internal /pkgs directory; /disk/apps is only consulted when /disk exists
+    self.media_root = o.media_root or I.INTERNAL
+    self.media_roots = o.media_roots
+    self.packages = o.packages or {}
     self.apps_root, self.system_root = o.apps_root or APP, o.system_root or SYS
     self.sha = sha_of(o, self.loadfile)
     return self
@@ -304,10 +343,7 @@ function I:install(name, opts)
     if not mkdirp(fsx, tmp) then return self:fail(name, nil, "no temp dir") end
 
     local src = o.dir
-    if src == nil then
-        local medium = join(self.media_root, name .. ".app")
-        if fsx.exists(medium) and fsx.isDir(medium) then src = medium end
-    end
+    if src == nil then src = self:source_for(name) end
     if src then
         pcall(fsx.copy, src, tmp)
         if not fsx.exists(join(tmp, "manifest.lua")) then

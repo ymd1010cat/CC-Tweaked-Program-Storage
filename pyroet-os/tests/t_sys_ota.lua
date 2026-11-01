@@ -23,7 +23,7 @@ return function(H)
             fs = F,
             log = H.logger(),
             apps = APPS,
-            media_root = media or "/disk/apps",
+            media_root = "/pkgs",
             apps_root = "/apps",
             system_root = "/system/system",
         })
@@ -57,6 +57,7 @@ return function(H)
     do
         H.rmrf("/apps")
         H.rmrf("/disk")
+        H.rmrf("/pkgs")
         local inst = installer_for()
         local rt, log, lines = runtime({ installer = inst })
         H.eq("scan", rt:scan(), 3)
@@ -66,10 +67,10 @@ return function(H)
         local ok, info = api.sys.ota_list()
         H.eq("none_ok", ok, nil)
         H.eq("none_reason", info, "no source")
-        H.has(lines, "APP_OTA_LIST ok=false reason=no_source entries=0")
+        H.has(lines, "APP_OTA_LIST ok=false reason=no_source checked=/pkgs,/disk")
 
         -- 2) a package on the source medium is an update
-        H.app_package("/disk/apps/demo.app", {
+        H.app_package("/pkgs/demo.app", {
             manifest = 'return { name = "demo", version = "1.0.1", entry = "main.lua",'
                 .. ' capabilities = { "fs.read" } }',
             main = 'return function(manifest, api) return nil end\n',
@@ -120,6 +121,7 @@ return function(H)
         H.eq("reader_apply_reason", aerr, "capability denied: fs.write")
         H.rmrf("/apps")
         H.rmrf("/disk")
+        H.rmrf("/pkgs")
     end
 
     -- -----------------------------------------------------------------
@@ -127,7 +129,8 @@ return function(H)
     do
         H.rmrf("/apps")
         H.rmrf("/disk")
-        H.app_package("/disk/apps/demo.app", {
+        H.rmrf("/pkgs")
+        H.app_package("/pkgs/demo.app", {
             manifest = 'return { name = "demo", version = "1.0.1", entry = "main.lua",'
                 .. ' capabilities = { "fs.read" } }',
             main = 'return function(manifest, api) return nil end\n',
@@ -164,6 +167,105 @@ return function(H)
         H.eq("remove_gone", F.exists("/apps/demo.app"), false)
         H.rmrf("/apps")
         H.rmrf("/disk")
+        H.rmrf("/pkgs")
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("ota.internal")
+    -- T7: a pocket computer has no disk drive, so /pkgs (on this computer's own
+    -- disk) is the primary source; /disk is only added when it is mounted.
+    do
+        H.rmrf("/apps")
+        H.rmrf("/disk")
+        H.rmrf("/pkgs")
+        H.app_package("/pkgs/demo.app", {
+            manifest = 'return { name = "demo", version = "2.0.0", entry = "main.lua",'
+                .. ' capabilities = { "fs.read" } }',
+            main = 'return function(manifest, api) return nil end\n',
+        })
+        local inst = installer_for()
+        local rt, log, lines = runtime({ installer = inst })
+        H.eq("scan", rt:scan(), 3)
+        local api = launch(rt, "launcher")
+
+        -- no /disk at all: the internal package is still listed, and the source
+        -- summary says `internal` (never `disk none`)
+        local ok, info = api.sys.ota_list()
+        H.eq("internal_ok", ok, true)
+        H.eq("internal_source", info and info.source, "internal")
+        H.eq("internal_entries", info and #info.entries, 1)
+        H.eq("internal_entry_source", info and info.entries[1].source, "internal")
+        H.has(lines, "APP_OTA_LIST ok=true entries=1 source=internal")
+
+        -- and it installs into /apps through the same installer object
+        H.eq("internal_apply", select(1, api.sys.ota_apply("demo")), true)
+        H.check("internal_installed", F.exists("/apps/demo.app/manifest.lua"),
+            "not installed")
+        H.eq("internal_remove", select(1, api.sys.uninstall("demo")), true)
+
+        -- with a mounted disk both sources are merged into `internal+disk`
+        H.app_package("/disk/apps/diskapp.app", {
+            manifest = 'return { name = "diskapp", version = "1.0.0",'
+                .. ' entry = "main.lua", capabilities = { "fs.read" } }',
+            main = 'return function(manifest, api) return nil end\n',
+        })
+        local ok2, info2 = api.sys.ota_list()
+        H.eq("merged_ok", ok2, true)
+        H.eq("merged_source", info2 and info2.source, "internal+disk")
+        H.eq("merged_entries", info2 and #info2.entries, 2)
+        local sources = {}
+        for i = 1, #(info2 and info2.entries or {}) do
+            sources[info2.entries[i].source] = true
+        end
+        H.eq("merged_has_internal", sources.internal, true)
+        H.eq("merged_has_disk", sources.disk, true)
+
+        -- the installer app reads the same roots: /pkgs first, /disk optional
+        _G.PYROET_INSTALLER_TEST = true
+        local APP = assert(loadfile("/tests/installer.app/main.lua"))()
+        _G.PYROET_INSTALLER_TEST = nil
+        local fs_api = {
+            list = function(path)
+                if not F.exists(path) then return nil, "not found" end
+                if not F.isDir(path) then return nil, "not a directory" end
+                return F.list(path)
+            end,
+            exists = function(path) return F.exists(path) end,
+            isDir = function(path) return F.isDir(path) end,
+        }
+        local entries, problems, ok3, text = APP.scan({
+            fs = fs_api,
+            sys = { apps = function() return {} end },
+        })
+        H.eq("app_source_text", text, "internal+disk")
+        local found = {}
+        for i = 1, #entries do
+            found[entries[i].source .. ":" .. entries[i].name] = true
+        end
+        H.eq("app_pkgs", found["internal:demo"], true)
+        H.eq("app_disk", found["disk:diskapp"], true)
+        H.eq("app_tag", APP.tag_of({ source = "internal" }), "p")
+        H.eq("app_action", APP.action_of({ source = "internal" }), "install")
+
+        -- a machine with neither source: the hint names what was checked
+        H.rmrf("/pkgs")
+        H.rmrf("/disk")
+        local no_disk_entries, no_disk_problems, ok4, text2 = APP.scan({
+            fs = fs_api,
+            sys = { apps = function() return {} end },
+        })
+        H.eq("app_none_text", text2, "none")
+        local off_source = 0
+        for i = 1, #no_disk_entries do
+            local source = no_disk_entries[i].source
+            if source == "internal" or source == "disk" then off_source = off_source + 1 end
+        end
+        H.eq("app_none_entries", off_source, 0)
+        H.absent("app_none_no_disk_word", H.joined(no_disk_problems), "no disk")
+        H.eq("app_none_problems", #no_disk_problems, 0)
+        H.rmrf("/apps")
+        H.rmrf("/disk")
+        H.rmrf("/pkgs")
     end
 
     -- -----------------------------------------------------------------

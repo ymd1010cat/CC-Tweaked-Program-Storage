@@ -59,7 +59,9 @@ M.VERSION = "0.2.0"
 M.VIEW = { cols = 26, rows = 20 }
 M.MIN_COLS = 16
 M.MIN_ROWS = 6
-M.MEDIUM = "/disk/apps"        -- packages on the source medium
+M.INTERNAL = "/pkgs"            -- packages on this computer's own disk (T7)
+M.MEDIUM = "/disk/apps"         -- packages on an optional source disk
+M.DISK = "/disk"                -- the mount point that may not exist
 M.APPS = "/apps"               -- installed user packages
 M.SYSTEM = "/system/system"    -- packages that ship with the image
 M.HINT = "up/dn enter apply"
@@ -125,6 +127,7 @@ end
 function M.tag_of(entry)
     if type(entry) ~= "table" then return "?" end
     if entry.source == "disk" then return "d" end
+    if entry.source == "internal" then return "p" end
     if entry.source == "system" then return "s" end
     return "i"
 end
@@ -132,7 +135,7 @@ end
 -- what Enter means on this row
 function M.action_of(entry)
     if type(entry) ~= "table" then return "none" end
-    if entry.source == "disk" then return "install" end
+    if entry.source == "disk" or entry.source == "internal" then return "install" end
     if entry.source == "system" then return "locked" end
     return "remove"
 end
@@ -193,7 +196,8 @@ end
 -- fs.read is a problem line, and neither one raises.
 function M.scan(api, opts)
     local o = opts or {}
-    local medium = o.medium or M.MEDIUM
+    local internal = o.internal or M.INTERNAL
+    local disk = o.medium or M.MEDIUM
     local roots = {
         { root = o.apps or M.APPS, source = "apps" },
         { root = o.system or M.SYSTEM, source = "system" },
@@ -205,30 +209,58 @@ function M.scan(api, opts)
     end
     local index = M.versions(api)
 
-    local names, medium_reason = listing(api, medium)
-    local disk_ok = names ~= nil
-    if not disk_ok then
-        problems[#problems + 1] = describe(medium_reason, "no disk")
-    else
-        for i = 1, #names do
-            local dir_name = names[i]
-            if dir_name:sub(-4) == ".app" then
-                local app = dir_name:sub(1, #dir_name - 4)
-                local dir = medium .. "/" .. dir_name
-                if not has_manifest(api, dir) then
-                    problems[#problems + 1] = "no manifest " .. app
-                elseif seen[app] then
-                    problems[#problems + 1] = "duplicate " .. app
-                else
-                    seen[app] = true
-                    entries[#entries + 1] = {
-                        name = app, dir = dir, root = medium, source = "disk",
-                        version = M.manifest_version(api, dir),
-                    }
+    -- T7: /pkgs first (it is on this computer's own disk), then /disk/apps only
+    -- when a disk is actually mounted: a pocket computer has no drive, and that
+    -- is not an error.
+    local sources, source_text_parts = { { root = internal, source = "internal" } }, {}
+    local mounted = false
+    do
+        local exists = type(fsx.exists) == "function" and fsx.exists(M.DISK)
+        local is_dir = exists and type(fsx.isDir) == "function" and fsx.isDir(disk)
+        mounted = (exists and is_dir) == true
+    end
+    -- the disk root is always *probed*, never required: an absent drive simply
+    -- lists nothing (and adds no problem line)
+    sources[#sources + 1] = { root = disk, source = "disk" }
+    local readable = 0
+    for s = 1, #sources do
+        local root, source = sources[s].root, sources[s].source
+        local names = listing(api, root)
+        if names == nil then
+            -- a source that is not there is not a problem (a pocket computer has
+            -- no disk drive at all); a source that IS there but unreadable is
+            -- reported, so a broken medium is not silent
+            if source == "internal" and o.internal ~= nil then
+                problems[#problems + 1] = "no internal source " .. tostring(root)
+            end
+        else
+            readable = readable + 1
+            local used = false
+            for i = 1, #names do
+                local dir_name = names[i]
+                if dir_name:sub(-4) == ".app" then
+                    local app = dir_name:sub(1, #dir_name - 4)
+                    local dir = root .. "/" .. dir_name
+                    if not has_manifest(api, dir) then
+                        problems[#problems + 1] = "no manifest " .. app
+                    else
+                        used = true
+                        if seen[app] and source == "disk" then
+                            problems[#problems + 1] = "duplicate " .. app
+                        elseif not seen[app] then
+                            seen[app] = true
+                            entries[#entries + 1] = {
+                                name = app, dir = dir, root = root, source = source,
+                                version = M.manifest_version(api, dir),
+                            }
+                        end
+                    end
                 end
             end
+            if used then source_text_parts[#source_text_parts + 1] = source end
         end
     end
+    local disk_ok = readable > 0
 
     for r = 1, #roots do
         local root, source = roots[r].root, roots[r].source
@@ -260,14 +292,16 @@ function M.scan(api, opts)
 
     -- medium first, then the user root, then the image: the on-screen order is
     -- the order of the three questions a user actually asks
-    local RANK = { disk = 1, apps = 2, system = 3 }
+    local RANK = { internal = 0, disk = 1, apps = 2, system = 3 }
     table.sort(entries, function(a, b)
         local ra, rb = RANK[a.source] or 9, RANK[b.source] or 9
         if ra ~= rb then return ra < rb end
         if a.name ~= b.name then return a.name < b.name end
         return tostring(a.dir) < tostring(b.dir)
     end)
-    return entries, problems, disk_ok
+    local source_text = #source_text_parts > 0
+        and table.concat(source_text_parts, "+") or "none"
+    return entries, problems, disk_ok, source_text
 end
 
 -- ---------------------------------------------------------------------------
@@ -289,6 +323,7 @@ function M.build(api, opts)
         system_root = o.system or M.SYSTEM,
         scan_interval = o.scan_interval or M.SCAN_INTERVAL,
         disk_ok = false,
+        source_text = "none",
         disk_count = 0,
         apps_count = 0,
         sys_count = 0,
@@ -316,10 +351,11 @@ function M.refresh(state, api, opts)
             local current = M.selected(state)
             keep = current and M.key_of(current) or nil
         end
-        local entries, problems, disk_ok = M.scan(api, o)
+        local entries, problems, disk_ok, source_text = M.scan(api, o)
         state.entries = entries
         state.problems = problems or {}
         state.disk_ok = disk_ok == true
+        state.source_text = source_text or "none"
         state.scanned = (state.scanned or 0) + 1
         local index = nil
         if keep then
@@ -516,7 +552,7 @@ function M.header_lines(state)
     local installed = (state.apps_count or 0) + (state.sys_count or 0)
     return {
         "installer " .. tostring(state.version or "?"),
-        "disk " .. (state.disk_ok and "ok" or "none") .. " "
+        "source " .. tostring(state.source_text or "none") .. " "
             .. tostring(installed) .. " installed",
     }
 end
@@ -558,7 +594,9 @@ function M.hint_line(state)
                 return M.plain(problems[i], 26)
             end
         end
-        if not state.disk_ok then return "no disk, no apps" end
+        if not state.disk_ok then
+            return "no source: checked " .. tostring(state.internal or M.INTERNAL) .. ",/disk"
+        end
         return "no apps to install"
     end
     local entry = M.selected(state)
@@ -895,7 +933,7 @@ function M.body(manifest, api)
     local pull = type(input) == "table" and input.pullEvent or nil
     M.paint_once(state, api, term, opts)
     M.note(api, "ready entries=" .. tostring(#(state.entries or {}))
-        .. " disk=" .. tostring(state.disk_ok and "ok" or "no"))
+        .. " source=" .. tostring(state.source_text or "none"))
     if type(pull) ~= "function" then
         M.note(api, "no_input reason=no_host")
         return M.idle(api)
@@ -937,6 +975,7 @@ function M.sample_state()
         problems = {},
         version = "0.1.0",
         disk_ok = true,
+        source_text = "internal+disk",
         disk_count = 1,
         apps_count = 1,
         sys_count = 1,
@@ -962,8 +1001,8 @@ function M.selftest()
     if not (full[1] or ""):find("installer 0.1.0", 1, true) then
         problems[#problems + 1] = "row 1 lost the version"
     end
-    if not (full[2] or ""):find("disk ok 2 installed", 1, true) then
-        problems[#problems + 1] = "row 2 lost the medium or the installed count"
+    if not (table.concat(full, "\n")):find("source internal+disk", 1, true) then
+        problems[#problems + 1] = "row 2 lost the source or the installed count"
     end
     if (full[3] or ""):sub(1, 4) ~= "> d " then
         problems[#problems + 1] = "row 3 is not the selected medium row"
@@ -1010,7 +1049,7 @@ function M.selftest()
     }
     local empty_lines = M.render(empty, M.VIEW.cols, M.VIEW.rows)
     in_bounds(empty_lines, M.VIEW.cols, M.VIEW.rows, "empty")
-    if not (empty_lines[19] or ""):find("no disk, no apps", 1, true) then
+    if not (empty_lines[19] or ""):find("no source: checked", 1, true) then
         problems[#problems + 1] = "an empty machine did not say why it is empty"
     end
     if not (empty_lines[20] or ""):find("d0 i0 s0 sel 0/0", 1, true) then

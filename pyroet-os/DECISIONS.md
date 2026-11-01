@@ -1091,6 +1091,26 @@ enter install q=back
 
 27.4 **数字**：离线 **4,713 pass / 0 fail / 234 groups**（上一轮 4,699/233，+14 断言 / +1 组）；TOTAL 见 sizecheck（**SIZE_WARN**，距 629,145 仍有余量）；改动 lua 非 ASCII 计数 0。
 
+28. 安装/OTA 的来源规则：`/pkgs` 为主，`/disk` 可选（T7）
+
+28.1 **限制**：CC 的**手持电脑（pocket computer）没有软驱**，`/disk` 永远不存在 —— 之前把 `/disk/apps` 当唯一来源，手持机上等于装不了任何东西。
+
+28.2 **最终来源规则**（内核 `installer.lua` / `apps.lua` 与 installer 应用一致）：
+
+| 来源 | 路径 | 何时使用 |
+| --- | --- | --- |
+| 内部（主） | `/pkgs/<name>.app/`（含 manifest.lua，目录名=包名） | **总是**探测；包放在电脑自己的盘上 |
+| 软盘（可选） | `/disk/apps/<name>.app/` + `/disk/ota/meta.txt`（镜像更新报文） | 仅当 `/disk` 存在（挂载了软盘）；不存在的源**静默跳过**，不报错、不显示 `disk none` |
+
+- 内核 `I.roots_for(fs, explicit)` → `{ "/pkgs" }` +（`/disk` 存在时）`"/disk/apps"`；`I:source_for(name)` 依次查找，`install` 用它解析源目录（显式 `o.dir` 仍优先）。`I.INTERNAL = "/pkgs"`、`I.DISK = "/disk/apps"`；`media_roots` 可注入（测试）。
+- OTA：`api.sys.ota_list()` 返回 `source` 摘要字符串 —— `internal` / `internal+disk` / `none`；条目带 `source=internal|disk`。无任何源 → `nil, "no source"`，日志记明检查过的路径 `APP_OTA_LIST ok=false reason=no_source checked=/pkgs,/disk`；有源时 `APP_OTA_LIST ok=true entries=N source=internal+disk`。
+- installer 应用：header 第 2 行由 `disk ok/none` 改为 `source internal|internal+disk|none`，tag `p`=internal（可安装）、`d`=disk、`i`=已装、`s`=镜像；无源时提示行 `no source: checked /pkgs,/disk`（不再有误导性的 `disk none` / `no disk, no apps`）。错误码不变：坏包 `no manifest <n>` / `duplicate <n>`、桥侧 `bad name` / `manifest_name:` / hash·size 文案 / `no source`（安装时源里没有该包）。
+- **未做（有意留下，不做半成品）**：可选源 `/etc/update.rednet`（一行 `host=<id> channel=<n>`）经 rednet 向另一台电脑拉包 —— 需要协议/回执/校验与 rednet 权限，代价不小，暂记为 TODO；未来实现时作为**第三来源**追加在 `/pkgs` 之后，拉取失败回退内部源并记可读原因。
+
+28.3 **测试**：`tests/t_sys_ota.lua` 新增 `ota.internal`：无 `/disk` 时 `/pkgs/demo.app` 被列出（`source=internal`、日志 `APP_OTA_LIST ok=true entries=1 source=internal`）、可经桥安装/卸载；放一个 `/disk/apps/diskapp.app` 后来源变 `internal+disk` 且两条目各带 `source`；installer 应用的 `M.scan` 在 `internal+disk`/`none` 两种情况下 `source_text` 正确、`/disk` 不存在时 `problems` 为空（不再有 `no disk`）、`tag_of/action_of` 对 internal 是 `p`/`install`。
+
+28.4 **数字**：离线 **4,737 pass / 0 fail / 235 groups**（上一轮 4,713/234，+24 断言 / +1 组）；TOTAL 见 sizecheck（**SIZE_WARN**）；改动 lua 非 ASCII 计数 0。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1122,3 +1142,4 @@ enter install q=back
 - 2026-11-01: **Ctrl+T 打开电源菜单，不再退回 shell**（口径见 §25）。桌面收到 `terminate`/`shutdown` 不再返回 "terminate"（那会回 CraftOS shell），而是 `DESKTOP_TERMINATE scope=desktop` + `DESKTOP_POWER_MENU scope=desktop` + 投 `power_menu` 事件并 tick；launcher 自己画三项菜单（Shutdown/Reboot/Cancel，`up/down` 选、`enter` 执行、`Esc`/`q` 取消），执行前写 `POWER shutdown requested`/`POWER reboot requested`，缺 `os.shutdown`/`os.reboot` 时该行 `unavailable` 并给出原因；应用内 Ctrl+T 仍先退应用（`scope=app`）。launcher 的 `q/Q/Esc` 提示改为 `Ctrl+T opens power menu`。测试新增 `desktop_loop.power`（os stub、菜单逐字、Reboot 调用一次、Esc 回桌面、应用内不弹菜单、缺 os.shutdown 显示 unavailable），旧组统一 `power_menu = false`。离线 **4,633 pass / 0 fail / 230 groups**（4,606/229）；未 commit。
 - 2026-11-01: **桌面 OTA 入口 + installer 桥复核**（口径见 §26）。`api.sys.install/uninstall/list` 是 T4 的既有实现（本轮只补断言，未改语义）；新增 `api.sys.ota_list()` / `api.sys.ota_apply(name)`（cap `fs.read` / `fs.write`）：源 = `/disk/ota/meta.txt`（镜像更新，`kernel/ota.lua` 的 `O.parse_meta` 解析）+ `/disk/apps/<name>.app`（包更新）；无源 `no source`、坏 meta `bad meta`、镜像 apply 一律 `image ota needs recovery`（归 recovery），包 apply 复用同一 installer 对象。launcher 电源菜单由三项变四项（`Update` 在首位），`Update` 打开自绘 Updates 屏（`no updates` + 原因、`up/down/enter/q`、不用 Esc）。新增 `tests/t_sys_ota.lua`（3 组 65 断言），`t_ota.lua` 原样保留。离线 **4,699 pass / 0 fail / 233 groups**（4,633/230）；`install.set` 29 条、TOTAL **560,258 B / SIZE_WARN / MARGIN 210,733**（余 68,887）、`WINDOW_OK sum=760258`；无新增镜像文件。
 - 2026-11-01: **屏幕租借前后清屏**（口径见 §27）。`kernel/desktop.lua` 新增 `D:clear_screen(name, stage)`（注入 term / `rawget(_G,"term")`，恢复默认色 + pcall clear + 光标归位，失败不崩，日志 `DESKTOP_LOAN_CLEAR app=.. stage=start|end ok=..`），在 `loan_start` 第一步 tick 之前与 `loan_end`（stopped/timeout/abort 共用）记 END 之前各清一次；`startup.lua` 透传 `term`。新增 `t_desktop_loop.loan_clear`（单行 fixture：租借中 2..18 行必须空白、无 `apps sel`；返回后应用文字消失、第 3 行 `> `、第 18 行 `display only:`、第 19 行状态）。离线 **4,713 pass / 0 fail / 234 groups**（4,699/233）；未 commit。
+- 2026-11-01: **安装/OTA 来源改为 `/pkgs` 为主、`/disk` 可选**（口径见 §28；手持电脑没有软驱，`/disk` 永远不存在）。`kernel/installer.lua` 新增 `I.INTERNAL="/pkgs"`、`I.roots_for`、`I:source_for`（`media_root` 默认 `/pkgs`，`/disk/apps` 仅在 `/disk` 存在时参与）；`kernel/apps.lua` 的 OTA 源同步（`A.OTA_INTERNAL`，条目带 `source=internal|disk`，返回 `source` 摘要 `internal|internal+disk|none`，无源日志记检查路径）；installer 应用 header/提示由 `disk ok/none` 改为 `source ..` 与 `no source: checked /pkgs,/disk`，tag `p`=internal。可选 rednet 源（`/etc/update.rednet`）记为 TODO，未实现。新增 `t_sys_ota.ota.internal`（内部源列出/安装/卸载、无 `/disk` 无 `disk none`、合并 `internal+disk`、无源为空 problems）。离线 **4,737 pass / 0 fail / 235 groups**（4,713/234）；未 commit。
