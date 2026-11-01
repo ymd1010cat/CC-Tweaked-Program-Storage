@@ -56,6 +56,19 @@ return of `"quit"` means "the caller may fall back to the shell". The module
 never calls `os.shutdown`, `os.reboot` or `shell`; unwinding is the boot
 chain's business.
 
+Network: one scheduler step is also one bounded network pump (DECISIONS.md
+45.6). Without it an RHTP request (or a DNS query) made inside an app coroutine
+never sees a modem frame, because this loop is the only thing that pulls events
+-- the request would just sit there until its timeout. The pump is discovered
+once, from the kernel's `net` service (`spec.service.pump`) or from the runtime
+(`rt:pump`); an injected `opts.pump` wins, and `opts.pump = false` turns the
+whole thing off. Each call gets `opts.pump_budget` seconds (default 0.02 s),
+which is deliberately small: `node:pump` blocks and consumes the event it
+pulls, so a long budget would swallow keystrokes. A pump that raises is logged
+once (`DESKTOP_PUMP_FAIL err=..`) and then dropped for the rest of the run, so
+a broken network stack can never end the desktop. The success line
+(`DESKTOP_PUMP ok=1 n=..`) is written once, not per tick.
+
 Usage:
 
     local desktop = dofile("/system/kernel/desktop.lua")
@@ -87,6 +100,10 @@ D.LOAN_SECONDS = 15
 -- fallback bound for a machine whose event source cannot start a timer: after
 -- this many events the loan ends anyway (never a dead end)
 D.LOAN_EVENTS = 40
+-- how long one network pump may run, in seconds. Small on purpose: the rpv node
+-- pump blocks in os.pullEvent and drops whatever non-network event it pulls, so
+-- a long budget would eat keystrokes.
+D.PUMP_BUDGET = 0.02
 -- hard caps (D1-fix round 5): whatever happens, a loan ends. Hitting one of these
 -- is a bug-worthy event, so it gets its own line: DESKTOP_LOAN_ABORT.
 D.LOAN_ABORT_EVENTS = 200
@@ -140,6 +157,30 @@ function D.takes_input(record)
     return declares(record, "input")
 end
 
+-- The network pump to drive from the loop (DECISIONS.md 45.6). The kernel's one
+-- `net` service owns the rpv node, so its `pump()` is the seam; a runtime that
+-- grows its own pump is accepted as a fallback. nil means "no network here",
+-- which is the normal state of a machine without /etc/network.conf.
+function D.find_pump(kernel, rt)
+    if type(kernel) == "table" and type(kernel.get) == "function" then
+        local ok, record = pcall(kernel.get, kernel, "net")
+        if ok and type(record) == "table" then
+            local spec = record.spec
+            local service = type(spec) == "table" and spec.service or nil
+            if service == nil and type(record.service) == "table" then
+                service = record.service
+            end
+            if type(service) == "table" and type(service.pump) == "function" then
+                return function(seconds) return service:pump(seconds) end
+            end
+        end
+    end
+    if type(rt) == "table" and type(rt.pump) == "function" then
+        return function(seconds) return rt:pump(seconds) end
+    end
+    return nil
+end
+
 function D.new(opts)
     local o = opts or {}
     local self = setmetatable({}, { __index = D })
@@ -179,6 +220,19 @@ function D.new(opts)
     -- the last permission request delivered to the launcher ("app/cap"), so one
     -- queued question is asked exactly once
     self.perm_key = nil
+    -- the network pump (DECISIONS.md 45.6): injected, discovered, or absent
+    self.pump = o.pump
+    self.pump_disabled = (o.pump == false)
+    if self.pump == nil and not self.pump_disabled then
+        self.pump = D.find_pump(o.kernel, o.rt)
+    end
+    self.pump_budget = tonumber(o.pump_budget) or D.PUMP_BUDGET
+    if self.pump_budget <= 0 then self.pump_budget = D.PUMP_BUDGET end
+    self.pump_ok = 0
+    self.pump_fail = 0
+    self.pump_steps = 0
+    self.pump_last = 0
+    self.pump_error = nil
     return self
 end
 
@@ -216,6 +270,10 @@ function D:state()
         loan_ends = self.loan_ends,
         loan = self.loan and self.loan.name or nil,
         perm = self.perm_key,
+        pump = self.pump ~= nil and not self.pump_disabled,
+        pumps = self.pump_ok,
+        pump_fail = self.pump_fail,
+        pump_budget = self.pump_budget,
         reason = self.reason,
         exited = self.exited,
     }
@@ -305,7 +363,35 @@ function D:deliver(event, p1, p2, p3)
     return true
 end
 
+-- one bounded network pump, called once per scheduler step. `n` is whatever the
+-- pump reports (the node pump returns true, a test doubles returns a frame
+-- count). A raising pump is logged exactly once and then dropped: a broken
+-- network stack is never allowed to end the desktop.
+function D:pump_once()
+    if self.pump == nil or self.pump_disabled then return false end
+    self.pump_steps = self.pump_steps + 1
+    local ok, result = pcall(self.pump, self.pump_budget)
+    if not ok then
+        self.pump_fail = self.pump_fail + 1
+        self.pump_error = tostring(result)
+        if self.pump_fail == 1 then
+            self:log("DESKTOP_PUMP_FAIL err=" .. short(result, 60))
+        end
+        self.pump = nil
+        return false
+    end
+    self.pump_ok = self.pump_ok + 1
+    if type(result) == "number" then self.pump_last = result end
+    if self.pump_ok == 1 then
+        self:log("DESKTOP_PUMP ok=1 n=" .. tostring(self.pump_last))
+    end
+    return true
+end
+
 function D:tick()
+    -- the loop is the machine's only event source, so it is also the only thing
+    -- that can hand a modem frame to the node the RHTP client is waiting on
+    self:pump_once()
     if type(self.rt.tick) ~= "function" then return false end
     self.ticked = self.ticked + 1
     -- parked apps are handed to the scheduler as a skip map: they stay running

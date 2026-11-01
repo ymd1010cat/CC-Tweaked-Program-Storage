@@ -74,7 +74,8 @@ pyroet-os/
 │  ├─ rpv/                  rpv 子集 10 文件 = 9 模块 + loader.lua（131,590 B）
 │  ├─ net/
 │  │  ├─ hosts.lua          静态 hosts 解析（整文件原子生效）
-│  │  ├─ rhtp.lua           RHTP/1.0 客户端（URL 解析 / DNS / off+len 分块 / 206）
+│  │  ├─ dns.lua            DNS 查询器（UDP 53 / A 记录 / 1s x 2 重试 / 正向缓存）
+│  │  ├─ rhtp.lua           RHTP/1.0 客户端（URL 解析 / 名字解析 / off+len 分块 / 206）
 │  │  └─ service.lua        kernel 服务 `net`：rpv 节点 + 静态邻居/路由 + hosts + UDP probe + RHTP
 │  └─ system/               系统应用（同一 `.app` 格式）
 │     ├─ launcher.app/      桌面（扫 /apps 与 /system/system）
@@ -511,9 +512,18 @@ index.txt         app <name> <version> <dir>      # 目录包：manifest.lua + m
 - URL：`rhtp://<host>[:<port>]/<path>`，**默认端口 8080**；裸 `host[:port]/path` 按 `rhtp://` 读，
   任何其它显式 scheme 直接拒绝（`bad scheme`，不回落 http）。`?query` / `#fragment` 被剥掉（服务端
   也忽略），路径 ≤96 字节纯 ASCII、禁 `//`、禁 `.`/`..` 段、禁反斜杠——URL 路径从不映射到本地文件系统。
-- **DNS**：点分十进制直接用；否则 `node:lookup(host)`（rpv 的解析入口，先 `node.hosts` 再发 DNS QUERY），
-  之后兜底查 `node.hosts`（`/etc/hosts.conf` 静态表写进去的那张）。失败 → `nil, "dns: unknown host"` +
-  `RHTP_DNS_FAIL host=..`；成功记 `RHTP_RESOLVE host=.. ip=..`（`debug=false` 可关）。
+- **名字解析**（顺序）：点分十进制直接用；否则 `node:lookup(host)`（镜像没有 `services.lua`，恒 `nil`）；
+  再查 `node.hosts`（`/etc/hosts.conf` 静态表）；最后是**真正的 DNS QUERY**（`system/net/dns.lua`）——
+  UDP 53、A 记录（QTYPE=1/QCLASS=1）、id 递增、`RD=1`、超时 **1 s x 2 次**、正向结果按 `min(TTL, 60)`
+  秒缓存（`dns=0` 关缓存），NXDOMAIN 与任何失败都不缓存；应答校验 id / `QR=1` / RCODE，支持 `0xC0xx`
+  压缩指针（最大跳转 8 次，指针环算坏包）。解析器地址取 `/etc/network.conf` 的 `dns=<ipv4>`，缺省用
+  `gateway`，两者都没有 → `nil, "dns: unknown host"`（不发包）。日志：`DNS_QUERY host=.. server=..`、
+  `DNS_ANSWER host=.. ip=.. ttl=..`、`DNS_TIMEOUT`、`DNS_NXDOMAIN`、`DNS_BAD_PACKET`。RHTP 侧成功记
+  `RHTP_RESOLVE host=.. ip=.. source=hosts|dns`，全失败记 `RHTP_DNS_FAIL host=.. err=..`。
+- **宿主泵**：桌面循环每步（`kernel/desktop.lua` 的 `D:tick`）泵一次网络（`net` 服务的 `pump()`，
+  单次预算 0.02 s，`opts.pump` / `opts.pump_budget` 可注入，`false` 关闭），所以 app 里发起的 RHTP 请求
+  与 DNS 查询能真的收包；日志 `DESKTOP_PUMP ok=1 n=..`（只在首次成功时记一行）与
+  `DESKTOP_PUMP_FAIL err=..`（只记一次，随后停用泵，桌面不受影响）。
 - **分块**：`off=<n> len=<n>`，服务端回 `206 Partial Content` + **恰好该段** body；客户端把段严格
   拼起来（长度不符是失败，不是少收一点）。服务端忽略扩展回 `200` + 全量 body 时本次直接用它。
   `R:fetch(path, size)` 用 `max_bytes` 分块并回调 `progress(done, total)`。
@@ -641,19 +651,19 @@ CraftOS 电脑上，不跑在掌机上，也不进镜像。
 > 放宽的**只是构建门禁**（代码体量不再当作构建错误），**真实介质容量另算**：掌机仍是一台 CC 电脑，
 > 盘配额 1,000,000 B，一个 10 MiB 的镜像装不进任何一台机器。能不能装看 `free`，不看 `SIZE_PASS`。
 
-当前实测（2026-11-01，RHTP 服务协议 + DNS 之后）：
+当前实测（2026-11-01，DNS 查询器 + 桌面网络泵之后）：
 
 ```
-entries    : 30 (30 files, 0 dirs, 0 missing)
-TOTAL      : 682,525 B   (system 29 文件 681,455 + 根 starter 1,070)
-VERDICT    : SIZE_PASS   (total 682,525 <= stretch 7,340,032)
-MARGIN     : 6,657,507 bytes under stretch; 9,803,235 bytes under upper
-WINDOW_OK  : sum=882525 limit=10685760
+entries    : 31 (31 files, 0 dirs, 0 missing)
+TOTAL      : 713,752 B   (system 30 文件 712,682 + 根 starter 1,070)
+VERDICT    : SIZE_PASS   (total 713,752 <= stretch 7,340,032)
+MARGIN     : 6,626,280 bytes under stretch; 9,772,008 bytes under upper
+WINDOW_OK  : sum=913752 limit=10685760
 ```
 
 - **`SIZE_WARN` 不是失败**：超目标线只报差额；硬门禁才是发版阻断线。当前体量在**新目标线以下**，
   所以判 `SIZE_PASS`。
-- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`682,525 + 200,000 = 882,525`，
+- 更新窗口是**独立判定**（`SIZE_FAIL` 时也照常打印 `WINDOW` 行）：`713,752 + 200,000 = 913,752`，
   远在 10,685,760 之内；它与机身 1,000,000 B 配额不是一回事（后者是物理事实，工具不替你判断）。
 - **发布包 ≠ 镜像**：发布 zip 是完整源码集（含 `recovery/` 与两份文档），`install.set` 统计的才是镜像；
   不要拿 zip 体积当门禁，也不要因为包里有 `recovery/` 就以为它在镜像里。
@@ -664,9 +674,9 @@ WINDOW_OK  : sum=882525 limit=10685760
 
 | 限制 | 具体表现 / 影响 |
 | --- | --- |
-| **无完整 DNS 客户端** | `services.lua` 未 vendor，`node:lookup(name)` 返回 `nil`；`net/rhtp.lua` 因此先查 `node.hosts`（`/etc/hosts.conf` 静态表），名字能解析但**没有真正的 DNS QUERY**；要发域名查询得先把 services.lua 的 lookup 补进来 |
+| **DNS 已实现（明文）** | `services.lua` 仍未 vendor，但 `node:lookup(name)` 返回 `nil` 时 `system/net/dns.lua` 会真的发 DNS QUERY（UDP 53 / A 记录 / 1 s x 2 / 正向缓存 ≤60 s），解析器地址取 `/etc/network.conf` 的 `dns=`（缺省 `gateway`）。**DNS 是明文 UDP**：可被伪造/篡改到与 RHTP 同一程度，没有 DNSSEC；日志 `DNS_QUERY` / `DNS_ANSWER` / `DNS_TIMEOUT` / `DNS_NXDOMAIN` / `DNS_BAD_PACKET`（DECISIONS.md §45.6） |
 | **RHTP 无 TLS / 无签名** | 完整性靠 SHA-256（OTA manifest_sha + 每文件 sha256、appstore 可选 SHA256.txt），真实性不签名；链路可被替换成自洽的另一份镜像（DECISIONS.md §45.5） |
-| **app 侧 RHTP 等待需要宿主泵节点** | `net/rhtp.lua` 的等待循环用 `node:pump`。`kernel/desktop.lua` 目前**不**把事件喂给 rpv 节点，所以真机上 app 发起的 RHTP 请求可能只等到 `RHTP_TIMEOUT`；内核 OTA 与 appstore 的调用路径因此是“协议正确、宿主待接”（DECISIONS.md §45.6） |
+| **app 侧 RHTP 由桌面泵驱动** | `kernel/desktop.lua` 每个 tick 调一次 `net` 服务的 `pump()`，所以 app 里发起的 RHTP 请求（与 DNS 查询）能收包（`DESKTOP_PUMP`）。预算 0.02 s：`node:pump` 会阻塞并消费它自己 pull 到的非网络事件，所以预算刻意很小——长时间按住键期间的理论丢帧是这条接线的已知代价（DECISIONS.md §45.6） |
 | **无 ICMP / 无 ping** | `icmp` 模块已裁；`probe()` 用 UDP 一发一收，所以"端口无响应 / 主机不在线 / 被丢弃"对外都只能表现为 timeout |
 | **无 DHCP / NAT / 路由 / WAN ACL / 多跳** | `nat`/`wan`/`wansec`/`fabric`/`topo`/`qos`/`mcast`/`dv` 全部裁掉；掌机只做端点，不转发、不做网关 |
 | **cap 只是 API 收口，不是沙盒** | app 与内核共享一个 Lua VM 与全局表；`fs`/`net`/`term`/`os.pullEvent` 的约束只对"经过 `api` 的调用"成立，绕过 `api` 直接摸全局拦不住（`input`/`terminal` 与另外七个 cap 同一强度） |
@@ -700,8 +710,15 @@ pwsh -NoProfile -File pyroet-os/tests/run-tests.ps1
 脚本把镜像 stage 到 `pyroet-os/.tests/computer/20`（与真机同布局：`/system` + `/system/system/*.app`），
 headless 启动、读取 `/offline-report.txt` 判分，**PASS 后自动删除 staging**（`-Keep` 保留）。
 
-基线（2026-11-01，RHTP 服务协议 + DNS 之后）：**OFFLINE_PASS 5,973 / FAIL 0 / GROUPS 299**。
-本轮新增/扩展的套件：`tests/t_rhtp.lua`（**8 组**：URL 解析与路径穿越拒绝、状态行解析、DNS 三种路径、
+基线（2026-11-01，DNS 查询器 + 桌面网络泵之后）：**OFFLINE_PASS 6,151 / FAIL 0 / GROUPS 305**。
+本轮新增/扩展的套件：`tests/t_dns.lua`（**4 组 / 108 断言**：名字编码与查询字节、应答解析（正常 A /
+压缩指针 / NXDOMAIN / 错 id / 截断 / 指针环 / 空 ANSWER）、传输（`dns=` / `gateway` 缺省 / 无解析器 /
+`dns=0` 关缓存 / 1s x 2 超时 / TTL 上限 60 / 缓存命中与过期 / 坏包重试 / `rpv.udp_send` 路径 / 无 socket）、
+`t_desktop_loop.desktop_loop.pump`（每 tick 一次注入 pump、预算与注入、抛错只记一次并不中断、无 pump 时行为
+不变、从 kernel `net` 服务发现 pump、`opts.pump=false`）与 `t_desktop_loop.desktop_loop.net`（真 app 运行时 +
+真 RHTP 客户端 + 假 node：桌面泵下拿到 body；同一请求关掉泵就永远收不到），两组合计 **54 断言**；`t_net_service.net.config` / `net.rhtp` 补 `dns=` 的解析与接线（**15 断言**：缺省 nil、合法值/整数、`dns=0`、`bad dns` 拒绝、不进 `unknown`、客户端拿到 `dns_server`/`dns_gateway`/`dns_cache`）；`t_budget` 的
+`install_entries` 30 → **31**、`install_set` 新增 `has_dns`。上一轮（RHTP 服务协议）的
+`tests/t_rhtp.lua`（**8 组**：URL 解析与路径穿越拒绝、状态行解析、DNS 三种路径、
 单包 200、206 分块拼接与 200 全量兜底、超时/无泵/坏行/非 2xx/发送失败、max_bytes 限额）、
 `t_net_service.net.rhtp`（配置键、客户端接线、`no network` / `no rhtp module` 两种降级）、
 `t_sys_ota.ota.image`（RHTP 升级：成功刷写、坏 manifest、坏 sha、错长度、404、坏行、无客户端、

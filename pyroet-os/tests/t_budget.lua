@@ -38,10 +38,13 @@ return function(H)
         for i = 1, #paths do set[paths[i]] = true end
         -- T1 added the Installer UI as image payload (2 files, DECISIONS.md 17),
         -- so the exact count moved 26 -> 28; D1 added the resident desktop loop
-        -- (kernel/desktop.lua), so it is 30. The strictness is unchanged.
-        H.eq("install_entries", #paths, 30)
+        -- (kernel/desktop.lua) and the DNS resolver (net/dns.lua), so it is 31.
+        -- The strictness is unchanged.
+        H.eq("install_entries", #paths, 31)
         H.check("has_installer", set["pyroet-os/system/kernel/installer.lua"] == true,
             "installer is not image payload")
+        H.check("has_dns", set["pyroet-os/system/net/dns.lua"] == true,
+            "the DNS resolver is not image payload")
         H.check("has_desktop", set["pyroet-os/system/kernel/desktop.lua"] == true,
             "the resident desktop loop is not image payload")
         H.check("has_ota", set["pyroet-os/system/kernel/ota.lua"] == true,
@@ -65,7 +68,7 @@ return function(H)
             "recovery tools must not be image payload")
         H.check("no_tests", set["pyroet-os/tests/run.lua"] == nil, "tests are not payload")
                 H.check("no_examples_text", (text or ""):find("pyroet-os/examples/", 1, true) == nil, "install.set still names an examples/ path")
-        H.check("no_duplicates", #paths == 30, "duplicate active entries")
+        H.check("no_duplicates", #paths == 31, "duplicate active entries")
     end
 
     -- ---------------------------------------------------------------------

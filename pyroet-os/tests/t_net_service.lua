@@ -173,6 +173,21 @@ return function(H)
         H.eq("neighbors_default", cfg and #cfg.neighbors, 0)
         H.eq("routes_default", cfg and #cfg.routes, 0)
         H.eq("unknown_default", cfg and #cfg.unknown, 0)
+        -- `dns=` (DECISIONS.md 45.6): optional, `0` means "no resolver cache",
+        -- absent means "resolver = gateway" (decided by net/dns.lua)
+        H.eq("dns_default", cfg and cfg.dns, nil)
+        local dns_cfg = NET.parse_config("ip=10.0.0.5\ndns=10.0.0.53\n")
+        H.eq("dns_value", dns_cfg and dns_cfg.dns, "10.0.0.53")
+        H.eq("dns_int", dns_cfg and dns_cfg.dns_int, ip2int("10.0.0.53"))
+        H.eq("dns_not_unknown", dns_cfg and #dns_cfg.unknown, 0)
+        H.eq("dns_off_value", select(1, NET.parse_config("ip=10.0.0.5\ndns=0\n")).dns,
+            "0")
+        H.eq("dns_bad", select(1, NET.parse_config("ip=10.0.0.5\ndns=10.0.0\n")), nil)
+        H.contains("dns_bad_error",
+            select(2, NET.parse_config("ip=10.0.0.5\ndns=nope\n")) or "",
+            "bad dns")
+        H.eq("dns_bad_is_not_unknown",
+            select(2, NET.parse_config("ip=10.0.0.5\ndns=1.2.3.4\n")), nil)
 
         local full = table.concat({
             "# edge node for the pocket",
@@ -651,7 +666,7 @@ return function(H)
     do
         local files = {
             ["/etc/network.conf"] = "ip=10.0.0.5\nrhtp_port=8088\nrhtp_chunk=64\n"
-                .. "rhtp_timeout=2\n",
+                .. "rhtp_timeout=2\ngateway=10.0.0.1\ndns=10.0.0.53\n",
         }
         local log, lines = H.logger()
         local rpv = fake_rpv({
@@ -678,7 +693,21 @@ return function(H)
         H.table("rhtp_client", client)
         H.eq("rhtp_client_port", client and client.port, 8088)
         H.eq("rhtp_client_chunk", client and client.max_bytes, 64)
+        -- the resolver address parsed here is what net/dns.lua gets (45.6)
+        H.eq("rhtp_client_dns", client and client.dns_server, "10.0.0.53")
+        H.eq("rhtp_client_dns_cache", client and client.dns_cache, true)
         H.has(lines, "NET_RHTP port=8088 chunk=64 timeout=2.00")
+
+        -- dns=0: no resolver cache (the gateway stays the server)
+        local off_svc = NET.new({ rpv = fake_rpv(), fs = mem_fs({
+            ["/etc/network.conf"] = "ip=10.0.0.5\ngateway=10.0.0.1\ndns=0\n",
+        }), log = log, hosts_module = HOSTS, rhtp_module = RHTP })
+        H.eq("rhtp_dns0_start", off_svc:start(), true)
+        local off_client = off_svc:rhtp_client()
+        H.table("rhtp_dns0_client", off_client)
+        H.eq("rhtp_dns0_server", off_client and off_client.dns_server, nil)
+        H.eq("rhtp_dns0_gateway", off_client and off_client.dns_gateway, "10.0.0.1")
+        H.eq("rhtp_dns0_cache", off_client and off_client.dns_cache, false)
 
         -- a direct address: the stub node answers inline, so no pump is needed
         local body, err = svc:rhtp_get("rhtp://10.0.0.9/index.txt")

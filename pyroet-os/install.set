@@ -115,6 +115,11 @@ pyroet-os/system/kernel/desktop.lua
 # trim, so it is image payload again (listed in the G1 block below).
 pyroet-os/system/net/hosts.lua
 pyroet-os/system/net/service.lua
+# The resolver (DECISIONS.md 45.6): a real DNS QUERY over the same rpv node,
+# because rpv/services.lua is not vendored. Resolver from /etc/network.conf
+# (`dns=`, else the gateway), 1 s x 2 tries, positive answers cached <=60 s.
+# 30 -> 31 entries with this line.
+pyroet-os/system/net/dns.lua
 # The service protocol client (DECISIONS.md 44): RHTP/1.0 over the same rpv
 # node, with the project's own URL parser, the off/len chunk extension and the
 # DNS/hosts name resolution. 29 -> 30 entries with this line.

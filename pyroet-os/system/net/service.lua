@@ -13,15 +13,19 @@ the system talks through and the static data that replaces the cut modules
     7. hand out the RHTP client           net/rhtp.lua over this node (RHTP/1.0)
 
 The RHTP client is the system's service protocol (DECISIONS.md 45): the
-appstore and the kernel OTA client fetch index/files/meta over it, and the
-node's resolver is used for names. `S:rhtp_get(url)` / `S:rhtp_fetch(url)` are
+appstore and the kernel OTA client fetch index/files/meta over it. Names are
+resolved through the node (`node:lookup`, `node.hosts`) and, when neither
+answers, by a real DNS QUERY from `net/dns.lua` against `dns=` (else the
+gateway) -- the resolver address parsed here is handed to the client, so there
+is one config parser per process. `S:rhtp_get(url)` / `S:rhtp_fetch(url)` are
 the app-facing form (body, nil | nil, reason); the raw client from
 `S:rhtp_client()` speaks the module API (status, body). Nothing here creates a
 second node: the client borrows the one service socket owner in this process.
 
-Pumping: the client's wait loop drives `node:pump` when the node has one, so a
-host that runs the desktop loop can make a request complete. A node without a
-pump still returns after the deadline instead of spinning.
+Pumping: the desktop loop drives `S:pump(seconds)` once per scheduler tick
+(kernel/desktop.lua), so an RHTP request or DNS query issued from an app makes
+progress; the client's own wait loop also drives `node:pump` when the node has
+one. A node without a pump still returns after the deadline instead of spinning.
 
 Failure policy: a missing or invalid config, a missing rpv table, a raising
 setup and a refused probe socket all end in `health = "degraded"` plus a
@@ -42,6 +46,9 @@ Config keys (all optional except `ip`):
     role=host              default "host"
     hosts_file=/etc/hosts.conf   default /etc/hosts.conf
     probe_port=47100       default 47100
+    dns=10.0.0.1           resolver for name lookups (default: gateway; "0" =
+                           no resolver cache, resolution still goes through the
+                           gateway)
     hosts_interval=5       default 5 s between mtime checks
     neighbor_ttl=3600      default 3600 s for static ARP entries
     rhtp_port=8080         default 8080, the server port a bare RHTP path means
@@ -125,7 +132,7 @@ S.MAX_TIMEOUT = 10
 local KNOWN_KEYS = {
     ip = true, prefix = true, gateway = true, 
     iface_name = true, channel = true, mtu = true, linktype = true,
-    role = true, hosts_file = true, probe_port = true,
+    role = true, hosts_file = true, probe_port = true, dns = true,
     hosts_interval = true, neighbor_ttl = true,
     rhtp_port = true, rhtp_chunk = true, rhtp_timeout = true,
 }
@@ -264,6 +271,19 @@ function S.parse_config(text)
         local gw = S.parse_ip(raw.gateway)
         if not gw then return nil, "bad gateway '" .. raw.gateway .. "'" end
         cfg.gateway, cfg.gateway_int = S.int2ip(gw), gw
+    end
+
+    -- DECISIONS.md 45.6: the resolver for name lookups. `dns=<ipv4>` is the
+    -- server, `0` means "no resolver cache" (the gateway is still the server),
+    -- and an omitted key falls back to the gateway inside net/dns.lua.
+    if raw.dns ~= nil and raw.dns ~= "" then
+        if raw.dns == "0" then
+            cfg.dns = "0"
+        else
+            local dns = S.parse_ip(raw.dns)
+            if not dns then return nil, "bad dns '" .. raw.dns .. "'" end
+            cfg.dns, cfg.dns_int = S.int2ip(dns), dns
+        end
     end
 
     cfg.iface_side = S.DEFAULT_IFACE_SIDE
@@ -503,17 +523,28 @@ function S:rhtp_client()
     local cfg = self.cfg or {}
     local client = mod.new({
         node = self.node,
+        rpv = self.rpv,
+        fs = self.fs,
         log = function(line) self:log("%s", tostring(line)) end,
         port = cfg.rhtp_port or S.DEFAULT_RHTP_PORT,
         max_bytes = cfg.rhtp_chunk or S.DEFAULT_RHTP_CHUNK,
         timeout = cfg.rhtp_timeout or S.DEFAULT_RHTP_TIMEOUT,
         clock = self.clock,
+        -- name resolution stage 3 (DECISIONS.md 45.6): the resolver address is
+        -- parsed once, here, and handed to net/dns.lua -- `dns=0` only turns the
+        -- positive-answer cache off, the gateway stays the server
+        dns_server = (cfg.dns ~= nil and cfg.dns ~= "" and cfg.dns ~= "0")
+            and cfg.dns or nil,
+        dns_gateway = cfg.gateway,
+        dns_cache = cfg.dns ~= "0",
+        dns_config_path = self.config_path,
     })
     self.rhtp = client
-    self:log("NET_RHTP port=%d chunk=%d timeout=%.2f",
+    self:log("NET_RHTP port=%d chunk=%d timeout=%.2f dns=%s",
         cfg.rhtp_port or S.DEFAULT_RHTP_PORT,
         cfg.rhtp_chunk or S.DEFAULT_RHTP_CHUNK,
-        cfg.rhtp_timeout or S.DEFAULT_RHTP_TIMEOUT)
+        cfg.rhtp_timeout or S.DEFAULT_RHTP_TIMEOUT,
+        short(cfg.dns or (cfg.gateway and "gateway") or "none", 24))
     return client
 end
 
@@ -536,9 +567,9 @@ function S:rhtp_fetch(url, size, opts)
     return body
 end
 
--- Bounded node pump, for a host that wants to drive the stack while a request is
--- in flight. Nothing in this image calls it yet (the desktop loop owns
--- os.pullEvent); it is the documented seam for an app-side network wait.
+-- Bounded node pump, driven once per desktop tick (kernel/desktop.lua, DECISIONS
+-- 45.6): it makes the stack progress while an app-side RHTP request (or a DNS
+-- query) waits, without any app touching os.pullEvent itself.
 function S:pump(seconds)
     if not self.node or type(self.node.pump) ~= "function" then
         return nil, "no pump"

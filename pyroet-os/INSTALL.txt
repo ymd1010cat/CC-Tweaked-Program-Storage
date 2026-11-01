@@ -200,10 +200,21 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
   ip=10.0.0.5
   prefix=24
   gateway=10.0.0.1
+  dns=10.0.0.1
   iface_side=back
-/etc/hosts.conf ("<hostname> <ipv4>"; there is no DNS client in 1.0.0):
+dns= is the resolver for name lookups (one IPv4). Omit it and the gateway is
+used; dns=0 means "no resolver cache" (the gateway is still the server).
+/etc/hosts.conf ("<hostname> <ipv4>"; static names, checked BEFORE DNS):
   router 10.0.0.1
   server 10.0.0.10
+Name lookups (RHTP): node:lookup() (nil in this image), then /etc/hosts.conf,
+then a real DNS QUERY: /system/net/dns.lua sends one A question (UDP 53) with
+1 s per attempt and 2 attempts, caches positive answers for min(TTL, 60) s and
+never caches a failure. /kernel.log shows DNS_QUERY host=.. server=..,
+DNS_ANSWER host=.. ip=.. ttl=.., DNS_TIMEOUT / DNS_NXDOMAIN / DNS_BAD_PACKET,
+and the RHTP side adds RHTP_RESOLVE host=.. ip=.. source=dns.
+The desktop loop pumps the network once per scheduler tick (0.02 s budget), so
+an RHTP request made by an app really finishes; look for DESKTOP_PUMP ok=1 n=..
 /etc/net.target (Net app probe target, "<ipv4> <port>"):
   10.0.0.10 80
 The net service ships but is not registered by the default boot chain in

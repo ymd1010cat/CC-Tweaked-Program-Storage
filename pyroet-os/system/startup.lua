@@ -86,7 +86,7 @@ frame, loop, reboot, version, services, rpv, rednet, redstone, peripheral, http,
 rhtp, input, terminal, write_limit, permissions, permissions_path, perms_root, ask,
 launcher, net, net_path, net_config, net_hosts, installer, installer_path,
 media_root, packages, sha, desktop, desktop_path, desktop_events, pull_event,
-splash, headless, clock, sleep, perms_interactive.
+pump, pump_budget, splash, headless, clock, sleep, perms_interactive.
 
 `splash = true` forces the boot splash on in a headless run (the splash suite
 needs that); `splash = false` opts out. `headless = true` and `loop = false` are
@@ -841,6 +841,11 @@ function P.start_desktop_loop(ctx, o, log)
         loan_abort_events = o.loan_abort_events,
         loan_abort_seconds = o.loan_abort_seconds,
         clock = o.clock,
+        -- the desktop pumps the network once per step (DECISIONS.md 45.6). With
+        -- no injected pump it discovers the kernel's `net` service pump; `false`
+        -- turns pumping off (tests, and a host with its own event driver).
+        pump = o.pump,
+        pump_budget = o.pump_budget,
         -- the desktop clears the screen around a screen loan (T6)
         term = o.terminal or o.term,
     })

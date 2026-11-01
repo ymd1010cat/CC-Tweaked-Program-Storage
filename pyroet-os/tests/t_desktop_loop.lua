@@ -1511,4 +1511,259 @@ end
             "launch")
         H.eq("map_launched", launched, "b")
     end
+
+    -- -----------------------------------------------------------------
+    H.group("desktop_loop.pump")
+    -- DECISIONS.md 45.6: every scheduler step is also one bounded network pump.
+    -- This loop is the only thing that pulls events, so it is also the only thing
+    -- that can hand a modem frame to the rpv node an app-side RHTP request (or a
+    -- DNS query) is waiting on. The pump is called once per tick, costs a small
+    -- fixed budget, and a raising pump is logged once and then dropped.
+    do
+        local function base(opts)
+            local host = new_host()
+            local rt = fake_runtime(host)
+            rt.add("launcher", { "input" })
+            local o = opts or {}
+            o.rt = rt
+            o.input = host
+            o.keys = KEYS
+            o.name = "launcher"
+            o.power_menu = false
+            -- one dispatch == one tick, so the tick count is the pump count
+            o.ready_paint = false
+            return o, rt
+        end
+
+        -- exactly one pump per tick, one success line, the documented budget
+        local calls, budgets = 0, {}
+        local o1 = base({ max_events = 2, pump = function(seconds)
+            calls = calls + 1
+            budgets[#budgets + 1] = seconds
+            return 2
+        end })
+        local log1, lines1 = H.logger()
+        o1.log = log1
+        o1.pullEvent = scripted({ { "key", 10 }, { "key", 11 } })
+        local d1 = DESKTOP.new(o1)
+        H.eq("pump_reason", d1:run(), "limit")
+        H.eq("pump_ticks", d1.ticked, 2)
+        H.eq("pump_calls_per_tick", calls, 2)
+        H.eq("pump_state", d1:state().pumps, 2)
+        H.eq("pump_state_on", d1:state().pump, true)
+        H.eq("pump_budget", budgets[1], DESKTOP.PUMP_BUDGET)
+        H.eq("pump_budget_constant", DESKTOP.PUMP_BUDGET, 0.02)
+        H.eq("pump_budget_state", d1:state().pump_budget, DESKTOP.PUMP_BUDGET)
+        -- one line, not one per frame
+        H.eq("pump_one_line", H.count(lines1, "DESKTOP_PUMP "), 1)
+        H.has(lines1, "DESKTOP_PUMP ok=1 n=2")
+
+        -- the budget is injectable (a host with its own event driver)
+        local seen = nil
+        local o2 = base({ max_events = 1, pump_budget = 0.5,
+            pump = function(seconds) seen = seconds return 0 end })
+        o2.pullEvent = scripted({ { "key", 10 } })
+        local d2 = DESKTOP.new(o2)
+        d2:run()
+        H.eq("pump_budget_injected", seen, 0.5)
+
+        -- a raising pump: ONE line, then dropped, and the loop keeps going
+        local boom_calls = 0
+        local o3 = base({ max_events = 3, pump = function()
+            boom_calls = boom_calls + 1
+            error("no stack", 0)
+        end })
+        local log3, lines3 = H.logger()
+        o3.log = log3
+        o3.pullEvent = scripted({ { "key", 10 }, { "key", 11 }, { "key", 10 } })
+        local d3 = DESKTOP.new(o3)
+        H.eq("pump_fail_reason", d3:run(), "limit")
+        H.eq("pump_fail_calls", boom_calls, 1)
+        H.eq("pump_fail_count", d3:state().pump_fail, 1)
+        H.eq("pump_fail_pulled", d3.pulled, 3)
+        H.eq("pump_fail_one_line", H.count(lines3, "DESKTOP_PUMP_FAIL"), 1)
+        H.has(lines3, "DESKTOP_PUMP_FAIL err=no stack")
+        H.eq("pump_fail_dropped", d3:state().pump, false)
+        H.lacks("pump_fail_no_success_line", lines3, "DESKTOP_PUMP ok=")
+        H.has(lines3, "DESKTOP_EXIT reason=limit pulled=3")
+
+        -- no pump anywhere: the loop is exactly the pre-pump loop
+        local o4 = base({ max_events = 2 })
+        local log4, lines4 = H.logger()
+        o4.log = log4
+        o4.pullEvent = scripted({ { "key", 10 }, { "key", 11 } })
+        local d4 = DESKTOP.new(o4)
+        H.eq("pump_none_reason", d4:run(), "limit")
+        H.eq("pump_none_state", d4:state().pump, false)
+        H.eq("pump_none_steps", d4:state().pumps, 0)
+        H.eq("pump_none_ticks", d4.ticked, 2)
+        H.lacks("pump_none_no_log", lines4, "DESKTOP_PUMP")
+
+        -- discovery: the kernel's net service pump is used when nothing is injected
+        local service_calls = 0
+        local service = { pump = function(_, seconds)
+            service_calls = service_calls + 1
+            return 1
+        end }
+        local kernel = { get = function(_, name)
+            if name == "net" then return { spec = { service = service } } end
+            return nil
+        end }
+        local o5 = base({ max_events = 2, kernel = kernel })
+        o5.pullEvent = scripted({ { "key", 10 }, { "key", 11 } })
+        local d5 = DESKTOP.new(o5)
+        H.eq("pump_discover_reason", d5:run(), "limit")
+        H.eq("pump_discover_calls", service_calls, 2)
+        H.eq("pump_discover_state", d5:state().pumps, 2)
+
+        -- opts.pump = false disables discovery as well
+        local o6 = base({ max_events = 1, kernel = kernel })
+        o6.pump = false
+        o6.pullEvent = scripted({ { "key", 10 } })
+        local d6 = DESKTOP.new(o6)
+        d6:run()
+        H.eq("pump_disabled_calls", service_calls, 2)
+        H.eq("pump_disabled_state", d6:state().pump, false)
+        H.eq("pump_disabled_steps", d6:state().pumps, 0)
+
+        -- the startup chain passes the switch through
+        H.eq("pump_constant_budget", DESKTOP.PUMP_BUDGET, 0.02)
+        H.ascii_check("pump_logs_ascii", H.joined(lines3) .. H.joined(lines1))
+    end
+
+    -- -----------------------------------------------------------------
+    H.group("desktop_loop.net")
+    -- End to end (DECISIONS.md 45.6): a package that runs ON this desktop asks for
+    -- an RHTP resource. Its reply only ever reaches the rpv node when the desktop
+    -- pumps it -- the client's own wait is what node:pump does to a coroutine
+    -- (give the machine back, resume on a later tick), so nothing completes unless
+    -- the desktop drives the stack. Without the pump the same request is still
+    -- unanswered when the loop ends: that is the bug this feature exists for.
+    do
+        local R = assert(loadfile("/system/net/rhtp.lua"))()
+        local IP_BOX = R.parse_ip("10.0.0.9")
+
+        local function net_node()
+            local node = { ports = {}, sent = {}, pumps = 0, pending = nil }
+            node.udp = { ports = node.ports }
+            node.hosts = { box = IP_BOX }
+            node.bind = function(_, port, cb)
+                local socket = { port = port, handler = cb }
+                function socket:sendto(dst, dport, data)
+                    node.sent[#node.sent + 1] = {
+                        dst = dst, port = dport, data = tostring(data),
+                    }
+                    if dport == 8080 then
+                        node.pending = { socket = self,
+                            data = "RHTP/1.0 200 OK\r\n\r\napp demo 1.0.0 demo" }
+                    end
+                    return true
+                end
+                function socket:close() node.ports[self.port] = nil end
+                node.ports[port] = socket
+                return socket
+            end
+            -- the real pump blocks in os.pullEvent, which suspends the app
+            -- coroutine until the next scheduler step
+            function node.pump(seconds)
+                node.pumps = node.pumps + 1
+                coroutine.yield()
+                return true
+            end
+            -- the desktop's pump: hand the queued frame to the bound socket
+            function node.deliver()
+                local item = node.pending
+                node.pending = nil
+                if item and item.socket.handler then
+                    item.socket.handler(item.data, IP_BOX, 8080, item.socket)
+                end
+                return 1
+            end
+            return node
+        end
+
+        local function run_net(with_pump, max_events)
+            H.rmrf("/apps")
+            local dir = H.case_dir("loop", "net_" .. tostring(with_pump))
+            H.app_package(dir .. "/apps/aaprobe.app", {
+                manifest = 'return { name = "aaprobe", version = "0.1.0",'
+                    .. ' capabilities = { "net.rhtp", "input" } }',
+                main = [[
+return function(manifest, api)
+    local body, err = api.net.rhtp_get("rhtp://box/index.txt")
+    rawset(_G, "PYROET_NET_TEST", tostring(body) .. "/" .. tostring(err))
+    return "quit"
+end
+]],
+            })
+            local node = net_node()
+            local log, lines = H.logger()
+            local host = new_host()
+            local client = R.new({ node = node, log = function() end })
+            local rt = APPS.new({
+                fs = F,
+                apps_root = dir .. "/apps",
+                log = log,
+                input = host,
+                rhtp = {
+                    get = function(url, opts)
+                        local code, body = client:get(url, opts)
+                        if code == nil then return nil, body end
+                        return body
+                    end,
+                    fetch = function() return nil, "unused" end,
+                },
+            })
+            rt:scan()
+            rawset(_G, "PYROET_NET_TEST", nil)
+            rt:start("aaprobe")
+            local pulls = 0
+            local d = DESKTOP.new({
+                rt = rt, input = host, keys = KEYS, name = "aaprobe",
+                pullEvent = function()
+                    pulls = pulls + 1
+                    return "key", 10
+                end,
+                log = log, max_events = max_events, ready_paint = false,
+                power_menu = false,
+                pump = with_pump and function(seconds) return node:deliver() end or false,
+                pump_budget = 0.05,
+            })
+            local reason = d:run()
+            return {
+                reason = reason, node = node, lines = lines, rt = rt,
+                result = rawget(_G, "PYROET_NET_TEST"), pulls = pulls,
+                desktop = d,
+            }
+        end
+
+        -- 1) with the desktop pump the reply arrives and the app gets the body
+        -- (tick 1 starts the body and sends, tick 2 pumps the frame in)
+        local ok = run_net(true, 6)
+        H.eq("net_reason", ok.reason, "quit")
+        H.eq("net_result", ok.result, "app demo 1.0.0 demo/nil")
+        H.eq("net_pulls", ok.pulls, 2)
+        H.eq("net_request_sent", #ok.node.sent, 1)
+        H.eq("net_request_dst", ok.node.sent[1].dst, IP_BOX)
+        H.eq("net_request_port", ok.node.sent[1].port, 8080)
+        H.eq("net_request_path", ok.node.sent[1].data, "GET /index.txt")
+        H.eq("net_delivered", ok.node.pending, nil)
+        H.eq("net_client_pumps", ok.node.pumps, 1)
+        H.eq("net_desktop_pumps", ok.desktop.pump_ok, 2)
+        H.has(ok.lines, "DESKTOP_PUMP ok=1 n=1")
+        H.has(ok.lines, "DESKTOP_DETACH app=aaprobe reason=quit")
+        H.has(ok.lines, "APP_START name=aaprobe")
+        H.ascii_check("net_logs_ascii", H.joined(ok.lines))
+
+        -- 2) without it the same request is never answered: the app still waits
+        local stuck = run_net(false, 4)
+        H.eq("net_nopump_reason", stuck.reason, "limit")
+        H.eq("net_nopump_result", stuck.result, nil)
+        H.eq("net_nopump_sent", #stuck.node.sent, 1)
+        H.eq("net_nopump_pending", stuck.node.pending ~= nil, true)
+        H.eq("net_nopump_desktop_pumps", stuck.desktop.pump_ok, 0)
+        H.lacks("net_nopump_no_pump_log", stuck.lines, "DESKTOP_PUMP")
+        H.eq("net_nopump_app_running", stuck.rt:app("aaprobe").state, "running")
+        H.rmrf("/apps")
+    end
 end

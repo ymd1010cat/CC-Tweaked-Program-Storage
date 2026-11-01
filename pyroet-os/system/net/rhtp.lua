@@ -16,11 +16,18 @@ Client API:
                                { progress = function(done, total) end })
 
 * R.new{node=, log=, timeout=, port=, max_bytes=, host=, pump=, clock=,
-  client_port=, debug=}. `node` is an rpv node (node.bind / node.lookup).
+  client_port=, debug=, rpv=, dns=, fs=, dns_server=, dns_gateway=,
+  dns_cache=, dns_config_path=, dns_module=}. `node` is an rpv node
+  (node.bind / node.lookup).
   `timeout` defaults to 3 s, `port` (the server port used for a bare "/path"
   target) to 8080, `max_bytes` to 4096 (the fetch chunk size), `debug=false`
   suppresses RHTP_RESOLVE only. `pump(seconds)` is the host's node pump; it
   defaults to `node:pump` when the node has one. `clock` defaults to os.clock.
+  `dns` is a resolver object (an `R`-free table with query/resolve) or a
+  module with `new`; `dns=false` turns the DNS stage off. Without one the
+  module loads `/system/net/dns.lua` lazily, and the `dns_*` keys are handed
+  to `dns.new` (the net service passes its already parsed `/etc/network.conf`
+  values, so there is exactly one config parser per process).
 * R.parse_url(url) -> {scheme="rhtp", host=, port=, path=} | nil, reason.
   `rhtp://<host>[:<port>]/<path>`; a bare `<host>[:<port>]/<path>` is read as
   rhtp://. Any other explicit scheme is refused ("bad scheme") -- there is no
@@ -37,10 +44,14 @@ Client API:
   opts.progress(done, total) is called after every chunk.
 * c:resolve(host) -> ip (integer), dotted text | nil, "dns: unknown host".
 
-Name resolution: a dotted-decimal host is used directly; anything else goes
-through `node:lookup(host)` (rpv's own resolver: node.hosts first, then a DNS
-query). A failed lookup is always nil, "dns: unknown host" plus RHTP_DNS_FAIL;
-RHTP_RESOLVE is the debug-only success line.
+Name resolution, in order: a dotted-decimal host is used directly; else
+`node:lookup(host)` (nil in this image -- rpv/services.lua is not vendored);
+else the static `node.hosts` table `net/hosts.lua` fills from
+`/etc/hosts.conf`; else a real DNS QUERY through `net/dns.lua`, whose resolver
+comes from `/etc/network.conf` (`dns=<ipv4>`, else `gateway`). A name none of
+them can answer is nil, "dns: unknown host" plus RHTP_DNS_FAIL (with the dns
+module's own reason, e.g. `err=dns: nxdomain`); RHTP_RESOLVE is the debug-only
+success line and says which source answered (`source=hosts` / `source=dns`).
 
 Paths: the URL path is never mapped onto the local file system, so there is no
 dot-dot escape to defend against -- and the parser refuses one anyway. A
@@ -64,6 +75,30 @@ No non-ASCII bytes in this file.
 ]]
 
 local R = {}
+
+-- net/dns.lua, loaded once per process on first use (nil = not available)
+local DNS_MODULE
+
+local function load_dns_module(fsx)
+    if DNS_MODULE ~= nil then return DNS_MODULE end
+    local candidates = { "/system/net/dns.lua", "system/net/dns.lua" }
+    for i = 1, #candidates do
+        local path = candidates[i]
+        local exists = false
+        if type(fsx) == "table" and type(fsx.exists) == "function" then
+            local ok, found = pcall(fsx.exists, path)
+            exists = ok and found == true
+        end
+        if exists then
+            local ok, module = pcall(dofile, path)
+            if ok and type(module) == "table" and type(module.new) == "function" then
+                DNS_MODULE = module
+                return module
+            end
+        end
+    end
+    return nil
+end
 
 R.VERSION = "1.0"
 R.PREFIX = "RHTP/1.0"
@@ -232,7 +267,53 @@ function R.new(opts)
         local node = self.node
         self.pump = function(seconds) return node:pump(seconds) end
     end
+    -- name resolution stage 3: the DNS resolver. A caller may hand over a ready
+    -- object, a module, or false (off); otherwise net/dns.lua is loaded lazily.
+    self.dns = o.dns
+    self.dns_disabled = (o.dns == false)
+    self.dns_tried = false
+    self.dns_module = o.dns_module
+    if type(self.dns) == "table" and type(self.dns.query) ~= "function"
+        and type(self.dns.resolve) ~= "function"
+        and type(self.dns.new) == "function" then
+        -- handed a module, not an object: build the object on first use
+        self.dns_module = self.dns
+        self.dns = nil
+    end
+    self.rpv = o.rpv
+    self.fs = o.fs
+    self.dns_server = o.dns_server
+    self.dns_gateway = o.dns_gateway
+    self.dns_cache = o.dns_cache
+    self.dns_config_path = o.dns_config_path
     return self
+end
+
+-- the resolver object for this client, built at most once
+function R:dns_client()
+    if self.dns_disabled then return nil end
+    if self.dns ~= nil then return self.dns end
+    if self.dns_tried then return nil end
+    self.dns_tried = true
+    local mod = self.dns_module
+    if mod == nil then mod = load_dns_module(self.fs) end
+    if type(mod) ~= "table" then return nil end
+    local client = self
+    local ok, obj = pcall(mod.new, {
+        node = self.node,
+        rpv = self.rpv,
+        fs = self.fs,
+        clock = self.clock,
+        pump = self.pump,
+        config_path = self.dns_config_path,
+        server = self.dns_server,
+        gateway = self.dns_gateway,
+        cache = self.dns_cache,
+        log = function(line) client:log("%s", tostring(line)) end,
+    })
+    if not ok or type(obj) ~= "table" then return nil end
+    self.dns = obj
+    return obj
 end
 
 function R:now()
@@ -302,8 +383,37 @@ function R:resolve(host)
             return address, R.int2ip(address)
         end
     end
+    local dns_why = nil
     if address == nil then
-        self:log("RHTP_DNS_FAIL host=%s err=lookup", short(name, 40))
+        -- third source: a real DNS QUERY. rpv/services.lua is not vendored in
+        -- this image, so node:lookup() above answers nil; net/dns.lua sends the
+        -- query itself (resolver from /etc/network.conf: dns=, else gateway)
+        local resolver = self:dns_client()
+        if resolver ~= nil then
+            local query = resolver.query or resolver.resolve
+            if type(query) == "function" then
+                local called, value, why = pcall(query, resolver, name)
+                if called then
+                    if type(value) == "number" then
+                        address = math.floor(value)
+                    elseif type(value) == "string" then
+                        address = R.parse_ip(value)
+                    end
+                end
+                if address then
+                    if self.debug then
+                        self:log("RHTP_RESOLVE host=%s ip=%s source=dns",
+                            short(name, 40), R.int2ip(address))
+                    end
+                    return address, R.int2ip(address)
+                end
+                dns_why = why
+            end
+        end
+    end
+    if address == nil then
+        self:log("RHTP_DNS_FAIL host=%s err=%s", short(name, 40),
+            short(type(dns_why) == "string" and dns_why or "lookup", 32))
         return nil, "dns: unknown host"
     end
     if self.debug then
