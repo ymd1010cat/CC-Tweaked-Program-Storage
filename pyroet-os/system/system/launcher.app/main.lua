@@ -183,6 +183,42 @@ end
 -- the loaded manifest (it validated it), so the version comes from
 -- `api.sys.apps()`; a directory the runtime does not know is still listed, with
 -- version "?" -- the desktop shows what is on the medium, not just what runs.
+-- T15: the version of a package directory, read from its manifest (the runtime
+-- only knows packages it scanned at boot). A read failure is logged once and
+-- shown as `?` -- it is not an error the desktop should die on.
+function M.read_version(api, dir)
+    local fsx = type(api) == "table" and api.fs or nil
+    if type(fsx) ~= "table" or type(fsx.read) ~= "function" then return nil end
+    local called, text = pcall(fsx.read, dir .. "/manifest.lua")
+    if not called or type(text) ~= "string" then
+        if type(api) == "table" and type(api.log) == "function" then
+            pcall(api.log, "LAUNCHER_MANIFEST_MISS path=" .. tostring(dir))
+        end
+        return nil
+    end
+    local version = text:match('version%s*=%s*"([^"]*)"')
+    if version == nil or version == "" then
+        local ok, value = pcall(function()
+            local chunk = (type(rawget(_G, "loadfile")) == "function")
+                and loadfile(dir .. "/manifest.lua") or nil
+            if chunk == nil then return nil end
+            local raw = chunk()
+            if type(raw) == "table" and raw.version ~= nil then
+                return tostring(raw.version)
+            end
+            return nil
+        end)
+        version = ok and value or nil
+    end
+    if version == nil then
+        if type(api) == "table" and type(api.log) == "function" then
+            pcall(api.log, "LAUNCHER_MANIFEST_MISS path=" .. tostring(dir))
+        end
+        return nil
+    end
+    return tostring(version)
+end
+
 function M.scan(api, opts)
     local o = opts or {}
     local roots = o.roots or M.ROOTS
@@ -208,11 +244,17 @@ function M.scan(api, opts)
     local seen = {}
     local function add_entry(app, dir, root)
         local record = index[app]
+        local version = type(record) == "table" and record.version or nil
+        if type(version) ~= "string" or version == "" then
+            -- a package installed at run time has no runtime record yet: read its
+            -- manifest instead of showing "?"
+            version = M.read_version(api, dir)
+        end
         entries[#entries + 1] = {
             name = app,
             dir = dir,
             root = root,
-            version = type(record) == "table" and record.version or "?",
+            version = version or "?",
             state = type(record) == "table" and record.state or "unknown",
             capabilities = type(record) == "table" and record.capabilities or nil,
         }

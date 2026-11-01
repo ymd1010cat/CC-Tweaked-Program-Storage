@@ -338,7 +338,7 @@ end
 -- ---------------------------------------------------------------------------
 
 A.SYS_FUNCTIONS = { "status", "apps", "perms", "launch", "install", "uninstall",
-    "list", "ota_list", "ota_apply" }
+    "list", "ota_list", "ota_apply", "rescan" }
 -- the three installer entries above are served by this runtime (see the
 -- installer bridge section); the four before them come from the host table
 A.SYS_INSTALLER = {
@@ -358,6 +358,13 @@ A.OTA_DISK = "/disk/apps"
 -- T7: a pocket computer has no disk drive. The internal /pkgs directory is the
 -- primary source; the disk paths are only added when /disk is mounted.
 A.OTA_INTERNAL = "/pkgs"
+-- T15: launch and rescan are runtime-served too, so a package installed at run
+-- time is launchable without a reboot: `launch` rescans once when the name is
+-- unknown, and `rescan` is exposed for a caller that wants to ask first.
+A.SYS_RUNTIME = {
+    launch = { cap = nil, method = "sys_launch" },
+    rescan = { cap = "fs.read", method = "sys_rescan" },
+}
 -- same ceiling as kernel/installer.lua's NAME_MAX
 A.APP_NAME_MAX = 40
 
@@ -390,6 +397,7 @@ function A:sys_api(record)
         local name = A.SYS_FUNCTIONS[i]
         local bridge = A.SYS_INSTALLER[name]
         if bridge == nil then bridge = A.SYS_OTA[name] end
+        if bridge == nil then bridge = A.SYS_RUNTIME[name] end
         if bridge then
             -- the installer bridge is the runtime's own function: it has to ask
             -- this record's cap set before anything reaches the installer. It
@@ -627,6 +635,80 @@ function A:sys_ota_apply(record, name)
     local ok, info = self:sys_install(record, name)
     self:log("APP_OTA_APPLY name=" .. short(name) .. " ok=" .. tostring(ok == true))
     return ok, info
+end
+
+-- T15: re-read the app roots. Running instances are kept as they are (their
+-- state, coroutine and capabilities are untouched); a record whose directory has
+-- disappeared is dropped only when it is not running.
+function A:rescan()
+    -- both app roots, always: the image packages and the user packages (a test
+    -- runtime may have its own apps_root, so add it when it is a third path)
+    local roots = { "/system/system", "/apps" }
+    local own = self.apps_root
+    if type(own) == "string" and own ~= "/system/system" and own ~= "/apps" then
+        roots[#roots + 1] = own
+    end
+    local before = {}
+    for i = 1, #self.records do before[self.records[i].name] = true end
+    for i = 1, #roots do
+        local root = roots[i]
+        local called, exists = pcall(self.fs.exists, root)
+        if called and exists then self:scan(root) end
+    end
+    local added, removed = 0, 0
+    for i = 1, #self.records do
+        local record = self.records[i]
+        if not before[record.name] then added = added + 1 end
+    end
+    local keep = {}
+    for i = 1, #self.records do
+        local record = self.records[i]
+        local dir = record.dir
+        local present = false
+        if type(dir) == "string" then
+            local called, exists = pcall(self.fs.exists, dir)
+            present = (called and exists) == true
+        else
+            for r = 1, #roots do
+                local called, exists = pcall(self.fs.exists,
+                    roots[r] .. "/" .. tostring(record.name) .. ".app")
+                if called and exists then present = true break end
+            end
+        end
+        if present or record.state == "running" then
+            keep[#keep + 1] = record
+        else
+            removed = removed + 1
+            self.index[record.name] = nil
+            self:log("APP_RESCAN_DROP name=" .. tostring(record.name))
+        end
+    end
+    self.records = keep
+    self:log("APP_RESCAN count=" .. tostring(#self.records)
+        .. " added=" .. tostring(added) .. " removed=" .. tostring(removed))
+    return true, { count = #self.records, added = added, removed = removed }
+end
+
+function A:sys_rescan(record)
+    if not record.caps["fs.read"] then return self:denied(record, "fs.read") end
+    return self:rescan()
+end
+
+-- launch: a name the table does not know yet triggers one rescan (a package may
+-- have been installed a moment ago), then the normal start path runs
+function A:sys_launch(record, name)
+    if type(name) ~= "string" or name == "" then return nil, "bad name" end
+    if self.index[name] == nil then
+        self:log("APP_LAUNCH_RESCAN name=" .. short(name) .. " reason=unknown")
+        self:rescan()
+    end
+    if self.index[name] == nil then
+        self:log("APP_LAUNCH_MISS name=" .. short(name))
+        return nil, "no such app"
+    end
+    local ok, err = self:start(name)
+    if not ok then return nil, tostring(err) end
+    return true, { name = name }
 end
 
 function A:sys_list(record)

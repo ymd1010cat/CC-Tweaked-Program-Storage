@@ -345,6 +345,86 @@ return function(H)
     end
 
     -- -----------------------------------------------------------------
+    H.group("ota.rescan")
+    -- T15: a package installed at run time is launchable without a reboot --
+    -- launch rescans once when the name is unknown, and rescan repairs the table.
+    do
+        H.rmrf("/apps")
+        H.rmrf("/pkgs")
+        local inst = installer_for()
+        local rt, log, lines = runtime({ installer = inst, apps_root = "/system/system" })
+        local record = { name = "launcher", caps = { ["fs.read"] = true,
+            ["fs.write"] = true } }
+        H.eq("rescan_scan", rt:scan(), 2)
+        -- a package appears while the machine is running
+        H.app_package("/apps/late.app", {
+            manifest = 'return { name = "late", version = "1.4.2", entry = "main.lua",'
+                .. ' capabilities = { "fs.read" } }',
+            main = 'return function(manifest, api) return nil end\n',
+        })
+        H.eq("rescan_unknown", rt.index.late, nil)
+        -- the launcher shows the real version even without a runtime record (T15)
+        _G.PYROET_LAUNCHER_TEST = true
+        local LAUNCHER = assert(loadfile("/system/system/launcher.app/main.lua"))()
+        _G.PYROET_LAUNCHER_TEST = nil
+        H.eq("rescan_manifest_version",
+            LAUNCHER.read_version({ fs = { read = function(path)
+                return H.read(path)
+            end } }, "/apps/late.app"), "1.4.2")
+        local lstate = LAUNCHER.build({
+            fs = {
+                read = function(path)
+                    return H.read(path)
+                end,
+                list = function(path)
+                    if not F.exists(path) then return nil, "no root" end
+                    return F.list(path)
+                end,
+                exists = function(path) return F.exists(path) end,
+            },
+        }, { roots = { "/apps" } })
+        H.eq("rescan_launcher_version", lstate.entries[1] and lstate.entries[1].version,
+            "1.4.2")
+        -- launch rescans automatically and starts it
+        local ok, info = rt:sys_launch(record, "late")
+        H.eq("rescan_launch_ok", ok, true)
+        H.table("rescan_info", info)
+        H.has(lines, "APP_LAUNCH_RESCAN name=late reason=unknown")
+        H.has(lines, "APP_RESCAN")
+        H.has(lines, "APP_START name=late")
+        H.eq("rescan_running", rt:app("late").state, "running")
+        H.eq("rescan_version", rt:app("late").manifest.version, "1.4.2")
+
+        -- the explicit API works too, and reports the count
+        local rok, rinfo = rt:sys_rescan(record)
+        H.eq("rescan_ok", rok, true)
+        H.table("rescan_report", rinfo)
+        H.ge("rescan_count", rinfo and rinfo.count or 0, 3)
+
+        -- removing the directory drops the record on the next rescan, but a
+        -- running instance is kept (its coroutine is alive)
+        H.rmrf("/apps/late.app")
+        local rok2, rinfo2 = rt:sys_rescan(record)
+        H.eq("rescan_ok2", rok2, true)
+        H.eq("rescan_removed_running", rinfo2 and rinfo2.removed, 0)
+        H.check("rescan_running_kept", rt:app("late") ~= nil, "running record dropped")
+        rt:kill("late")
+        local rok3, rinfo3 = rt:sys_rescan(record)
+        H.eq("rescan_ok3", rok3, true)
+        H.eq("rescan_removed_after_kill", rinfo3 and rinfo3.removed, 1)
+        H.eq("rescan_gone", rt:app("late"), nil)
+        H.has(lines, "APP_RESCAN count=")
+
+        -- an unknown name still fails, with the documented error
+        local mok, merr = rt:sys_launch(record, "ghost")
+        H.eq("rescan_miss_ok", mok, nil)
+        H.eq("rescan_miss_err", merr, "no such app")
+        H.has(lines, "APP_LAUNCH_MISS name=ghost")
+        H.rmrf("/apps")
+        H.rmrf("/pkgs")
+    end
+
+    -- -----------------------------------------------------------------
     H.group("ota.launcher")
     do
         -- the launcher only renders the kernel's answer; `api.sys` is faked here

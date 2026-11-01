@@ -1224,6 +1224,25 @@ APP_LOG app=installer msg=key=enter action=install index=1 detail=files
 
 35.5 **数字**：离线 **4,909 pass / 0 fail / 249 groups**；sizecheck 见上（27 条，远低于 629,145）。
 
+36. 安装后无需重启：rescan 与 launch 自动重扫（T15）
+
+36.1 **真机现象**：把可选包装进 `/apps` 后，launcher 列表有行但版本显示 `?`，回车启动失败。
+
+36.2 **根因（已按日志验证）**：kernel 的 app 表是**开机扫描**建立的；`/apps/<name>.app` 是运行期才出现的，runtime 里没有它的 record ——
+- `api.sys.launch(name)`（宿主版）直接查 `self.index`，找不到 → `no such app`（日志 `APP_START_DENIED … reason=no_such_app` 一类的语义）；
+- launcher 的版本来自 runtime record（`record.version`），没有 record 就只能是 `?`。
+
+36.3 **新 API（kernel）**：
+- `A:rescan()` → 重新扫描 `/system/system` 与 `/apps`（以及运行时的 `apps_root`，若不同）。**运行中的实例原样保留**（state/coroutine/权限都不动）；目录已消失的 record 只有在**非运行**时才丢弃（运行中的先留着，等它自己停）。日志 `APP_RESCAN count=.. added=.. removed=..`，丢弃时另有 `APP_RESCAN_DROP name=..`。返回 `true, {count=.., added=.., removed=..}`。
+- `api.sys.rescan()`（cap `fs.read`）→ 走 `A:rescan`，供调用方先问再动。
+- `api.sys.launch(name)` 现在由运行时提供：`name` 不在表里时**先自动 rescan 一次**再试（日志 `APP_LAUNCH_RESCAN name=.. reason=unknown`），仍找不到才 `nil, "no such app"`（日志 `APP_LAUNCH_MISS name=..`）。成功返回 `true, {name=..}`。
+
+36.4 **版本号**：`launcher` 新增 `M.read_version(api, dir)` —— 运行时没有 record 时直接读该包 `manifest.lua`（先用 `version = "..."` 文本匹配，失败再用 `loadfile` 解析），读失败才显示 `?` 并记 `LAUNCHER_MANIFEST_MISS path=..`。所以 `/apps` 与 `/system/system` 的包都显示真实版本。
+
+36.5 **测试**：`t_sys_ota` 新增 `ota.rescan`：runtime 启动后才出现的 `/apps/late.app` → `sys_launch` 自动 rescan 并 `APP_START name=late`（版本 1.4.2）；显式 `sys_rescan` 报告 count；删目录后运行中的 record **保留**（removed=0），`kill` 后再 rescan 才 removed=1 且 `rt:app("late") == nil`；未知名字仍 `nil, "no such app"`；launcher 侧 `read_version` 与 `build({roots={"/apps"}})` 的版本都是 `1.4.2`。`t_installer_bridge.surface` 的 sys 函数清单同步（10 项）。
+
+36.6 **数字**：离线 **4,933 pass / 0 fail / 250 groups**；sizecheck 见上（27 条，远低于 629,145）。
+
 ## 修订记录
 
 - 2026-10-28: slot policy = single-active + trial boot + delete old after boot.ok (supersedes earlier A/B wording); streaming write to inactive slot; budget restated at 1024-byte components
@@ -1263,3 +1282,4 @@ APP_LOG app=installer msg=key=enter action=install index=1 detail=files
 - 2026-11-01: **新增可选文件管理器 + web 移出镜像**（口径见 §33）。新 `examples/files.app`（只读文件管理器，caps `fs.read`+`input`+`terminal`，键位 up/down/enter/b·backspace/r/h/q，目录前缀 `/`、文件显示大小、>64 KB 截断、拒绝/空目录有状态行，日志 FILES_OPEN/FILES_VIEW/FILES_DENIED）；`git mv system/system/web.app examples/web.app`，`install.set` 29→27，镜像只剩 launcher+settings（+kernel/服务层/rpv/recovery）；`run-tests.ps1` 把 web/files 作为 examples fixture stage 到 `/tests`；`/system/system` 计数 3→2 全套件同步；新增 `tests/t_files.lua`（5 组 54 断言）。离线 **4,896 pass / 0 fail / 248 groups**。未 commit。
 - 2026-11-01: **修可选包装不上**（口径见 §34）。根因二：`installer.app` 的 `install_selected` 只接受 `source=="disk"`（`internal` 行被当成 `already installed` 直接返回 none）；`kernel/installer.lua` 的 `I.INTERNAL`/`I.DISK` 只被引用未声明，`source_for` 恒 nil → `no_source`。修：`install_selected` 接受 `disk|internal`；补上两个源根常量。新增 `t_sys_ota.ota.e2e_install` 端到端回归（真 kernel/installer + 临时 `/pkgs/xpkg.app` + installer 应用 Enter + runtime 桥 → `/apps/xpkg.app`、`APP_INSTALL name=xpkg ok=true`、`INSTALL_OK name=xpkg`）。真机副本复验：`INSTALL_OK name=files` + `APP_INSTALL name=files ok=true` + `action=install` + `/apps/files.app` 出现。离线 **4,911 pass / 0 fail / 249 groups**。未 commit。
 - 2026-11-01: **launcher 不再把自己列为可启动项**（口径见 §35）。`launcher.app` 新增 `M.SELF="launcher"`，`M.scan` 按**包名**跳过自身（`/system/system` 与 `/apps` 两份都跳），记 `LAUNCHER_SKIP_SELF name=launcher path=..`，列表少一行、计数随之变化；kernel 的 `APP_START_DENIED reason=already_running` 保留兜底但桌面不再触发。测试同步 `t_launcher`/`t_desktop`/`t_desktop_loop`（screen 组自启动用例改为"列表无自身 + SKIP 日志"）/`t_budget`。真机副本开机日志：`LAUNCHER_SKIP_SELF name=launcher path=/system/system/launcher.app`。离线 **4,909 pass / 0 fail / 249 groups**。未 commit。
+- 2026-11-01: **安装后无需重启（rescan + launch 自动重扫）**（口径见 §36）。`kernel/apps.lua` 新增 `A:rescan()`（同时扫 `/system/system` 与 `/apps`，运行中实例保留，缺失目录的 record 仅非运行时丢弃，日志 `APP_RESCAN count= added= removed=`）与运行时提供的 `api.sys.rescan()`（cap `fs.read`）、`api.sys.launch(name)`（未知名字先自动 rescan，仍无 → `nil, "no such app"`，日志 `APP_LAUNCH_RESCAN`/`APP_LAUNCH_MISS`）。launcher 新增 `M.read_version`：无 runtime record 时直接读包 manifest 的版本（失败才 `?` 并记 `LAUNCHER_MANIFEST_MISS`）。新增 `t_sys_ota.ota.rescan`（自动重扫启动、显式 rescan、运行中保留/停止后清除、未知名字、launcher 版本 1.4.2）。离线 **4,933 pass / 0 fail / 250 groups**。未 commit。
