@@ -170,6 +170,7 @@ function D.new(opts)
     if self.loan_seconds == nil then self.loan_seconds = D.LOAN_SECONDS end
     self.start_timer = o.startTimer
     self.ready_paint = o.ready_paint
+    self.power_menu = (o.power_menu ~= false)
     self.clock = o.clock
     self.loan_abort_events = o.loan_abort_events
     self.loan_abort_seconds = o.loan_abort_seconds
@@ -564,10 +565,23 @@ function D:dispatch(event, p1, p2, p3)
             self:tick()
             return self:settle(before)
         end
+        -- Ctrl+T on the desktop opens the power menu (round 8): leaving the
+        -- machine is a menu action, never a keystroke, so "terminate" is never
+        -- returned to the boot chain on a normal run. `power_menu = false` is a
+        -- test-only switch for the unit suites that assert the legacy path.
+        if self.power_menu == false then
+            self:log("DESKTOP_TERMINATE scope=desktop event=" .. short(name, 16))
+            self:log("DESKTOP_EVENT n=" .. tostring(self.pulled) .. " event="
+                .. short(name, 16) .. " app=-")
+            return true, "terminate"
+        end
         self:log("DESKTOP_TERMINATE scope=desktop event=" .. short(name, 16))
+        self:log("DESKTOP_POWER_MENU scope=desktop event=" .. short(name, 16))
         self:log("DESKTOP_EVENT n=" .. tostring(self.pulled) .. " event="
-            .. short(name, 16) .. " app=-")
-        return true, "terminate"
+            .. short(name, 16) .. " app=" .. short(self.name, 24))
+        self:deliver("power_menu", tostring(name))
+        self:tick()
+        return false
     end
 
     -- the loan timer: a loaned app has no keyboard, so this is how the screen

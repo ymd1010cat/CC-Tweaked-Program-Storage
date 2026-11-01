@@ -53,7 +53,19 @@ M.HINT = "up/dn enter run"
 -- leaving Pyroet OS is Ctrl+T (the ROM `terminate` event), never a letter:
 -- q used to drop the whole machine to the CraftOS shell, which is not what
 -- "back" means on this desktop.
-M.LEAVE_HINT = "Ctrl+T leaves Pyroet OS"
+M.LEAVE_HINT = "Ctrl+T opens power menu"
+-- The power menu (round 8). Ctrl+T used to drop the machine to the CraftOS
+-- shell, which the user does not want; the desktop now intercepts `terminate`
+-- and shows this instead. It is drawn by the launcher itself: no new app, no
+-- extra capability, exactly three entries.
+M.POWER_ITEMS = {
+    { id = "shutdown", label = "Shutdown" },
+    { id = "reboot", label = "Reboot" },
+    { id = "cancel", label = "Cancel" },
+}
+M.POWER_TITLE = "Power"
+-- tests replace these instead of really shutting the machine down
+M.POWER_HOOKS = {}
 M.SCAN_INTERVAL = 10
 
 -- printable ASCII only, truncated or padded to exactly `cols` columns
@@ -345,6 +357,105 @@ function M.window(state, area)
     return first
 end
 
+-- the ROM function a power entry needs, or nil: never assume it exists
+function M.power_fn(id)
+    local hook = M.POWER_HOOKS[id]
+    if type(hook) == "function" then return hook end
+    local osx = rawget(_G, "os")
+    local fn = type(osx) == "table" and osx[id] or nil
+    if type(fn) == "function" then return fn end
+    return nil
+end
+
+function M.power_available(id)
+    if id == "cancel" then return true end
+    return M.power_fn(id) ~= nil
+end
+
+-- the reason line under an entry that cannot run on this ROM
+function M.power_reason(id)
+    if M.power_available(id) then return "" end
+    return "os." .. tostring(id) .. " unavailable"
+end
+
+function M.power_open(state, api, source)
+    state.power = true
+    state.power_index = 1
+    state.message = ""
+    M.note(api, "power menu open source=" .. tostring(source or "key"))
+    return "repaint"
+end
+
+function M.power_close(state, api)
+    state.power = nil
+    state.message = ""
+    M.note(api, "power menu cancel")
+    return "repaint"
+end
+
+function M.power_move(state, delta)
+    local count = #M.POWER_ITEMS
+    local index = (state.power_index or 1) + delta
+    if index < 1 then index = 1 end
+    if index > count then index = count end
+    state.power_index = index
+    return "move"
+end
+
+-- Run one entry. The log line is written BEFORE the action, and the action is
+-- wrapped: a ROM without os.shutdown/os.reboot shows "unavailable" instead of
+-- crashing, and a failing call is logged, not raised.
+function M.power_run(state, api, index)
+    local item = M.POWER_ITEMS[index or state.power_index or 1]
+    if item == nil then return "none" end
+    if item.id == "cancel" then return M.power_close(state, api) end
+    local fn = M.power_fn(item.id)
+    if fn == nil then
+        M.note(api, "POWER " .. item.id .. " unavailable")
+        state.message = M.power_reason(item.id)
+        return "denied"
+    end
+    M.note(api, "POWER " .. item.id .. " requested")
+    local ok, err = pcall(fn)
+    if not ok then
+        M.note(api, "POWER " .. item.id .. " failed err=" .. tostring(err))
+        state.message = "power failed"
+        return "error"
+    end
+    return "power"
+end
+
+-- render the menu inside the same 26x19 frame (title, three entries, marker,
+-- the reason line for an unavailable entry, and the hint row)
+function M.power_lines(state, cols, rows)
+    local out = {}
+    local function add(text)
+        if #out >= rows then return false end
+        out[#out + 1] = M.fit(text, cols)
+        return true
+    end
+    add(M.POWER_TITLE .. " " .. M.VERSION)
+    add("")
+    local index = state.power_index or 1
+    for i = 1, #M.POWER_ITEMS do
+        local item = M.POWER_ITEMS[i]
+        local marker = (i == index) and ">" or " "
+        local label = item.label
+        if not M.power_available(item.id) then label = label .. " unavailable" end
+        add(marker .. " " .. label)
+    end
+    add("")
+    local current = M.POWER_ITEMS[index]
+    if current ~= nil then
+        local reason = M.power_reason(current.id)
+        if reason ~= "" then add(reason) end
+    end
+    if state.message and state.message ~= "" then add(state.message) end
+    while #out < rows - 1 do add("") end
+    add(M.fit("enter runs q=cancel", cols))
+    return out
+end
+
 function M.hint_line(state)
     if state.message and state.message ~= "" then return state.message end
     if #(state.entries or {}) == 0 then return "no apps installed" end
@@ -374,6 +485,7 @@ function M.render(state, cols, rows)
     if cols < M.MIN_COLS or rows < M.MIN_ROWS then
         return { M.compact_line(state, cols, rows) }
     end
+    if state.power then return M.power_lines(state, cols, rows) end
     local out = {}
     local function add(text)
         if #out >= rows then return false end
@@ -664,6 +776,37 @@ end
 -- Returns "quit" when the desktop has to end, otherwise the handle_key action
 -- ("move" | "select" | "launch" | "error" | "denied" | "repaint" | "none").
 function M.dispatch_event(state, event, p1, p2, api)
+    -- the power menu owns the keyboard while it is open: up/down move, enter
+    -- runs, q/Esc cancels (nothing else may act on the desktop meanwhile)
+    if state.power then
+        if event == "key" then
+            local key = p1
+            if type(key) == "number" then
+                key = M.code_name(key, api)
+                if key == nil then
+                    if p1 == M.ESCAPE_CODE then key = "escape" else return "none" end
+                end
+            end
+            key = tostring(key == nil and "" or key):lower()
+            if key == "up" then return M.power_move(state, -1) end
+            if key == "down" then return M.power_move(state, 1) end
+            if key == "enter" then return M.power_run(state, api) end
+            if key == "escape" or key == "q" then return M.power_close(state, api) end
+            return "none"
+        end
+        if event == "char" then
+            local ch = tostring(p1 == nil and "" or p1):lower()
+            if ch == "q" then return M.power_close(state, api) end
+            return "none"
+        end
+        if event == "power_menu" then return "repaint" end
+        return "none"
+    end
+    -- Ctrl+T: the desktop intercepts it and shows the power menu. This never
+    -- returns "quit", so there is no path back to the CraftOS shell.
+    if event == "power_menu" or event == "terminate" or event == "shutdown" then
+        return M.power_open(state, api, event)
+    end
     if event == "key" then
         if M.quit_key(p1, api) then
             -- back is not "leave the machine": say how to leave and stay here

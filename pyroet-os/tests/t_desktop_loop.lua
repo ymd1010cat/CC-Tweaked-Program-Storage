@@ -154,7 +154,7 @@ return function(H)
         rt.add("launcher", { "input" })
         local pull, pull_stats = scripted({ { "key", 10 }, { "key", 11 } })
         local log, lines = H.logger()
-        local d = DESKTOP.new({ ready_paint = false,
+        local d = DESKTOP.new({ ready_paint = false, power_menu = false,
             rt = rt, input = host, pullEvent = pull, keys = KEYS,
             name = "launcher", log = log, max_events = 2,
         })
@@ -181,7 +181,7 @@ return function(H)
         local rt2 = fake_runtime(host2)
         rt2.add("launcher", { "input" })
         local log2, lines2 = H.logger()
-        local d2 = DESKTOP.new({ ready_paint = false,
+        local d2 = DESKTOP.new({ ready_paint = false, power_menu = false,
             rt = rt2, input = host2, keys = KEYS, name = "launcher", log = log2,
             pullEvent = scripted({ { "key", 10 }, { "terminate" } }),
         })
@@ -196,7 +196,7 @@ return function(H)
         local host9 = new_host()
         local rt9 = fake_runtime(host9)
         rt9.add("launcher", { "input" })
-        local d9 = DESKTOP.new({ ready_paint = false,
+        local d9 = DESKTOP.new({ ready_paint = false, power_menu = false,
             rt = rt9, input = host9, keys = KEYS, name = "launcher",
             pullEvent = scripted({ { "key", DESKTOP.ESCAPE_CODE } }), max_events = 1,
         })
@@ -209,7 +209,7 @@ return function(H)
         local rt3 = fake_runtime(host3)
         rt3.add("launcher", { "input" })
         local log3, lines3 = H.logger()
-        local d3 = DESKTOP.new({ ready_paint = false,
+        local d3 = DESKTOP.new({ ready_paint = false, power_menu = false,
             rt = rt3, input = host3, keys = KEYS, name = "launcher", log = log3,
             pullEvent = scripted({ { "key", 11 }, { "key", 11 } }),
         })
@@ -227,7 +227,7 @@ return function(H)
         local rt4 = fake_runtime(host4)
         rt4.add("launcher", { "input" })
         local log4, lines4 = H.logger()
-        local d4 = DESKTOP.new({ ready_paint = false,
+        local d4 = DESKTOP.new({ ready_paint = false, power_menu = false,
             rt = rt4, input = host4, keys = KEYS, name = "launcher", log = log4,
             pullEvent = scripted({ { "key", 11 } }),
         })
@@ -243,7 +243,7 @@ return function(H)
         local rt5 = fake_runtime(host5)
         rt5.add("launcher", { "input" })
         local log5, lines5 = H.logger()
-        local d5 = DESKTOP.new({ ready_paint = false,
+        local d5 = DESKTOP.new({ ready_paint = false, power_menu = false,
             rt = rt5, input = host5, keys = KEYS, name = "launcher", log = log5,
             pullEvent = scripted({ { "key", 10 }, { "key", 10 } }),
             max_events = 2,
@@ -262,17 +262,17 @@ return function(H)
 
         -- nothing to drive it: skip, never crash, and never pull
         local silent, silent_stats = scripted({ { "key", 10 } })
-        local d6 = DESKTOP.new({ ready_paint = false, rt = fake_runtime(new_host()), input = new_host(),
+        local d6 = DESKTOP.new({ ready_paint = false, power_menu = false, rt = fake_runtime(new_host()), input = new_host(),
             name = "launcher" })
         H.eq("no_pull_reason", d6:run(), "no_pull_source")
         H.eq("no_pull_pulled", d6.pulled, 0)
         local log7, lines7 = H.logger()
-        local d7 = DESKTOP.new({ ready_paint = false, rt = fake_runtime(nil), pullEvent = silent,
+        local d7 = DESKTOP.new({ ready_paint = false, power_menu = false, rt = fake_runtime(nil), pullEvent = silent,
             name = "launcher", log = log7 })
         H.eq("no_queue_reason", d7:run(), "no_input_queue")
         H.has(lines7, "DESKTOP_SKIP reason=no_input_queue")
         local log8, lines8 = H.logger()
-        local d8 = DESKTOP.new({ ready_paint = false, input = new_host(), pullEvent = silent,
+        local d8 = DESKTOP.new({ ready_paint = false, power_menu = false, input = new_host(), pullEvent = silent,
             name = "launcher", log = log8 })
         H.eq("no_runtime_reason", d8:run(), "no_runtime")
         H.has(lines8, "DESKTOP_SKIP reason=no_runtime")
@@ -355,6 +355,7 @@ return function(H)
             start_timer = function() return 7 end,
             desktop_events = 8,
             reboot = function() error("rebooted unexpectedly") end,
+            power_menu = false,
             frame = function() return true end,
         })
 
@@ -460,6 +461,7 @@ return function(H)
             pull_event = pull,
             start_timer = function() return 7 end,
             reboot = function() error("rebooted unexpectedly") end,
+            power_menu = false,
             frame = function() return true end,
         })
 
@@ -514,7 +516,8 @@ return function(H)
                 pull_event = function() pulls = pulls + 1 return "terminate" end,
                 ask = ask,
                 reboot = function() error("rebooted unexpectedly") end,
-                frame = function() return true end,
+                power_menu = false,
+            frame = function() return true end,
             })
             return result, lines, pulls
         end
@@ -608,7 +611,8 @@ end
                         terminal = buf,
                         start_timer = function() return 7 end,
                         reboot = function() error("rebooted unexpectedly") end,
-                        frame = function() return true end,
+                        power_menu = false,
+            frame = function() return true end,
                     })
                 end)
                 result = value
@@ -785,7 +789,8 @@ end
                         loan_events = opts.loan_events or 1000,
                         loan_abort_events = opts.loan_abort_events,
                         reboot = function() error("rebooted unexpectedly") end,
-                        frame = function() return true end,
+                        power_menu = false,
+            frame = function() return true end,
                     })
                 end)
                 result = value
@@ -907,7 +912,8 @@ end
                         terminal = buf,
                         start_timer = function() return 7 end,
                         reboot = function() error("rebooted unexpectedly") end,
-                        frame = function() return true end,
+                        power_menu = false,
+            frame = function() return true end,
                     })
                 end)
                 result = value
@@ -968,6 +974,140 @@ end
     end
 
     -- -----------------------------------------------------------------
+    H.group("desktop_loop.power")
+    -- Round 8: Ctrl+T no longer leaves the machine. The desktop intercepts
+    -- `terminate`/`shutdown` and opens a power menu drawn by the launcher
+    -- (Shutdown / Reboot / Cancel). os.shutdown and os.reboot are STUBBED here:
+    -- the suite must never really shut the machine down.
+    do
+        local saved_shutdown = rawget(_G, "os").shutdown
+        local saved_reboot = rawget(_G, "os").reboot
+        local calls = { shutdown = 0, reboot = 0 }
+
+        local function stub_power(with_shutdown)
+            rawget(_G, "os").shutdown = with_shutdown and function()
+                calls.shutdown = calls.shutdown + 1
+            end or nil
+            rawget(_G, "os").reboot = function() calls.reboot = calls.reboot + 1 end
+        end
+
+        local function boot_power(events, opts)
+            local o = opts or {}
+            H.rmrf("/etc/perms")
+            local dir = H.case_dir("loop", "power")
+            bootable(dir)
+            local host = new_host()
+            host.keys = KEYS
+            local log, lines = H.logger()
+            local buf = S.buffer(51, 19)
+            local frames, pulls = {}, 0
+            local function snap()
+                local out = {}
+                for y = 1, 19 do out[y] = buf.row(y) end
+                return out
+            end
+            local pull = function()
+                frames[pulls + 1] = snap()
+                pulls = pulls + 1
+                local event = events[pulls]
+                if event == nil then return nil end
+                return event[1], event[2]
+            end
+            local result = nil
+            local saved = rawget(_G, "PYROET_APP_NOPAINT")
+            rawset(_G, "PYROET_APP_NOPAINT", nil)
+            local okrun, why = pcall(function()
+                local okw, value = S.with_term(buf, function()
+                    return startup.run({
+                        fs = F,
+                        root = dir,
+                        log = log,
+                        apps_root = dir .. "/apps",
+                        input = host,
+                        pull_event = pull,
+                        terminal = buf,
+                        desktop_events = #events + 1,
+                        start_timer = function() return 7 end,
+                        reboot = function() error("rebooted unexpectedly") end,
+                        frame = function() return true end,
+                    })
+                end)
+                result = value
+                return okw
+            end)
+            rawset(_G, "PYROET_APP_NOPAINT", saved)
+            return { run = result, lines = lines, frames = frames,
+                pulls = pulls, ok = okrun and why == true }
+        end
+
+        -- 1) Ctrl+T on the desktop -> the menu, and the loop never returns
+        --    "terminate" (it ends on the event bound instead)
+        stub_power(true)
+        local one = boot_power({
+            { "terminate" },      -- Ctrl+T
+            { "key", "down" },    -- move to Reboot
+            { "key", "enter" },   -- run it (stubbed)
+            { "key", "escape" },  -- cancel
+        })
+        H.check("power_run_ok", one.ok, tostring(one.run))
+        H.eq("power_reason", one.run and one.run.desktop_reason, "limit")
+        H.lacks("power_no_terminate", one.lines, "STARTUP_DESKTOP_EXIT reason=terminate")
+        H.has(one.lines, "DESKTOP_POWER_MENU scope=desktop event=terminate")
+        -- the menu on screen, verbatim: title, three entries, marker on row 3
+        local menu = one.frames[2] or {}
+        H.eq("power_title", (menu[1] or ""):sub(1, 10), "Power 0.2.")
+H.contains("power_row3", menu[3] or "", "> Shutdown")
+H.contains("power_row4", menu[4] or "", "  Reboot")
+H.contains("power_row5", menu[5] or "", "  Cancel")
+        H.eq("power_hint", (menu[19] or ""):sub(1, 19), "enter runs q=cancel")
+        -- down moved the marker to Reboot
+        local moved = one.frames[3] or {}
+H.contains("power_moved_off", moved[3] or "", "  Shutdown")
+H.contains("power_moved_on", moved[4] or "", "> Reboot")
+        -- enter ran Reboot exactly once, logged BEFORE acting, and Shutdown was
+        -- not called at all
+        H.eq("power_reboot_calls", calls.reboot, 1)
+        H.eq("power_shutdown_calls", calls.shutdown, 0)
+        H.has(one.lines, "POWER reboot requested")
+        -- Esc cancelled back to the desktop: row 18 is the normal hint again
+        local back = one.frames[5] or {}
+        H.eq("power_cancel_hint", (back[18] or ""):sub(1, 15), "up/dn enter run")
+        H.contains("power_cancel_list", table.concat(back, "\n"), "apps sel")
+        H.has(one.lines, "power menu cancel")
+
+        -- 2) inside an app Ctrl+T leaves the APP first; only the next Ctrl+T on
+        --    the desktop opens the menu
+        calls.reboot, calls.shutdown = 0, 0
+        stub_power(true)
+        local two = boot_power({
+            { "key", 11 },      -- down -> net
+            { "key", 14 },      -- enter -> net takes the console
+            { "terminate" },    -- scope=app: net quits, no menu
+            { "terminate" },    -- now on the desktop: the menu opens
+        })
+        H.check("power_app_run_ok", two.ok, tostring(two.run))
+        H.has(two.lines, "DESKTOP_TERMINATE scope=app app=net event=terminate")
+        H.has(two.lines, "APP_EXIT app=net")
+        H.eq("power_menu_once", H.count(two.lines, "DESKTOP_POWER_MENU"), 1)
+        H.eq("power_app_no_reboot", calls.reboot, 0)
+
+        -- 3) a ROM without os.shutdown: the entry says so, nothing crashes
+        calls.reboot, calls.shutdown = 0, 0
+        stub_power(false)
+        local three = boot_power({ { "terminate" } })
+        H.check("power_missing_run_ok", three.ok, tostring(three.run))
+        local missing = three.frames[2] or {}
+H.contains("power_missing_row3", missing[3] or "", "> Shutdown unavailable")
+H.contains("power_missing_row4", missing[4] or "", "  Reboot")
+H.contains("power_missing_row5", missing[5] or "", "  Cancel")
+        H.contains("power_missing_reason", table.concat(missing, "\n"),
+            "os.shutdown unavailable")
+
+        rawget(_G, "os").shutdown = saved_shutdown
+        rawget(_G, "os").reboot = saved_reboot
+    end
+
+    -- -----------------------------------------------------------------
     H.group("desktop_loop.leave")
     -- Exit semantics of round 6: on the desktop q/Q/escape are only a hint -- the
     -- machine stays; Ctrl+T is the way out, and it is scoped: while an app owns
@@ -1010,7 +1150,8 @@ end
                     terminal = buf,
                     start_timer = function() return 7 end,
                     reboot = function() error("rebooted unexpectedly") end,
-                    frame = function() return true end,
+                    power_menu = false,
+            frame = function() return true end,
                 })
             end)
             result = value
@@ -1030,7 +1171,7 @@ end
         local joined = table.concat(after_q or {}, "\n")
         H.contains("leave_list_still_there", joined, "apps sel")
         H.eq("leave_hint_row", ((after_q or {})[18] or ""):sub(1, 23),
-            "Ctrl+T leaves Pyroet OS")
+            "Ctrl+T opens power menu")
         H.contains("leave_marker", joined, ">")
         H.ascii_check("leave_ascii", H.joined(lines))
 
@@ -1063,6 +1204,7 @@ end
             pull_event = pull2,
             start_timer = function() return 7 end,
             reboot = function() error("rebooted unexpectedly") end,
+            power_menu = false,
             frame = function() return true end,
         })
         H.eq("leave_app_reason", result2.desktop_reason, "terminate")
@@ -1096,6 +1238,7 @@ end
             input = host,
             pull_event = pull,
             reboot = function() error("rebooted unexpectedly") end,
+            power_menu = false,
             frame = function() return true end,
         })
         H.eq("term_ok", result.ok, true)
@@ -1122,6 +1265,7 @@ end
             log = log,
             apps_root = dir .. "/apps",
             reboot = function() error("rebooted unexpectedly") end,
+            power_menu = false,
             frame = function() return true end,
         })
         H.eq("guard_ok", result.ok, true)
@@ -1142,6 +1286,7 @@ end
             loop = false,
             pull_event = function() return "terminate" end,
             reboot = function() error("rebooted unexpectedly") end,
+            power_menu = false,
             frame = function() return true end,
         })
         H.eq("headless_reason", result2.desktop_reason, "skip:disabled")
@@ -1161,6 +1306,7 @@ end
             system_root = false,
             pull_event = function() pulls3 = pulls3 + 1 return "terminate" end,
             reboot = function() error("rebooted unexpectedly") end,
+            power_menu = false,
             frame = function() return true end,
         })
         H.eq("nodesktop_reason", result3.desktop_reason, "skip:no_desktop")
@@ -1186,6 +1332,7 @@ end
             system_root = false,
             pull_event = function() return "terminate" end,
             reboot = function() error("rebooted unexpectedly") end,
+            power_menu = false,
             frame = function() return true end,
         })
         H.eq("noinput_reason", result4.desktop_reason, "skip:no_input")
@@ -1203,6 +1350,7 @@ end
             apps_root = dir5 .. "/apps",
             system_root = false,
             pull_event = function() pulls5 = pulls5 + 1 return "terminate" end,
+            power_menu = false,
             reboot = function() error("rebooted unexpectedly") end,
         })
         H.eq("fatal_flag", result5.fatal, true)
@@ -1239,7 +1387,7 @@ end
         H.eq("map_q_hint", state.message, LAUNCHER.LEAVE_HINT)
         H.eq("map_q_upper", LAUNCHER.dispatch_event(state, "char", "Q", nil, api),
             "repaint")
-        H.eq("map_leave_hint", LAUNCHER.LEAVE_HINT, "Ctrl+T leaves Pyroet OS")
+        H.eq("map_leave_hint", LAUNCHER.LEAVE_HINT, "Ctrl+T opens power menu")
         H.eq("map_unknown_char",
             LAUNCHER.dispatch_event(state, "char", "z", nil, api), "none")
         H.eq("map_unknown_event",

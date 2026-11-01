@@ -60,11 +60,13 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
    the desktop is complete before you touch anything: the app list, the marker
    and the hint row are already on screen at boot (and again right after an app
    exits or a screen loan ends) -- no key press is needed to "wake" it. Then the
-   keyboard works: up/down move, a digit selects, enter starts the selected app. "q"/"Q"/Esc on the desktop do NOT leave the system: the hint row says
-   "Ctrl+T leaves Pyroet OS" and the list stays. Ctrl+T (the ROM terminate
-   event) is the only way out to the CraftOS shell; inside an app Ctrl+T leaves
-   that app first (back to the desktop) and only then, on the desktop, the
-   system.
+   keyboard works: up/down move, a digit selects, enter starts the selected app.
+   "q"/"Q"/Esc on the desktop do NOT leave the system: the hint row says
+   "Ctrl+T opens power menu" and the list stays. Ctrl+T (the ROM terminate
+   event) opens the power menu -- Shutdown / Reboot / Cancel, up/down picks,
+   enter runs, Esc or q cancels -- so there is no key that drops you back to
+   the CraftOS shell. Inside an app Ctrl+T leaves that app first (back to the
+   desktop); press it again on the desktop to get the menu.
    If it returns to the shell right away, or if keys do nothing while the screen
    stays put, grep /kernel.log for STARTUP_DESKTOP_SKIP: input_denied /
    terminal_denied means the capability was refused (from the shell run
