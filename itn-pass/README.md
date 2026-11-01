@@ -1,8 +1,8 @@
-# ITN-Pass 公网访客准入证与装机盘（itnpass_v1）
+# ITN-Pass 装机/分发凭证与装机盘（itnpass_v1）
 
-本目录在 CC:Tweaked / CraftOS-PC 上实现 **InterTeamNet（ITN）公网访客的准入证 + 装机盘**：
-一台站端电脑持有准入证库与 pepper，负责校验、记账，并把 `/payload/` 逐字节写到访客插进驱动器的
-软盘；任意多台终端只负责输入准入证、转发请求、显示结果。终端上没有库、没有 pepper、没有
+本目录在 CC:Tweaked / CraftOS-PC 上实现 **InterTeamNet（ITN）的装机/分发凭证 + 装机盘**：
+一台站端电脑持有凭证库与 pepper，负责校验、记账，并把 `/payload/` 逐字节写到访客插进驱动器的
+软盘；任意多台终端只负责输入凭证（`free` 模式下连这一步都没有）、转发请求、显示结果。终端上没有库、没有 pepper、没有
 sha256、没有磁盘代码，被拆掉也只得一个转发壳。协议名 `itnpass_v1`，使用有线 modem、频道 33，
 不依赖 rednet、PSK、用户库或审计服。
 
@@ -19,14 +19,17 @@ sha256、没有磁盘代码，被拆掉也只得一个转发壳。协议名 `itn
 
 1. 终端开机：`/system/sandbox.lua` 锁事件 → `/system/netcheck.lua` 在频道 33 上听 3 秒心跳，
    必须**恰好**听到 1 个不同的 `server_id`，否则锁死并写 `/auth/itnpass_lock.flag`。
-2. 访客输入准入证：终端发 `verify_request`，站端只查库（不预留、不扣次），回 `verify_response`，
+2. 访客输入凭证：终端发 `verify_request`，站端只查库（不预留、不扣次），回 `verify_response`，
    带上 `uses_left` / `uses_total`。
 3. 访客在菜单选 `1. Write Disk`：终端发 `write_request`（含 `reservation_id`）。站端 `reserve`
    预留一次 → `/system/disk_writer.lua` 把 `/payload/` 复制到驱动器网上的那张软盘 → 成功则
    `commit` 扣 1 次，失败则 `release` 不扣。
-4. 终端显示成功、失败或"写盘成功但没扣次"警示，3 秒后回到准入证输入界面。
+4. 终端显示成功、失败或"写盘成功但没扣次"警示，3 秒后回到凭证输入界面。
 
 一句话：**验证一次不消耗额度；只有写盘成功并且预留仍然有效时才扣次。**
+
+运行模式（见 2.5）有两个：默认的 `pass` 走上面全流程；`free` 是公开免费模式，第 2 步不存在
+（终端直接进菜单），站端回成功但不预留、不扣次，写盘事务与失败语义完全不变。
 
 ## 1. 定位与角色
 
@@ -34,17 +37,21 @@ sha256、没有磁盘代码，被拆掉也只得一个转发壳。协议名 `itn
 
 | 角色 | 数量 | 说明 |
 | --- | --- | --- |
-| 站端（ITN-Pass Station） | 1 台 | 独占一台电脑，跑服务与管理台；持准入证库、pepper、`server_id`、payload |
+| 站端（ITN-Pass Station） | 1 台 | 独占一台电脑，跑服务与管理台；持凭证库、pepper、`server_id`、payload |
 | 终端（InterTeamNet Access） | 任意多台 | 只跑客户端与界面；不持任何秘密 |
 
 站端同时是"装机盘写盘机"：访客在终端上花掉一次额度，站端把装机内容写到软盘。所以一次额度
 对应**一张盘**，而不是一次登录。
 
+**定位边界：itn-pass 是装机/分发凭证系统，不是网络准入系统。** 它只回答"这张盘能不能写、
+能写几次"，**不做入网许可、不做设备入网鉴权、不校验基带或设备身份**；网络层唯一的检查
+（`netcheck`）是"终端能不能听到站端心跳"的连通性判断，不是准入判定。
+
 ### 1.2 与 `cardkey/` 的关系（硬分支）
 
 | 维度 | `cardkey/`（原项目） | `itn-pass/`（本项目） |
 | --- | --- | --- |
-| 定位 | 卡密验证机 | InterTeamNet 公网访客准入证 + 装机盘 |
+| 定位 | 卡密验证机 | 装机/分发凭证 + 装机盘（**不做入网许可**） |
 | 协议 | `cardkey_v1` | `itnpass_v1` |
 | 频道 | 3 | **33**（1/2 属 Sentinel） |
 | 运行时路径 | `cardkey_*` / `/lock.flag` | 全部 `itnpass_` 前缀 / `/auth/itnpass_lock.flag` |
@@ -55,7 +62,7 @@ sha256、没有磁盘代码，被拆掉也只得一个转发壳。协议名 `itn
 界面品牌已切到 ITN-Pass：终端标题 `InterTeamNet Access`、菜单头 `ITN-Pass Disk Writer`、
 管理台标题 `ITN-Pass Station`、导出文件头 `# ITN-Pass batch`。**不是**品牌文案的字符串
 （派生盐、`/cardkeys` 目录与 `cardkeys_*.txt` 文件名、会话内部名 `"cardkey"`）刻意保留原值，
-因为它们已经被已发准入证、运维脚本或历史批次文件依赖。
+因为它们已经被已发凭证、运维脚本或历史批次文件依赖。
 
 ### 1.3 装机盘容量口径
 
@@ -78,6 +85,7 @@ sha256、没有磁盘代码，被拆掉也只得一个转发壳。协议名 `itn
 | `/startup.lua` | `itn-pass/server/startup.lua` | 并行启动服务与管理台 |
 | `/sha256.lua` | `itn-pass/common/sha256.lua` | 纯 Lua SHA-256；站端**必需** |
 | `/itnpass_net.lua` | `itn-pass/common/itnpass_net.lua` | **协议名与频道的唯一来源**（见 3.1） |
+| `/itnpass_mode.lua` | `itn-pass/common/itnpass_mode.lua` | **运行模式的唯一解析器**（`pass`/`free`，见 2.5） |
 | `/auth/itnpass_config.lua` | `itn-pass/server/auth/itnpass_config.lua` | 配置表（见第 9 节） |
 | `/auth/itnpass_store.lua` | `itn-pass/server/auth/itnpass_store.lua` | 数据库、pepper、预留与扣次 |
 | `/system/itnpass_server.lua` | `itn-pass/server/system/itnpass_server.lua` | 协议服务、限流、日志 |
@@ -96,16 +104,19 @@ sha256、没有磁盘代码，被拆掉也只得一个转发壳。协议名 `itn
 | --- | --- | --- |
 | `/startup.lua` | `itn-pass/terminal/startup.lua` | 锁、网络检查、进 kernel |
 | `/itnpass_net.lua` | `itn-pass/common/itnpass_net.lua` | 与站端同一个文件，**必须放** |
+| `/itnpass_mode.lua` | `itn-pass/common/itnpass_mode.lua` | 运行模式解析器，与站端同一个文件，**必须放** |
 | `/system/netcheck.lua` | `itn-pass/terminal/system/netcheck.lua` | 数站端 |
 | `/system/sandbox.lua` | `itn-pass/terminal/system/sandbox.lua` | 拦 Ctrl+T、清退出入口 |
-| `/system/kernel.lua` | `itn-pass/terminal/system/kernel.lua` | 登录循环 |
+| `/system/kernel.lua` | `itn-pass/terminal/system/kernel.lua` | 登录 → 会话 → 界面循环；`free` 模式跳过登录 |
 | `/system/ui.lua` | `itn-pass/terminal/system/ui.lua` | 菜单与结果界面 |
 | `/auth/itnpass_client.lua` | `itn-pass/terminal/auth/itnpass_client.lua` | 协议客户端 |
-| `/auth/itnpass_login.lua` | `itn-pass/terminal/auth/itnpass_login.lua` | 准入证输入界面 |
+| `/auth/itnpass_login.lua` | `itn-pass/terminal/auth/itnpass_login.lua` | 凭证输入界面 |
 | `/auth/session.lua` | `itn-pass/terminal/auth/session.lua` | 内存会话表，TTL 600000 ms |
 
 终端上没有任何数据库、pepper、sha256、payload 或磁盘代码，**也不要**放 `/sha256.lua`。终端的
-网络参数来自 `/itnpass_net.lua`，它不读 `itnpass_config.lua`。
+网络参数来自 `/itnpass_net.lua`。运行模式由 `/itnpass_mode.lua` 决定：它先找
+`/auth/itnpass_mode.txt`，找不到才读 `/auth/itnpass_config.lua` 的 `mode` 字段，再找不到就用
+默认 `pass`——所以**终端可以不装配置表**，只在盘上放一份模式文件就能切到 `free`（见 2.5）。
 
 **运行时前提**：终端锁死标志写在 `/auth/itnpass_lock.flag`，所以终端盘必须有 `/auth/` 目录
 （按上表部署必然存在，客户端模块就装在那里）。只手工拷一个启动脚本的极端部署会写不进锁死标志。
@@ -163,6 +174,56 @@ modem 与驱动器，玩家只能物理地往驱动器里插软盘，无法接�
 `peripheral.getNames()`。因为 `getNames()` 会合并所有 hub 的视图，网络 B 上的 `drive_0` 看起来
 像是挂在两个 modem 旁边，会把两个 modem 都误判成"带驱动器"。
 
+### 2.5 运行模式：`pass` 与 `free`
+
+站端、终端与管理台都通过 `itn-pass/common/itnpass_mode.lua`（部署为 `/itnpass_mode.lua`）的
+`resolve()` 决定运行模式，优先级**完全相同**：
+
+1. `/auth/itnpass_mode.txt` 存在且内容合法 → 用它（最高优先，盘上即可切换）；
+2. 否则用 `/auth/itnpass_config.lua` 的 `mode` 字段（装机默认 `"pass"`）；
+3. 都没有 → 内置默认 `"pass"`。
+
+| 模式 | 需要凭证 | 终端界面 | 站端行为 |
+| --- | --- | --- | --- |
+| `pass`（默认） | 是 | 开机先进凭证输入界面 | 查库 / 预留 / 扣次，全部照旧 |
+| `free`（公开免费） | 否 | **跳过登录**，直接用合成身份 `guest` 进菜单 | `verify` 直接成功（不查库），`write` 不预留、不扣次，但**照样**走 disk_writer 事务 |
+
+取值只认小写字面量 `pass` / `free`。其它任何内容（`FREE`、`Free`、空文件、两行互相冲突）都不
+生效：**非法配置值** → 记 `ITNP_CONFIG_BAD key=mode` 并按 `pass` 处理；**非法覆盖文件** → 记
+`ITNP_MODE_BAD` 并保持配置值。两端都 **fail-safe 到 `pass`**：写错了只会让站端继续收凭证，
+绝不会误开免费模式。
+
+配置文件（站端 `/auth/itnpass_config.lua`，其余键见第 9 节）：
+
+```lua
+return {
+    mode = "pass",  -- "pass" 需要凭证；"free" 公开免费
+    -- ...
+}
+```
+
+盘上覆盖文件 `/auth/itnpass_mode.txt`（站端与**每台**终端各放一份）：
+
+```
+# ITN-Pass run mode: "pass" needs a card key, "free" is open
+free
+```
+
+`#` 之后是注释，空行忽略，整个文件只应出现一个有效值。
+
+**切换步骤：**
+
+1. 在站端与所有终端磁盘上创建或改写 `/auth/itnpass_mode.txt`，内容写 `free`（或 `pass`）；
+   删除该文件即回到配置文件里的值。
+2. 重启站端与终端：模式在启动时读一次，改文件不会热切换。
+3. 站端管理台首页应显示 `MODE: free`；终端菜单顶部出现 `Free mode: no card key needed.`。
+4. 站端日志里应有 `ITNP_START ... mode=free`，写盘时出现 `ITNP_FREE_WRITE ok=1 ...`。
+
+**两端模式必须一致**：站端 `pass` + 终端 `free` 时终端发的是空 `code`，站端回 `empty code`，
+写盘失败（盘不会被写坏，也没有扣次）；站端 `free` + 终端 `pass` 时终端照旧先要凭证，站端不查库、
+直接放行。**安全边界：`free` 只决定"要不要凭证"——写盘校验、失败回滚、磁盘空间预检、`netcheck`
+与限流全部照旧运行。**
+
 ## 3. 协议与频道
 
 ### 3.1 单一来源：`/itnpass_net.lua`
@@ -214,12 +275,15 @@ return {
 "终端侧" modem 发出。
 
 - `verify_request`：`protocol`、`type="verify_request"`、`code`、`nonce`、`terminal_id`。
+  `free` 模式下 `code` 可以是空字符串（站端不查码）。
 - `verify_response`：`protocol`、`type`、`server_id`、`nonce`（原样回显）、`success`、`message`，
-  成功时还有 `uses_left`、`uses_total`。
+  成功时还有 `uses_left`、`uses_total`。`free` 模式成功时改为带 `free=true` 与 `mode="free"`，
+  **省略** `uses_left`/`uses_total`（终端对 `nil` 有处理）。
 - `write_request`：`protocol`、`type="write_request"`、`code`、`nonce`、`terminal_id`、
-  `reservation_id="<terminal_id>-<nonce>"`。
+  `reservation_id="<terminal_id>-<nonce>"`。`free` 模式同样允许空 `code`，`reservation_id` 仍必须带。
 - `write_response`：`protocol`、`type`、`server_id`、`nonce`、`success`、`message`、`charged`；
   成功时还有 `uses_left`、`uses_total`、`files`、`dirs`、`bytes`；失败时可能有 `detail`。
+  `free` 模式下 `charged` 恒为 `false`，并带 `free=true`、`mode="free"`，不含次数类字段。
 - `heartbeat`：`protocol`、`type="heartbeat"`、`server_id`，每 2 秒由站端在频道 33 广播。
 
 `nonce` 形如 `<rand 1..1e9>-<epochMs>`。站端只处理"自己终端侧 modem 上、频道 33、`protocol`
@@ -233,15 +297,18 @@ return {
 见过的集合里。任一不符的回复会被丢弃并继续等，直到超时。
 
 超时：验证 8 秒，写盘 30 秒（`os.startTimer`）。请求失败后清空缓存的站端集合，**下一次请求**
-重新跑 3 秒 netcheck；成功时不会重复 netcheck。因此开机时会 netcheck 一次，第一次输入准入证
+重新跑 3 秒 netcheck；成功时不会重复 netcheck。因此开机时会 netcheck 一次，第一次输入凭证
 还会再 netcheck 一次（约多 3 秒），之后请求直接用缓存。
 
-## 4. 准入证语义与扣次
+## 4. 凭证语义与扣次
 
 ### 4.1 verify 不扣次
 
 `verify_request` 只做 `lookup`：不预留、不扣次、不占用次数。失败也只记一次限流失败。所以
 "只验证、不写盘"永远是 0 消耗；菜单选 `0. Cancel` 连请求都不发。
+
+`free` 模式下**完全没有** `lookup`：站端直接回 `success=true`（不再累计失败次数、也不受限流锁
+影响），日志写 `ITNP_FREE_VERIFY terminal=.. uses=none`。
 
 ### 4.2 write 的一次事务
 
@@ -255,9 +322,16 @@ return {
 
 同一 `nonce` 的重发请求会在 replay 检查处被拒（`duplicate request`），不会扣第二次。
 
+`free` 模式下这次事务只剩第 2 步：**不 reserve、不 commit、不 release、不扣次**，但
+`disk_writer.write()` 与它的一切校验、失败原因、回滚语义完全照旧，成功与失败也都照旧回包
+（`charged=false`、`free=true`）。日志写
+`ITNP_FREE_WRITE ok=1 files=.. dirs=.. bytes=.. terminal=.. reservation=..`；失败写
+`ITNP_FREE_WRITE ok=0 reason=.. detail=.. ...`。`reservation_id` 仍必须存在（格式照旧），但它
+只是一个日志/回包里的关联键，不再对应任何预留记录。
+
 ### 4.3 预留、held 与 `in use on another terminal`
 
-- `held` = 该准入证当前未过期的预留数量；可用次数 = `uses_left - held`。
+- `held` = 该凭证当前未过期的预留数量；可用次数 = `uses_left - held`。
 - `uses_left > 0` 但全部被预留 → `in use on another terminal`（注意：这表示"这张证现在没有
   未预留的可用次数"，不一定是别的终端正在刷）。
 - `uses_left <= 0` → `used up`。
@@ -271,7 +345,7 @@ return {
 ### 4.4 什么时候绝不扣次
 
 - 只登录 / 只验证，或菜单取消（站端没收到 `write_request`）。
-- 准入证不存在、格式不对、已撤销、已用完，或最后一次已被别的终端预留。
+- 凭证不存在、格式不对、已撤销、已用完，或最后一次已被别的终端预留。
 - 重复的 `write_request`（同一 `nonce`）。
 - 请求处于限流锁定期间。
 - 缺少 `reservation_id`、预留已过期、或 `commit`/`release` 找不到预留（`no such reservation`）。
@@ -279,13 +353,14 @@ return {
   `empty payload`、`disk full`、`cannot create ...`、`write failed: ...`、`write truncated`，
   以及写盘抛异常。
 - 终端侧网络失败、超时，或收到不属于自己的回复（站端没动账本）。
+- **`free` 模式下的任何请求**（没有库、没有额度这回事，日志只有 `ITNP_FREE_*`）。
 
 写盘失败**不算**认证失败，不会累计到 10 次/60 秒的终端锁或 60 次/30 秒的全局锁。
 
 **诚实边界**：终端的 30 秒写超时只是终端放弃等待，**不会取消**站端已经开始的复制。如果复制在
 超时之后才完成，站端仍会 `commit` 扣次，而终端已经显示了失败。payload 越大越容易遇到。
 
-## 5. 准入证格式与密码学
+## 5. 凭证格式与密码学
 
 ### 5.1 格式
 
@@ -308,7 +383,7 @@ return {
 `label = <epochMs>:<mintCounter>:<math.random(1,2147483647)>:<computerID>`，只要求唯一，不要求
 不可预测。
 
-为什么 `math.random` 不是保密来源：准入证是从 pepper **单向派生**的。攻击者即使拿到一张合法证、
+为什么 `math.random` 不是保密来源：凭证是从 pepper **单向派生**的。攻击者即使拿到一张合法证、
 知道大致的生成时间，也无法从它反推出其它证——除非拿到 pepper。随机数只用于挑 label、生成
 pepper 与 `server_id`。真正的防线是 32 个符号的 16 位空间（约 2^80）加上限流。
 
@@ -316,9 +391,9 @@ pepper 与 `server_id`。真正的防线是 32 个符号的 16 位空间（约 2
 
 派生函数里的分隔符是字面量 `"|cardkey|"`（`itn-pass/server/auth/itnpass_store.lua:260`）。
 
-**改了它，同一个 pepper 会派生出完全不同的准入证，库里所有已入库指纹立刻失配——也就是说，
-所有已经发出去的准入证全部失效。** 这是一个不可逆的破坏性变更，不能当作"品牌改名"顺手改掉。
-将来如果确实要改，必须与"换库 + 重发全部准入证"一起宣布，并在 `DECISIONS.md` 留记录。
+**改了它，同一个 pepper 会派生出完全不同的凭证，库里所有已入库指纹立刻失配——也就是说，
+所有已经发出去的凭证全部失效。** 这是一个不可逆的破坏性变更，不能当作"品牌改名"顺手改掉。
+将来如果确实要改，必须与"换库 + 重发全部凭证"一起宣布，并在 `DECISIONS.md` 留记录。
 
 ### 5.5 数据库记录
 
@@ -400,7 +475,10 @@ payload 先验（在查看驱动器之前）：
 以及 modem 打开频道失败时的 `cannot open channel`。无线 modem 不允许参与（只有在没有任何
 有线 modem 时才报 `wireless modem`；有有线 modem 时优先使用有线的那个）。
 
-### 7.2 准入证界面
+**`free` 模式不跳过这一段**：盘是站端写的，终端必须先能听到站端心跳；`netcheck` 失败照旧写锁死
+旗标、显示同样的文字并挂起。
+
+### 7.2 凭证界面
 
 ```
 InterTeamNet Access
@@ -418,6 +496,10 @@ Checking...
 界面里的 `Card key` 是保持不变的输入提示文案（内部会话名同样是 `"cardkey"`），品牌标题才是
 `InterTeamNet Access`。
 
+**`free` 模式下整个输入界面被跳过。** `/system/kernel.lua` 启动时读一次运行模式，`free` 时直接
+构造合成身份（`name="guest"`、`code=""`、无次数）进菜单，并往 `/auth/itnpass_mode.log` 写
+`ITNP_FREE_SESSION id=<computerID>`。
+
 ### 7.3 菜单
 
 ```
@@ -429,7 +511,19 @@ ITN-Pass Disk Writer
 Select: 
 ```
 
-除 `1` 以外的任何输入都**静默返回**准入证界面，不发请求、不扣次。选 `1` 后显示：
+`free` 模式下标题下多一行提示（其余布局不变）：
+
+```
+ITN-Pass Disk Writer
+
+Free mode: no card key needed.
+
+1. Write Disk
+...
+```
+
+除 `1` 以外的任何输入都**静默返回**凭证界面（`free` 模式返回菜单循环，同样不发请求、不扣次）。
+选 `1` 后显示：
 
 ```
 Writing disk...
@@ -479,10 +573,29 @@ No use was consumed.
 Logging out...
 ```
 
-成功与失败都停 3 秒，然后回到准入证输入界面；kernel 随后 `session.destroy` 并进入下一轮。菜单层
+成功与失败都停 3 秒，然后回到凭证输入界面；kernel 随后 `session.destroy` 并进入下一轮。菜单层
 拿不到 `shell`/`commands`/`fs.delete`/`fs.move`/`os.shutdown`/`os.reboot`，所以没有回 CraftOS
 的入口（唯一出路是重启电脑）。kernel 在任何异常时打印
-`System error, returning to card key prompt...` 并回到输入界面。
+`System error, returning to card key prompt...`（`free` 模式打印
+`System error, returning to the menu...`）并回到输入界面。
+
+**`free` 模式的结果页**（站端回 `free=true`）：
+
+```
+[OK] Disk written (free mode).
+
+No card key was charged.
+
+Files: <n>
+Dirs:  <n>            (仅当 dirs > 0)
+Bytes: <n>
+
+Logging out...
+```
+
+失败时把 `Your card key was NOT charged.` / `No use was consumed.` 换成
+`No card key was used.` / `The disk was not written.`，其余（`[Failed] <原因>` 与 `detail`）不变。
+`free` 模式不会显示"未扣次警告"（`[Warning] Use was NOT charged:`），因为本来就不扣次。
 
 ### 7.5 客户端本地原因
 
@@ -526,6 +639,7 @@ Password:
 
 ```
 ITN-Pass Station
+MODE: <pass|free>
 usable=<可用证数>  remaining=<剩余总次数>
 [SERVICE FAULT] <故障旗标第一行>     (有旗标才显示)
 disk: <no drive|too many drives|no disk|no mount|ready> ( (<驱动器名>) )
@@ -538,8 +652,9 @@ free: <n> bytes                     (ready 且能拿到空间数据时)
 Select: 
 ```
 
-`usable` 是"未撤销且还有次数"的证数；`remaining` 是所有记录 `uses_left` 之和（含已撤销的，
-撤销不会回收次数）。`0` 或直接回车退出（随后被重启）。
+`MODE:` 是当前运行模式（解析规则见 2.5，`free` 时整串就是 `MODE: free`），开机读一次。`usable`
+是"未撤销且还有次数"的证数；`remaining` 是所有记录 `uses_left` 之和（含已撤销的，撤销不会回收
+次数）。`0` 或直接回车退出（随后被重启）。
 
 ### 8.3 生成与导出批次
 
@@ -602,7 +717,7 @@ revoke by fp prefix or full code:
 ```
 
 - 直接回车返回。
-- 输入完整准入证（会规范化）或至少 4 位十六进制指纹前缀（必须唯一）→ `[OK] revoked`；
+- 输入完整凭证（会规范化）或至少 4 位十六进制指纹前缀（必须唯一）→ `[OK] revoked`；
   否则 `[Error] prefix too short (min 4 chars)` / `[Error] no match` /
   `[Error] ambiguous prefix, N matches`。
 - 撤销只改 `revoked` 标志，不影响已发出的剩余次数。撤销后该证立即 `revoked`，终端再验证会得到
@@ -617,7 +732,7 @@ Card key:
 ```
 
 成功 `[OK] restored`；失败 `[Error] invalid code format` 或
-`[Error] no match (unrevoke needs the full code)`（前缀无法恢复，必须完整准入证）。之后
+`[Error] no match (unrevoke needs the full code)`（前缀无法恢复，必须完整凭证）。之后
 `Press Enter to continue...`。
 
 ## 9. 配置参考（`/auth/itnpass_config.lua`）
@@ -627,6 +742,7 @@ Card key:
 
 | 键 | 默认值 | 谁读 | 含义 |
 | --- | --- | --- | --- |
+| `mode` | `"pass"` | 服务 / 终端 / 管理台 | 运行模式：`"pass"` 需凭证，`"free"` 公开免费（见 2.5） |
 | `channel` | `itnpass_net.CHANNEL`（= 33） | 服务 | 终端网频道；终端从同一个文件读 |
 | `protocol` | `itnpass_net.PROTOCOL`（= `"itnpass_v1"`） | 服务 | 协议名；终端从同一个文件读 |
 | `modem_side` | `nil` | 服务 | 终端侧 modem 的侧名；`nil` = 自动识别 |
@@ -644,9 +760,10 @@ Card key:
 | `global_lockout_ms` | `30000` | 服务 | 全局锁时长，毫秒 |
 
 生效时机：`channel`、`protocol`、`modem_side`、`heartbeat_interval` 在服务启动时读取一次，改后
-需要重启站端；`reservation_ttl_ms` 在每次 `reserve` 时重读，`export_dir` 在每次生成时重读，
+需要重启站端；`mode` 也在启动时解析一次（与 `/auth/itnpass_mode.txt` 一起，见 2.5），改后必须
+重启站端与终端；`reservation_ttl_ms` 在每次 `reserve` 时重读，`export_dir` 在每次生成时重读，
 `payload_dir` 在每次写盘时重读；管理台每次启动（约每秒）重读 `admin_file`、`max_batch`、
-`default_uses`。也就是说，改这些值大多不用重启，但网络相关的四项必须重启。
+`default_uses`。也就是说，改这些值大多不用重启，但网络相关的四项与运行模式必须重启。
 
 计失败的是 `lookup`/`reserve` 的失败（不存在、格式错、撤销、用完、被预留）；空证、重复
 nonce、限流期间的请求、写盘失败都不计入。任意一次成功（verify 或 write）会清空该终端的计数和
@@ -666,7 +783,7 @@ YYYY-MM-DD HH:MM:SS  <消息>
 
 | tag | 示例 / 含义 |
 | --- | --- |
-| `ITNP_START` | `ITNP_START server_id=... channel=33 keys_usable=N keys_total=N`，服务成功启动 |
+| `ITNP_START` | `ITNP_START server_id=... channel=33 keys_usable=N keys_total=N mode=pass`，服务成功启动 |
 | `ITNP_CHECK` | `ITNP_CHECK terminal=7 success=1 uses_left=2`，验证成功（不扣次） |
 | `ITNP_DENY` | `ITNP_DENY terminal=7 reason=unknown code`，验证或预留被拒 |
 | `ITNP_LOCKED` | 达到阈值 `ITNP_LOCKED terminal=<id> seconds=60`、全局 `...=global seconds=30`、锁期间 `...=<id> blocked=1` |
@@ -674,9 +791,17 @@ YYYY-MM-DD HH:MM:SS  <消息>
 | `ITNP_WRITE_FAIL` | `ITNP_WRITE_FAIL terminal=7 reservation=... reason=... detail=...`，写盘失败、已释放不扣次 |
 | `ITNP_WRITE` | `ITNP_WRITE reservation=... files=3 dirs=1 bytes=4096`，复制完成 |
 | `ITNP_COMMIT` | `ITNP_COMMIT reservation=... charged=1 uses_left=1`，提交结果 |
+| `ITNP_FREE_VERIFY` | `ITNP_FREE_VERIFY terminal=7 uses=none`，`free` 模式下验证直接放行（不查库） |
+| `ITNP_FREE_WRITE` | `ITNP_FREE_WRITE ok=1 files=3 dirs=1 bytes=4096 terminal=.. reservation=..`，`free` 模式写盘成功且未扣次；失败为 `ok=0 reason=.. detail=..` |
+| `ITNP_FREE_SESSION` | 终端侧写 `/auth/itnpass_mode.log`：`ITNP_FREE_SESSION id=<computerID>`，跳过登录进菜单 |
+| `ITNP_CONFIG_BAD` | `/auth/itnpass_mode.log`：`ITNP_CONFIG_BAD key=mode value=... fallback=pass`，配置里的模式值非法，已按 `pass` 处理 |
+| `ITNP_MODE_BAD` | `/auth/itnpass_mode.log`：`ITNP_MODE_BAD path=/auth/itnpass_mode.txt value=... keep=...`，覆盖文件非法，已忽略 |
 | `ITNP_ERROR` | 启动故障（`ITNP_ERROR fault: ...`）、心跳/回复发送失败、处理异常、prune 异常、commit 找不到预留 |
 
 - `ITNP_WRITE` 与 `ITNP_WRITE_FAIL` 同前缀，grep `ITNP_WRITE` 会同时命中两者；按完整 tag 搜。
+- `ITNP_FREE_WRITE` 与 `ITNP_WRITE` 不同前缀，grep `ITNP_WRITE` **不会**命中 free 模式的写盘行。
+- 运行模式的诊断（`ITNP_FREE_SESSION` / `ITNP_CONFIG_BAD` / `ITNP_MODE_BAD`）写在单独一份
+  `/auth/itnpass_mode.log`，格式与服务日志相同；不混进 `/auth/itnpass_server.log`（终端也可能写它）。
 - 故障码 `STORE_DB_CORRUPT` **不带** `ITNP_` 前缀：它同时是 `store.faults()` 返回给调用方的
   故障码，本身就是稳定的诊断标识，只镜像进同一个日志文件（见 10.4）。
 - 管理台不写日志文件（只打印屏幕），它的输出文案见第 8 节，没有 tag。
@@ -731,7 +856,7 @@ modem 选择失败、频道打不开。成功选定 modem 后会被删除；若�
 `/auth/itnpass_admin.db`（管理员密码）。`/auth/itnpass_station_id` 可备份，但只能属于一台同时
 开机的站端。payload、配置和代码按需备份。
 
-搬站端时把这四个文件一起带上，尤其是 pepper；否则旧准入证全部变成 `unknown code`。
+搬站端时把这四个文件一起带上，尤其是 pepper；否则旧凭证全部变成 `unknown code`。
 
 ### 10.7 站端侧的 shell 入口
 
@@ -752,7 +877,7 @@ modem 选择失败、频道打不开。成功选定 modem 后会被删除；若�
 | `Reason: cannot open channel` | 有线 modem 打不开频道 33；检查 modem 是否被拔掉/网络异常，重启 |
 | 一直 `Checking...` 后 `[Error] server timeout` | 没拿到可接受回复：服务没跑、协议不符、或 `server_id` 不在心跳集合；查日志 `ITNP_CHECK`/`ITNP_DENY`；失败后清缓存重查 |
 | `[Error] answer from unknown server` | 有机器用本终端的 nonce 回了消息，但它的 `server_id` 不是 netcheck 见过的那个；通常是另一台站端/伪造回复，检查网络 A |
-| `[Error] unknown code` | 准入证打错、少位，或 pepper 丢了/换了；核对输入与 pepper 备份 |
+| `[Error] unknown code` | 凭证打错、少位，或 pepper 丢了/换了；核对输入与 pepper 备份 |
 | `[Error] invalid code format` | 规范化后不是 16 个合法字符（含 `0 O 1 I` 或长度不对） |
 | `[Error] revoked` | 证被撤销；用管理台 3 输入完整证恢复 |
 | `[Error] used up` | 次数用完了；生成新批次 |
@@ -767,27 +892,32 @@ modem 选择失败、频道打不开。成功选定 modem 后会被删除；若�
 | 同上 + `disk full: need B bytes, F free` | 软盘空间不够；换盘或减小 payload |
 | 同上 + `cannot create ...` / `write failed: ...` / `write truncated ...` | 软盘写入失败；本次已回滚、没扣次，换盘后重试 |
 | `[OK] Disk written.` 但 `[Warning] Use was NOT charged:` | 写盘成功，但提交时该证已无剩余次数（例如最后一次被别处抢先花掉）；盘已写、没扣到 |
-| 管理台反复 `Access denied.` | 密码错；每轮停 5 秒后可再试 3 次。忘记密码就删 `/auth/itnpass_admin.db` 重建（不影响准入证） |
+| 管理台反复 `Access denied.` | 密码错；每轮停 5 秒后可再试 3 次。忘记密码就删 `/auth/itnpass_admin.db` 重建（不影响凭证） |
 | 所有证突然都 `unknown code` | pepper 丢了/被换，或搬站端时没带 pepper；恢复备份 |
 | 管理台首页 `[SERVICE FAULT] ...` | 看旗标文本：多为 modem 选错（设 `modem_side`）或加载失败；修好后重启 |
 | 服务启动即报 `cannot open modem channel 33: ...` | 选中的 modem 打不开频道；检查硬件或改 `modem_side` |
-| 日志出现 `STORE_DB_CORRUPT ... backup=...` | 准入证库损坏，原字节已存进 `.corrupt-*`（见 10.4）；先备份该文件再重建库、重发证 |
+| 日志出现 `STORE_DB_CORRUPT ... backup=...` | 凭证库损坏，原字节已存进 `.corrupt-*`（见 10.4）；先备份该文件再重建库、重发证 |
+| 管理台显示 `MODE: free` 但本应收凭证 | 站端盘上有 `/auth/itnpass_mode.txt` 且内容是 `free`；改成 `pass` 或删掉该文件后重启 |
+| 终端开机直接进菜单、没有凭证输入界面 | 终端处于 `free` 模式（见 2.5）；这是预期行为，要收凭证就把模式文件改成 `pass` |
+| 终端 `free`、站端 `pass`，写盘一直 `[Failed] empty code` | 两端模式不一致：终端发空 `code`，站端 `pass` 模式拒绝空码；把两端模式文件统一后重启 |
+| `/auth/itnpass_mode.log` 出现 `ITNP_MODE_BAD` | 覆盖文件内容非法（拼错、大写、两行冲突），已忽略并保持配置值；改成小写 `pass`/`free` |
+| `/auth/itnpass_mode.log` 出现 `ITNP_CONFIG_BAD` | 配置里的 `mode` 值非法，已按 `pass` 处理；修 `/auth/itnpass_config.lua` 后重启 |
 
 ## 12. 安全说明与接受风险
 
-1. **modem 是广播总线，准入证明文走总线。** 网络 A 上任何带 modem 的电脑都能在频道 33 看到
-   `verify_request` / `write_request` 里的**明文准入证**；站端回包同样是无目的地址的广播。
-   为什么接受：准入证不是身份凭据，只是一次性安装额度，嗅探者仍要抢在合法终端之前用掉，收益有限。
+1. **modem 是广播总线，凭证明文走总线。** 网络 A 上任何带 modem 的电脑都能在频道 33 看到
+   `verify_request` / `write_request` 里的**明文凭证**；站端回包同样是无目的地址的广播。
+   为什么接受：凭证不是身份凭据，只是一次性安装额度，嗅探者仍要抢在合法终端之前用掉，收益有限。
    缓解有三层，都在代码里：①**写盘额度**（每成功写盘扣 1，用完即废）；②**预留有效期**
    （`reservation_ttl_ms = 300000`，5 分钟，过期自动回收）；③**管理台撤销/恢复**。
-   不要把它读成"准入证会过期"：证本身目前没有独立的到期时间，只有"预留 5 分钟内要写完"。
+   不要把它读成"凭证会过期"：证本身目前没有独立的到期时间，只有"预留 5 分钟内要写完"。
 2. **不引入 PSK。** PSK 签名/验签是 Sentinel 的认证范畴，本版 ITN Pass 不复制 `/auth/psk.lua`、
    不引入 `/auth/psk.txt`、不做服务端 nonce 挑战 + 客户端签名。将来若必须防嗅探，方向是
    "服务端一次性授权 + 写盘额度绑定"，而不是给 itn-pass 引入 Sentinel 的 PSK。
 3. **`terminal_id` 是客户端自报的。** 站端把它当限流键，但它来自消息里的
    `tostring(os.getComputerID())` 或任意伪造值；改一个数字就能绕过"单终端 10 次/60 秒"。真正
    兜底的是全局"60 次/30 秒"；需要更严就调小 `max_fail_global`（代价是更容易被恶意全锁）。
-4. **pepper 是全部秘密。** 泄露 = 可离线伪造任意准入证；丢失 = 全部已发证作废。它用平台
+4. **pepper 是全部秘密。** 泄露 = 可离线伪造任意凭证；丢失 = 全部已发证作废。它用平台
    `math.random` 生成（种子是首次启动的时间、`os.clock` 和 computerID 的混合），不是密码学
    RNG；能精确复现首次启动种子的人理论上可重建 pepper。稳妥做法是首次开机前自己放入真随机的
    48 字符，并单独备份。
@@ -803,7 +933,11 @@ modem 选择失败、频道打不开。成功选定 modem 后会被删除；若�
 10. **站 ID 克隆会造成双活站端。** 见 10.3；换机时删掉旧 ID 文件。
 11. **管理员密码只有 4 字符下限。** 管理台本身不联网，风险主要来自物理接触；建议用长密码，
     并记住站端物理访问者本来就能读到 pepper 和数据库。
-12. **派生盐不可改。** `"|cardkey|"` 一旦修改，已发出的全部准入证立即失效（见 5.4）。
+12. **派生盐不可改。** `"|cardkey|"` 一旦修改，已发出的全部凭证立即失效（见 5.4）。
+13. **`free` 模式是"对所有人开放写盘"。** 它只回答"要不要凭证"，不提供任何身份或配额；任何能
+    连上网络 A 的终端都能反复写盘，没有次数上限。所以 `free` 只适合公开装机日/分发日，默认
+    `pass` 才是常态。写盘校验、回滚、磁盘空间预检与 `netcheck` 在两种模式下完全一样，**不要**
+    把 `free` 当成"方便调试、顺手一直开着"的开关。切换规则与两端一致性的坑见 2.5。
 
 ## 13. 离线测试
 
@@ -817,14 +951,18 @@ pwsh -NoProfile -File itn-pass/tests/run-tests.ps1
 参数：`-TimeoutSec <秒>`（默认 600）、`-DataDir <目录>`（默认 `itn-pass/.offline`，也可用
 环境变量 `ITNPASS_OFFLINE_DIR`）、`-KeepStaging`（PASS 后仍保留 staging，便于看日志）。
 
-- staging 布局 = 本文档第 2 节的部署布局（`/sha256.lua`、`/itnpass_net.lua`、`auth/`、`system/`）
-  加上 `tests/`，落在 `<DataDir>/computer/20`。
+- staging 布局 = 本文档第 2 节的部署布局（`/sha256.lua`、`/itnpass_net.lua`、`/itnpass_mode.lua`、
+  `auth/`、`system/`）加上 `tests/`，落在 `<DataDir>/computer/20`（`terminal/startup.lua` 额外
+  stage 成 `tests/terminal_startup.lua`，供套件驱动真实开机脚本）。
 - **PASS 时自动删除 staging**；失败时保留供排查；`-KeepStaging` 让成功的运行也保留。
-- 基线（本仓库当前工作树，实测约 2.3 秒）：
+- 基线（本仓库当前工作树，实测约 2.5 秒）：
 
   ```
-  OFFLINE_PASS 488 / OFFLINE_FAIL 0 / OFFLINE_GROUPS 29
+  OFFLINE_PASS 702 / OFFLINE_FAIL 0 / OFFLINE_GROUPS 40
   ```
+
+  `t_mode.lua` 是运行模式的专项套件（配置/覆盖文件优先级、终端 kernel 与界面、站端两条链路、
+  管理台 `MODE:` 行、开机仍跑 `netcheck`），占其中的 11 个 group、214 条断言。
 
 - `tests/t_*.lua` 由 `tests/run.lua` 用 `fs.list("/tests")` 自动发现，新增测试文件不需要改
   `run.lua` 或 `run-tests.ps1`。
@@ -849,17 +987,18 @@ python tools/build_release.py --project itn-pass --out dist/release
 发布包内容口径：**只放运行时 + 文档 + 许可证，不放 `tests/`。**
 
 ```
-itn-pass/     16 个 lua（common/ server/ terminal/）
+itn-pass/     17 个 lua（common/ server/ terminal/）
 itn-pass/README.md
 itn-pass/DECISIONS.md
 LICENSE       （仓库根）
 ```
 
-`tests/` 是开发材料，随发布包分发只会让访客盘多出 12 个文件、约 2,800 行的测试代码和一个
+`tests/` 是开发材料，随发布包分发只会让访客盘多出 13 个文件、4,447 行的测试代码和一个
 `run-tests.ps1`（它依赖 Windows + CraftOS-PC 路径，解包后直接跑必然报错）。排除规则写在
 `tools/build_release.py` 的 `EXCLUDE_FROM_RELEASE`，**只对 `itn-pass` 生效**（`sentinel/` 的
-`tests/` 照旧进包，其它项目的产物一个字节都不变）。实测：31 → **19 个成员**，zip 体积从
-约 85.5 KB 降到约 60 KB（精确字节以当次构建输出为准——README 与 DECISIONS 自己也在包内）。
+`tests/` 照旧进包，其它项目的产物一个字节都不变）。实测：33 → **20 个成员**（17 lua + README +
+DECISIONS + LICENSE），zip 体积从约 85.5 KB 降到约 60 KB（精确字节以当次构建输出为准——README
+与 DECISIONS 自己也在包内）。
 
 版本口径：itn-pass 从 `1.0.0` 起，与 cardkey 的 `2.0.0` 分开走，互不影响；版本号在
 `tools/build_release.py` 的 `VERSIONS` 里（它也驱动 `--project` 的合法值与产物名）。
@@ -883,6 +1022,7 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
 | `/startup.lua` | 并行启动服务与管理台；服务失败时停在原地而不是掉回 shell |
 | `/sha256.lua` | SHA-256 实现，`itnpass_store.lua` 加载时必需 |
 | `/itnpass_net.lua` | 协议名与频道（与终端共用同一个文件） |
+| `/itnpass_mode.lua` | 运行模式解析：`/auth/itnpass_mode.txt` > 配置 `mode` > `pass`（见 2.5） |
 | `/auth/itnpass_config.lua` | 配置表（见第 9 节） |
 | `/auth/itnpass_store.lua` | 指纹库、pepper、预留、commit/release、生成与导出、坏库保留 |
 | `/system/itnpass_server.lua` | 协议、心跳、限流、nonce 去重、日志、写盘事务 |
@@ -900,6 +1040,8 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
 | `/auth/itnpass_station_id` | 首次启动自动创建；24 字符；每台站端唯一 |
 | `/auth/itnpass_admin.db` | 首次设置管理员密码时创建 |
 | `/auth/itnpass_server.log` | 服务追加写的日志（`ITNP_*`） |
+| `/auth/itnpass_mode.log` | 运行模式诊断（`ITNP_FREE_SESSION` / `ITNP_CONFIG_BAD` / `ITNP_MODE_BAD`） |
+| `/auth/itnpass_mode.txt` | **可选**覆盖文件：`pass` 或 `free`，存在且合法时优先于配置（见 2.5） |
 | `/auth/itnpass_fault.flag` | 仅启动失败时出现，一行原因 |
 | `/cardkeys/cardkeys_*.txt`、`/cardkeys/latest.txt` | 生成批次时的明文导出；拷出后手动删除 |
 
@@ -909,16 +1051,18 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
 | --- | --- |
 | `/startup.lua` | 加载 sandbox、锁事件、netcheck、失败锁死、进 kernel |
 | `/itnpass_net.lua` | 协议名与频道（与站端同一个文件） |
+| `/itnpass_mode.lua` | 运行模式解析（与站端同一个文件，**必须放**） |
 | `/system/netcheck.lua` | 3 秒窗口内数不同 `server_id` |
 | `/system/sandbox.lua` | 拦 `terminate`、清 `shell` 等退出入口 |
-| `/system/kernel.lua` | 登录→会话→界面→销毁会话的循环 |
+| `/system/kernel.lua` | 登录→会话→界面→销毁会话的循环；`free` 模式跳过登录 |
 | `/system/ui.lua` | 菜单与成功/失败界面 |
 | `/auth/itnpass_client.lua` | 协议客户端、站端集合缓存 |
-| `/auth/itnpass_login.lua` | 准入证输入界面 |
+| `/auth/itnpass_login.lua` | 凭证输入界面 |
 | `/auth/session.lua` | 内存会话，TTL 600000 ms |
 
-终端运行期文件：只有锁死时的 `/auth/itnpass_lock.flag`（下一次成功开机时删除；失败会挂起，
-只能重启）；终端上没有任何准入证数据。
+终端运行期文件：锁死时的 `/auth/itnpass_lock.flag`（下一次成功开机时删除；失败会挂起，只能
+重启）、模式诊断日志 `/auth/itnpass_mode.log`，以及可选的 `/auth/itnpass_mode.txt`（切 `free`
+用）；终端上没有任何凭证数据。
 
 `tests/` 是离线套件（见第 13 节），**不进发布包**。
 
@@ -926,22 +1070,25 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
 
 1. 准备硬件：站端配两个有线 modem（一个给网络 A、一个给网络 B）和网络 B 上**恰好一个**
    disk drive；每台终端一个有线 modem。
-2. 拷贝站端文件：`/startup.lua`、`/sha256.lua`、`/itnpass_net.lua`、
+2. 拷贝站端文件：`/startup.lua`、`/sha256.lua`、`/itnpass_net.lua`、`/itnpass_mode.lua`、
    `/auth/itnpass_config.lua`、`/auth/itnpass_store.lua`、`/system/itnpass_server.lua`、
    `/system/disk_writer.lua`、`/system/itnpass_admin.lua`，以及 `/payload/`。
 3. 接线：网络 A = 站端终端侧 modem + 所有终端；网络 B = 站端驱动器侧 modem + 驱动器。
    **网络 B 不接任何其它电脑。**
 4. 第一次开机站端：看是否出现 `/auth/itnpass_fault.flag`；若 modem 选择报错，按文本设置
    `modem_side`（写侧名）后重启。
-5. 首次进入管理台：设置管理员密码；立刻把 `/auth/itnpass_pepper.txt` 备份到站端之外。
-6. 放好 payload，把软盘插进驱动器；管理台选 `1` 生成一批准入证；把 `/cardkeys/*.txt` 拷出
+5. 首次进入管理台：设置管理员密码；立刻把 `/auth/itnpass_pepper.txt` 备份到站端之外。首页
+   `MODE:` 行应显示 `MODE: pass`。
+6. 放好 payload，把软盘插进驱动器；管理台选 `1` 生成一批凭证；把 `/cardkeys/*.txt` 拷出
    站端后删除。
-7. 把终端文件拷到每台终端（**不要**拷 `/sha256.lua`，不要拷 `/auth` 下的服务器模块）。
+7. 把终端文件拷到每台终端（`/itnpass_net.lua` 与 `/itnpass_mode.lua` 都要带上；**不要**拷
+   `/sha256.lua`，不要拷 `/auth` 下的服务器模块）。
 8. 依次开机终端：应出现 `InterTeamNet Access`。若锁死，按第 11 节排查网络 A、站端状态与
-   `modem_side`。
+   `modem_side`。需要公开免费模式时，按 2.5 在站端与每台终端放 `/auth/itnpass_mode.txt` 再重启。
 9. 用一张测试证走一遍 `1. Write Disk`：确认软盘内容正确、终端显示
    `[OK] Disk written and key charged.`、管理台 `usable`/`remaining` 变化、日志出现
-   `ITNP_GRANT`/`ITNP_WRITE`/`ITNP_COMMIT`。
+   `ITNP_GRANT`/`ITNP_WRITE`/`ITNP_COMMIT`。`free` 模式下这一条换成：终端无登录直接写盘、显示
+   `[OK] Disk written (free mode).`、日志出现 `ITNP_FREE_WRITE ok=1`、`usable`/`remaining` 不变。
 10. 建立备份习惯：`/auth/itnpass_pepper.txt` 与 `/auth/itnpass_passes.db`（以及
     `/auth/itnpass_admin.db`）分开保存；换站端时一起带走 pepper。
 

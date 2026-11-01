@@ -44,10 +44,14 @@ foreach ($sub in @('auth', 'system', 'tests', 'logs')) {
 }
 
 # Deploy layout exactly as documented in itn-pass/README.md, plus the shared
-# net constants (/itnpass_net.lua sits next to /sha256.lua at the root).
+# net constants (/itnpass_net.lua sits next to /sha256.lua at the root) and the
+# run-mode resolver (/itnpass_mode.lua). terminal/startup.lua is staged under
+# tests/ so the suite can drive the real boot script without replacing the
+# runner's own /startup.lua.
 $copies = [ordered]@{
     'common\sha256.lua'                = 'sha256.lua'
     'common\itnpass_net.lua'           = 'itnpass_net.lua'
+    'common\itnpass_mode.lua'          = 'itnpass_mode.lua'
     'server\auth\itnpass_config.lua'   = 'auth\itnpass_config.lua'
     'server\auth\itnpass_store.lua'    = 'auth\itnpass_store.lua'
     'server\system\disk_writer.lua'    = 'system\disk_writer.lua'
@@ -60,6 +64,7 @@ $copies = [ordered]@{
     'terminal\system\sandbox.lua'      = 'system\sandbox.lua'
     'terminal\system\kernel.lua'       = 'system\kernel.lua'
     'terminal\system\ui.lua'           = 'system\ui.lua'
+    'terminal\startup.lua'             = 'tests\terminal_startup.lua'
 }
 foreach ($pair in $copies.GetEnumerator()) {
     $source = Join-Path $root $pair.Key

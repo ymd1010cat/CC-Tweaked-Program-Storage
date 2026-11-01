@@ -1,6 +1,8 @@
 # ITN Pass 决策记录（itn-pass）
 
-`itn-pass/` 是 `cardkey/` 的**硬分支**：把卡密验证机改造成 InterTeamNet 公网访客准入证 + 装机盘。
+`itn-pass/` 是 `cardkey/` 的**硬分支**：把卡密验证机改造成 InterTeamNet 的**装机/分发凭证 + 装机盘**。
+**定位边界：本项目不做入网许可、不做设备入网鉴权**——凭证只决定"这张盘能不能写、能写几次"，
+网络层只做连接（`netcheck` 是连通性检查，不是准入判定）。
 B1 只做骨架改名（整目录复制 + 改文件名/路径名，不改行为），原 `cardkey/` 一个字节都不动
 （实测 `git status --porcelain cardkey` 为空）。本文件记录与 cardkey 分道扬镳的决策、容量数字与
 迁移规矩；下文所有 `文件:行号` 都指本仓库当前工作树。
@@ -35,7 +37,7 @@ B1 只做骨架改名（整目录复制 + 改文件名/路径名，不改行为�
 
 ### 1.3 payload 源盘也要放得下（B1 发现的容量约束）
 
-验证机把 `/payload` 复制到软盘（`itn-pass/server/auth/itnpass_config.lua:15` 的
+验证机把 `/payload` 复制到软盘（`itn-pass/server/auth/itnpass_config.lua:23` 的
 `payload_dir = "/payload"`；读取处 `itn-pass/server/system/disk_writer.lua:208` 起），而 `/payload`
 位于验证机自己的电脑盘上，同样受 1,000,000 B 限制。**1,395,385 B 的 pyromputer-os payload 放不进
 验证机的电脑盘（超 395,385 B）。**
@@ -59,7 +61,7 @@ B1 只做骨架改名（整目录复制 + 改文件名/路径名，不改行为�
 | `pyromputer-os` | 两张软盘（part1 + part2） | 2 次（一张盘一次事务） | `default_uses = 2` | 定案（数字见第 1 节） |
 | `pyroet-os` | 单张软盘（裁剪后 ≤1,228,800 B 才成立） | 1 次 | 待测量后回填 | 待裁剪后测量 |
 
-- `default_uses = 2` 出处：`itn-pass/server/auth/itnpass_config.lua:16`；管理台缺省值读同一个键
+- `default_uses = 2` 出处：`itn-pass/server/auth/itnpass_config.lua:24`；管理台缺省值读同一个键
   （`itn-pass/server/system/itnpass_admin.lua:218`）。一次成功写盘扣 1
   （`itn-pass/server/auth/itnpass_store.lua:426-452` 的 `M.commit`，
   `rec.uses_left = rec.uses_left - 1` 在 `:449`），所以一张卡密 = 2 次写盘 = pyromputer-os
@@ -77,7 +79,7 @@ B1 只做骨架改名（整目录复制 + 改文件名/路径名，不改行为�
 - 频道：**33**。
 - **单一来源（B3）**：协议名与频道只在 `itn-pass/common/itnpass_net.lua` 里写一次
   （`PROTOCOL = "itnpass_v1"` / `CHANNEL  = 33`）。站端配置表
-  `itn-pass/server/auth/itnpass_config.lua:9-10` 用 `dofile("/itnpass_net.lua")` 的
+  `itn-pass/server/auth/itnpass_config.lua:17-18` 用 `dofile("/itnpass_net.lua")` 的
   `net.CHANNEL` / `net.PROTOCOL` 填 `channel` / `protocol`；终端两处读同一个文件
   （`itn-pass/terminal/system/netcheck.lua:11-12`、
   `itn-pass/terminal/auth/itnpass_client.lua:12-13`）。三处不再各写一个数字，改频道只需要改一个文件。
@@ -104,7 +106,7 @@ B1 只做骨架改名（整目录复制 + 改文件名/路径名，不改行为�
 - 缓解（已在代码里，B1 未改行为）：
   1. **写盘额度**：每成功写盘扣 1，用完即废（`itn-pass/server/auth/itnpass_store.lua:426-452`，
      扣次在 `:449`）；
-  2. **预留有效期**：`reservation_ttl_ms = 300000`（5 分钟，`itn-pass/server/auth/itnpass_config.lua:19`；
+  2. **预留有效期**：`reservation_ttl_ms = 300000`（5 分钟，`itn-pass/server/auth/itnpass_config.lua:27`；
      读取处 `itn-pass/server/auth/itnpass_store.lua:392`），预留过期自动回收；
   3. **管理台撤销/恢复**：`itn-pass/server/auth/itnpass_store.lua:701`（`M.revoke`）、`:743`
      （`M.unrevoke`），入口 `itn-pass/server/system/itnpass_admin.lua:197-198`。
@@ -147,7 +149,7 @@ PSK 签名/验签是 Sentinel 的认证范畴（`sentinel/terminal/auth/psk.lua:
 | `/auth/cardkey_server_id` | `/auth/itnpass_station_id` | `itn-pass/server/system/itnpass_server.lua:16` |
 | `/auth/cardkey_server.log` | `/auth/itnpass_server.log` | `itn-pass/server/system/itnpass_server.lua:14` |
 | `/auth/cardkey_fault.flag` | `/auth/itnpass_fault.flag` | `itn-pass/server/system/itnpass_server.lua:15` |
-| `/auth/admin.db` | `/auth/itnpass_admin.db` | `itn-pass/server/auth/itnpass_config.lua:13`（`admin_file`）、`itn-pass/server/system/itnpass_admin.lua:14`（缺省值） |
+| `/auth/admin.db` | `/auth/itnpass_admin.db` | `itn-pass/server/auth/itnpass_config.lua:21`（`admin_file`）、`itn-pass/server/system/itnpass_admin.lua:14`（缺省值） |
 | `/lock.flag` | `/auth/itnpass_lock.flag` | `itn-pass/terminal/startup.lua:17`（写）、`:32-33`（查/删） |
 
 - 锁死文件从根目录挪到 `/auth/` 的部署前提：终端盘上必须有 `/auth/` 目录。按文档部署时必然存在
@@ -178,7 +180,7 @@ PSK 签名/验签是 Sentinel 的认证范畴（`sentinel/terminal/auth/psk.lua:
 - `itn-pass/README.md` 全量重写为 16 节：定位与角色、部署布局（站端/终端两张盘）、协议与频道
   （`itnpass_v1` / 33 / `netcheck` 唯一站端判定）、扣次语义、格式与密码学（含 `"|cardkey|"` 盐
   不可改）、写盘规则、终端界面、管理台、配置参考、运维（`ITNP_*` 日志与 `.corrupt-*` 保留策略）、
-  故障排查、安全说明、离线测试（基线 488/0/29）、构建与发布、文件清单、部署顺序清单。
+  故障排查、安全说明、离线测试（基线 702/0/40）、构建与发布、文件清单、部署顺序清单。
 - 界面字面量按源码照抄：`InterTeamNet Access` / `ITN-Pass Disk Writer` / `ITN-Pass Station` /
   `# ITN-Pass batch`；`netcheck` 的 `no card key server detected` 是未改名的代码字面量，README
   照抄并在 3.2 注明了这一点。
@@ -193,7 +195,7 @@ PSK 签名/验签是 Sentinel 的认证范畴（`sentinel/terminal/auth/psk.lua:
   `sha256(pepper|cardkey|label)` 的卡密派生，改了会让同一 pepper 派生出不同卡密、已入库指纹全部失配
   （已发出的卡密全部失效）。将来若要改，必须与"换库/重发卡"一起宣布。
 - **导出口录 `/cardkeys` 与文件名 `cardkeys_<stamp>.txt`**（`itn-pass/server/auth/itnpass_store.lua:625-633`，
-  配置键 `export_dir` 在 `itn-pass/server/auth/itnpass_config.lua:14`）：**B3 保留**（运维脚本与已拷出的
+  配置键 `export_dir` 在 `itn-pass/server/auth/itnpass_config.lua:22`）：**B3 保留**（运维脚本与已拷出的
   批次文件都依赖这两个名字；它们不是品牌文案）。
 - **导出文件头**：B1 保留 `# CardKey batch`（`itn-pass/server/auth/itnpass_store.lua:586`），**B3 改成
   `# ITN-Pass batch`**。它只是 `#` 开头的注释行，解析侧只看能被 `normalize` 认出的卡密行，旧批次文件
@@ -224,7 +226,7 @@ itn-pass/DECISIONS.md
 LICENSE     （仓库根，zip 根目录）
 ```
 
-- 理由：`tests/` 是开发材料（12 个文件、约 2,800 行、解包 125,572 B），解包到访客盘上既占
+- 理由：`tests/` 是开发材料（N2 后 13 个文件、4,447 行、解包 178,511 B），解包到访客盘上既占
   空间又没有可用性——`run-tests.ps1` 依赖 Windows + `C:\Program Files\CraftOS-PC\CraftOS-PC_console.exe`，
   在真实终端/站端上直接跑必然报错。
 - 实现：`tools/build_release.py` 的 `EXCLUDE_FROM_RELEASE = {"itn-pass": ("tests/",)}`，在 `build()`
@@ -232,7 +234,7 @@ LICENSE     （仓库根，zip 根目录）
   它的包照旧包含测试（不做全局排除，否则会改变 sentinel 现有产物的字节）。实测用 `git show
   HEAD:tools/build_release.py` 旧脚本与当前脚本各构建一遍 sentinel/cardkey/pylib：三份 sha256 完全
   相同，sentinel 包仍含 `sentinel/tests/`。
-- 结论：B6 之后 31 → **19 个成员**（16 lua + README + DECISIONS + LICENSE），压缩后体积
+- 结论：N2 之后 33 → **20 个成员**（17 lua + README + DECISIONS + LICENSE），压缩后体积
   85,517 B → 约 60 KB。精确字节不写死：README 与本文件自己也在包内，记一个数字会让文档自身
   变成下一次构建的差异源。
 
@@ -265,6 +267,14 @@ B3 给所有 tag 加 `ITNP_` 前缀，避免与 cardkey / Sentinel 的日志混�
 | `WRITE!` | `ITNP_WRITE` | 写盘完成（文件/目录/字节统计） |
 | `COMMIT!` | `ITNP_COMMIT` | 扣次提交完成 |
 | `ERROR` | `ITNP_ERROR` | 内部错误 / fault flag（同一行也写进日志） |
+| — | `ITNP_FREE_VERIFY` | `free` 模式验证直接放行（默认 `ITNP_FREE_VERIFY terminal=7 uses=none`） |
+| — | `ITNP_FREE_WRITE` | `free` 模式写盘：`ok=1 files=.. dirs=.. bytes=..`，失败 `ok=0 reason=.. detail=..` |
+| — | `ITNP_FREE_SESSION` | 终端侧写 `/auth/itnpass_mode.log`：跳过登录进菜单 |
+| — | `ITNP_CONFIG_BAD` | `/auth/itnpass_mode.log`：配置 `mode` 非法，已按 `pass` 处理 |
+| — | `ITNP_MODE_BAD` | `/auth/itnpass_mode.log`：`/auth/itnpass_mode.txt` 非法，已忽略 |
+
+运行模式诊断（`ITNP_FREE_SESSION` / `ITNP_CONFIG_BAD` / `ITNP_MODE_BAD`）写在单独的
+`/auth/itnpass_mode.log`，不混进服务日志（终端也可能写，见第 13 节）。
 
 - 测试期望同步换值：`itn-pass/tests/t_server.lua` 的 14 处日志断言（`log():find` / `text:find`），
   断言一条没删。
@@ -274,10 +284,63 @@ B3 给所有 tag 加 `ITNP_` 前缀，避免与 cardkey / Sentinel 的日志混�
   已经不会与 cardkey / Sentinel 的 tag 撞名。
 - 管理台不写日志文件（只打印屏幕），它的输出文案见第 9 节与 B3 报告，没有 tag。
 
-## 13. 修订记录
+## 13. 运行模式（N2：`pass` / `free`）
+
+### 13.1 定位
+
+itn-pass 是**装机/分发凭证**系统，不是网络准入系统：它只回答"这张盘能不能写、能写几次"。
+**本项目不做入网许可、不做设备入网鉴权**；网络层只做连接（以及将来的加密），不做准入判定。
+`pass`（默认，需要凭证）与 `free`（公开免费，不需要凭证）是同一个系统的两种运行形态，
+不是两套产品。
+
+### 13.2 解析优先级（三处读取方完全一致）
+
+`itn-pass/common/itnpass_mode.lua`（部署为 `/itnpass_mode.lua`，站端与终端都必须放）是唯一解析器：
+
+1. `/auth/itnpass_mode.txt` 存在且内容合法 → 用它（最高优先，"盘上切换"靠它）；
+2. 否则用 `/auth/itnpass_config.lua` 的 `mode` 字段（默认 `"pass"`，配置表在加载时即调用解析器）；
+3. 否则内置默认 `"pass"`。
+
+读取方分别是：站端服务（`itnpass_server.lua` 的局部函数 `modeOf`）、终端 kernel 与 client
+（`itnpass_mode.current()`）、管理台首页（`itnpass_admin.lua` 的 `modeText`）。
+
+- 合法值是且只是小写字面量 `pass` / `free`；`parse()` 忽略空行与 `#` 注释，并要求整个文件只
+  出现一个有效值（`pass` / `free` 两行冲突视为非法）。
+- **fail-safe 规则**：配置值非法 → 记 `ITNP_CONFIG_BAD key=mode`（写 `/auth/itnpass_mode.log`）
+  并按 `pass` 处理；覆盖文件非法 → 记 `ITNP_MODE_BAD` 并保持配置值。写错的唯一后果是继续收费，
+  不会误放开。
+- 模式在启动时解析一次，改文件必须重启站端/终端才生效。
+
+### 13.3 free 模式只影响"是否需要凭证"
+
+| 环节 | `pass` | `free` |
+| --- | --- | --- |
+| 终端登录 | 凭证输入界面 | 跳过；合成身份 `name="guest"`、`code=""`、无次数；日志 `ITNP_FREE_SESSION` |
+| `verify_request` | `store.lookup` + 失败计数/锁 | 直接成功，**不碰 store**；回 `free=true`、`mode="free"`，省略 `uses_left`/`uses_total` |
+| `write_request` | reserve → write → commit/release，扣 1 次 | **跳过 reserve/commit/release 与扣次**；仍走完整 `disk_writer` 事务 |
+| 写盘校验 / 失败回滚 / 空间预检 | 照旧 | **照旧** |
+| `netcheck` | 开机检查，失败锁死 | **照旧**（盘仍由站端写，必须先连通） |
+| 管理台首页 | `MODE: pass` | `MODE: free` |
+| 服务日志 | `ITNP_CHECK` / `ITNP_GRANT` / `ITNP_WRITE` / `ITNP_COMMIT` | `ITNP_FREE_VERIFY` / `ITNP_FREE_WRITE ok=.. files=.. bytes=..` |
+
+**free 模式不扣次**是设计结论，不是实现巧合：没有库记录可扣，也没有"额度"这个概念；
+`reservation_id` 仍然必须存在，只是不再对应任何预留记录。
+
+### 13.4 两端必须一致
+
+站端 `pass` + 终端 `free`：终端发空 `code`，站端回 `empty code`，写盘失败且不扣次（盘不受影响）。
+站端 `free` + 终端 `pass`：终端照旧先要凭证，站端不查库直接放行。切换步骤见 README 2.5。
+
+### 13.5 为什么默认是 `pass`
+
+`free` 等于"任何能连到网络 A 的终端都能无限写盘"，没有身份、没有配额。默认值选 `pass`，让
+"忘记配置/配置写坏"的结果停留在保守的一侧，而不是把站端变成公共写盘机。
+
+## 14. 修订记录
 
 | 批次 | 变更 |
 | --- | --- |
 | B1 | 从 `cardkey/` 硬分支出 `itn-pass/`：6 个文件改名、运行时路径加 `itnpass_` 前缀、行为零变化；本文件建立。 |
 | B3 | 协议 `itnpass_v1` / 频道 33 收敛到 `common/itnpass_net.lua`（新文件，部署为 `/itnpass_net.lua`）；服务端日志 tag 统一 `ITNP_*`（第 12 节）；界面标题改 `ITN-Pass Disk Writer` / `InterTeamNet Access` / `ITN-Pass Station`；导出头改 `# ITN-Pass batch`；本文件的行号引用按当前工作树刷新。 |
 | B6 | README 全量重写（16 节，中文，覆盖两条盘的部署布局、协议与 `netcheck` 判定、扣次语义、`ITNP_*` 日志、`.corrupt-*` 保留策略、离线测试 488/0/29、构建发布与安全风险）；发布包**排除 `tests/`**（`build_release.py` 的 `EXCLUDE_FROM_RELEASE`，仅 itn-pass 生效，31→19 成员，见 §10.1）；CI 接 itn-pass（dispatch options / tag 名单 / 分支循环 / `case` 分派）；根 `README.md` 三处同步。 |
+| N2 | 新增 `common/itnpass_mode.lua`（部署 `/itnpass_mode.lua`）+ 配置键 `mode`（默认 `"pass"`），解析优先级 = `/auth/itnpass_mode.txt` > 配置 > 默认，非法值 **fail-safe 到 `pass`**（日志 `ITNP_CONFIG_BAD` / `ITNP_MODE_BAD`，写 `/auth/itnpass_mode.log`）；`free` 模式：终端 kernel 跳过登录（合成 `guest`、`ITNP_FREE_SESSION`）、client 允许空 `code`、服务端 `verify` 不查库、`write` 不预留不扣次但照走 `disk_writer`（`ITNP_FREE_WRITE ok=.. files=.. bytes=..`）、管理台首页加 `MODE: pass` 与 `MODE: free`；写盘校验/回滚/空间预检/`netcheck` 在两种模式下完全一致（见 §13）。README 措辞统一改为"装机/分发凭证"（37 处词替换，不再出现旧称）；新增 2.5 运行模式一节；新增 `tests/t_mode.lua`（214 断言 / 11 组，离线 488/0/29 → **702/0/40**），`run-tests.ps1` 多 stage `/itnpass_mode.lua` 与 `tests/terminal_startup.lua`。 |

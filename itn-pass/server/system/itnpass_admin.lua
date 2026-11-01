@@ -19,6 +19,19 @@ local function pause()
     read()
 end
 
+-- One line the console always shows, so an operator can tell at a glance
+-- whether the station is charging card keys (pass) or open to everyone (free).
+-- Exported as M.modeText so the offline suite can pin it down directly.
+local function modeText(conf)
+    local mode = "pass"
+    if type(conf) == "table" and conf.mode == "free" then
+        mode = "free"
+    end
+    return "MODE: " .. mode
+end
+
+M.modeText = modeText
+
 local function clearScreen()
     term.clear()
     term.setCursorPos(1, 1)
@@ -177,6 +190,7 @@ end
 local function showHome(conf, store, writer)
     clearScreen()
     print("ITN-Pass Station")
+    print(modeText(conf))
     local stats = store.stats()
     print("usable=" .. tostring(stats.alive) .. "  remaining=" .. tostring(stats.remaining))
     local fault = faultText()
