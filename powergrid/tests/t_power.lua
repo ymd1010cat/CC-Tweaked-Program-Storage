@@ -412,22 +412,22 @@ H.eq(P.read({ path = "/tests/parse_legacy_multi.ini" }), 3,
 local keyvalueText = "# config\n" ..
     "\n" ..
     "mode = 1\n" ..
-    "watchdog.low=3\n" ..
-    "watchdog.enabled = false\n" ..
+    "custom.extra=3\n" ..
+    "custom.flag = false\n" ..
     "custom.thing=hello=world\n"
 writeText("/tests/parse_kv.ini", keyvalueText)
 parsed = P.parse(keyvalueText)
 H.eq(parsed.format, "keyvalue", "key=value files are detected")
 H.eq(parsed.raw["mode"], "1", "spaces around the key and value are trimmed")
-H.eq(parsed.raw["watchdog.low"], "3", "a plain value is kept")
-H.eq(parsed.raw["watchdog.enabled"], "false", "spaces around the value are trimmed")
+H.eq(parsed.raw["custom.extra"], "3", "a plain value is kept")
+H.eq(parsed.raw["custom.flag"], "false", "spaces around the value are trimmed")
 H.eq(parsed.raw["custom.thing"], "hello=world", "values may contain '='")
 H.eq(P.read({ path = "/tests/parse_kv.ini" }), 1, "the mode= key is read")
 
 writeText("/tests/parse_dup.ini", "mode=1\nmode=2\n")
 H.eq(P.read({ path = "/tests/parse_dup.ini" }), 2, "the last duplicate wins")
 
-writeText("/tests/parse_no_mode.ini", "watchdog.low=3\n")
+writeText("/tests/parse_no_mode.ini", "custom.extra=3\n")
 local noModeValue, noModeCode = P.read({ path = "/tests/parse_no_mode.ini" })
 H.eq(noModeValue, nil, "a key=value file without mode has no value")
 H.eq(noModeCode, "MODE_KEY_MISSING", "a key=value file without mode is flagged")
@@ -471,33 +471,33 @@ H.eq(P.parse(nil).format, "missing", "nil text is the missing format")
 H.group("power-write")
 local fidelityText = "# keep me\n" ..
     "\n" ..
-    "watchdog.low=3\n" ..
+    "custom.extra=3\n" ..
     "mode=1\n" ..
     "custom.thing=hello\n" ..
-    "watchdog.restore=false\n"
+    "custom.flag=false\n"
 writeText("/tests/write_kv.ini", fidelityText)
 H.eq(P.apply(3, { path = "/tests/write_kv.ini", redstone = newRedstone(),
     peripheral = newPeripheral(false) }), true, "apply succeeds on key=value")
 local expectedFidelity = "# keep me\n" ..
     "\n" ..
-    "watchdog.low=3\n" ..
+    "custom.extra=3\n" ..
     "mode=3\n" ..
     "custom.thing=hello\n" ..
-    "watchdog.restore=false\n"
+    "custom.flag=false\n"
 H.eq(readText("/tests/write_kv.ini"), expectedFidelity,
     "only the mode line changes, comments/unknown/order kept")
 H.eq(P.read({ path = "/tests/write_kv.ini" }), 3, "the new mode reads back")
 
-writeText("/tests/write_no_mode.ini", "# template\nwatchdog.low=4\n")
+writeText("/tests/write_no_mode.ini", "# template\ncustom.extra=4\n")
 P.apply(2, { path = "/tests/write_no_mode.ini", redstone = newRedstone(),
     peripheral = newPeripheral(false) })
-H.eq(readText("/tests/write_no_mode.ini"), "# template\nwatchdog.low=4\nmode=2\n",
+H.eq(readText("/tests/write_no_mode.ini"), "# template\ncustom.extra=4\nmode=2\n",
     "a missing mode line is appended after the other lines")
 
-writeText("/tests/write_spaces.ini", "  mode = 1  \nwatchdog.low=2\n")
+writeText("/tests/write_spaces.ini", "  mode = 1  \ncustom.extra=2\n")
 P.apply(0, { path = "/tests/write_spaces.ini", redstone = newRedstone(),
     peripheral = newPeripheral(false) })
-H.eq(readText("/tests/write_spaces.ini"), "mode=0\nwatchdog.low=2\n",
+H.eq(readText("/tests/write_spaces.ini"), "mode=0\ncustom.extra=2\n",
     "a spaced mode line is normalised, other lines untouched")
 
 writeText("/tests/write_comments.ini", "# only comments\n")
@@ -506,10 +506,10 @@ P.apply(2, { path = "/tests/write_comments.ini", redstone = newRedstone(),
 H.eq(readText("/tests/write_comments.ini"), "# only comments\nmode=2\n",
     "a comment-only file keeps its comments and gains a mode line")
 
-writeText("/tests/write_crlf.ini", "mode=1\r\nwatchdog.low=3\r\n")
+writeText("/tests/write_crlf.ini", "mode=1\r\ncustom.extra=3\r\n")
 P.apply(2, { path = "/tests/write_crlf.ini", redstone = newRedstone(),
     peripheral = newPeripheral(false) })
-H.eq(readText("/tests/write_crlf.ini"), "mode=2\r\nwatchdog.low=3\r\n",
+H.eq(readText("/tests/write_crlf.ini"), "mode=2\r\ncustom.extra=3\r\n",
     "CRLF line endings are preserved")
 
 writeText("/tests/write_legacy.ini", "1\n")
@@ -532,67 +532,6 @@ H.eq(P.apply(2, { path = "/tests/write_dir", redstone = newRedstone(),
     peripheral = newPeripheral(false) }), nil, "a directory path cannot be written")
 H.eq(select(2, P.apply(2, { path = "/tests/write_dir", redstone = newRedstone(),
     peripheral = newPeripheral(false) })), "CONFIG_WRITE_FAILED", "the write failure code")
-
--- Ini watchdog section -------------------------------------------------------
-
-H.group("power-config")
-local configText = "# monitoring\n" ..
-    "mode=1\n" ..
-    "watchdog.enabled=true\n" ..
-    "watchdog.low=3\n" ..
-    "watchdog.high=12\n" ..
-    "watchdog.window=120\n" ..
-    "watchdog.poll=5\n" ..
-    "watchdog.input_side= top \n" ..
-    "watchdog.alarm_side=right\n" ..
-    "watchdog.switch_to=3\n" ..
-    "watchdog.restore=false\n" ..
-    "custom.thing=hello\n" ..
-    "stray line\n"
-writeText("/tests/config_full.ini", configText)
-local raw, info = P.config({ path = "/tests/config_full.ini" })
-H.eq(raw.enabled, "true", "config reads enabled")
-H.eq(raw.low, "3", "config reads low")
-H.eq(raw.high, "12", "config reads high")
-H.eq(raw.window, "120", "config reads window")
-H.eq(raw.poll, "5", "config reads poll")
-H.eq(raw.input_side, "top", "config trims the input side")
-H.eq(raw.alarm_side, "right", "config reads the alarm side")
-H.eq(raw.switch_to, "3", "config reads switch_to")
-H.eq(raw.restore, "false", "config reads restore")
-H.eq(info.format, "keyvalue", "config reports the format")
-H.num(info.mode, 1, "config reports the mode")
-H.eq(info.mode_error, nil, "a valid config has no mode error")
-H.eq(info.path, "/tests/config_full.ini", "config reports the path")
-H.eq(#info.unknown, 1, "one unknown key is reported")
-H.eq(info.unknown[1].key, "custom.thing", "the unknown key is named")
-H.eq(info.unknown[1].value, "hello", "the unknown value is kept")
-H.eq(#info.bad_lines, 1, "the malformed line is reported")
-
-local rawMissing, infoMissing = P.config({ path = "/tests/config_missing.ini" })
-H.eq(countKeysLua(rawMissing), 0, "a missing ini has no raw options")
-H.eq(infoMissing.format, "missing", "a missing ini is reported as missing")
-H.eq(infoMissing.mode_error, "CONFIG_FILE_MISSING", "a missing ini keeps the archived code")
-
-local rawLegacy, infoLegacy = P.config({ path = "/tests/parse_legacy.ini" })
-H.eq(countKeysLua(rawLegacy), 0, "a legacy ini has no watchdog options")
-H.eq(infoLegacy.format, "legacy", "a legacy ini is reported as legacy")
-H.num(infoLegacy.mode, 1, "a legacy ini still reports the mode")
-
-local rawBad, infoBad = P.config({ path = "/tests/parse_no_mode.ini" })
-H.eq(rawBad.low, "3", "config returns values even without a mode")
-H.eq(infoBad.mode_error, "MODE_KEY_MISSING", "a mode-less key=value file is flagged")
-
-writeText("/tests/config_invalid.ini", "mode=1\nwatchdog.low=abc\n")
-local rawInvalid = select(1, P.config({ path = "/tests/config_invalid.ini" }))
-H.eq(rawInvalid.low, "abc", "config hands raw strings to the validator")
-
-H.eq(countKeysLua(P.WATCHDOG_KEYS), 9, "the driver mapping has nine keys")
-H.eq(P.WATCHDOG_KEYS.low, "watchdog.low", "the low key name")
-H.eq(P.WATCHDOG_KEYS.restore, "watchdog.restore", "the restore key name")
-H.eq(P.MODE_KEY, "mode", "the mode key name")
-
--- Fault tolerance: a broken config never stops the program -------------------
 
 H.group("power-boot")
 local missingBoot = P.boot({ path = "/tests/boot_missing.ini" })
@@ -625,7 +564,7 @@ H.eq(rangeBoot.code, "MODE_OUT_OF_RANGE", "an out of range mode is reported")
 H.num(rangeBoot.mode, 1, "an out of range mode boots with the default mode")
 H.num(rangeBoot.value, 9, "the parsed value is kept for the log")
 
-writeText("/tests/boot_nokey.ini", "watchdog.low=3\n")
+writeText("/tests/boot_nokey.ini", "custom.extra=3\n")
 local keyBoot = P.boot({ path = "/tests/boot_nokey.ini" })
 H.eq(keyBoot.code, "MODE_KEY_MISSING", "a key=value file without mode is reported")
 H.num(keyBoot.mode, 1, "a mode-less file boots with the default mode")
@@ -667,17 +606,16 @@ P.apply(P.boot({ path = "/tests/boot_recreate_empty.ini" }).mode, {
 H.eq(readText("/tests/boot_recreate_empty.ini"), "1\n",
     "an empty file is rebuilt as a bare number")
 
-writeText("/tests/boot_recreate_kv.ini", "mode=9\nwatchdog.low=4\n")
+writeText("/tests/boot_recreate_kv.ini", "mode=9\ncustom.extra=4\n")
 local kvBoot = P.boot({ path = "/tests/boot_recreate_kv.ini" })
 H.eq(kvBoot.code, "MODE_OUT_OF_RANGE", "the key=value fixture is out of range")
 H.num(kvBoot.mode, 1, "the key=value fixture boots the default mode")
 P.apply(kvBoot.mode, { path = "/tests/boot_recreate_kv.ini",
     redstone = newRedstone(), peripheral = newPeripheral(false) })
-H.eq(readText("/tests/boot_recreate_kv.ini"), "mode=1\nwatchdog.low=4\n",
+H.eq(readText("/tests/boot_recreate_kv.ini"), "mode=1\ncustom.extra=4\n",
     "the recovery write only fixes the mode line")
-local rebuiltRaw, rebuiltInfo = P.config({ path = "/tests/boot_recreate_kv.ini" })
-H.num(rebuiltInfo.mode, 1, "the rebuilt key=value file parses")
-H.eq(rebuiltRaw.low, "4", "the watchdog keys survived the recovery")
+H.eq(P.read({ path = "/tests/boot_recreate_kv.ini" }), 1,
+    "the rebuilt key=value file reads back as mode 1")
 
 -- A good config is never rewritten by a boot: read only.
 writeText("/tests/boot_untouched.ini", "# keep\nmode=3\n")

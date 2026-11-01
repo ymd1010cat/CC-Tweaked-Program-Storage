@@ -1,12 +1,10 @@
--- t_libraries.lua - missing library handling for startup.lua and watchdog_app.lua.
+-- t_libraries.lua - missing library handling for startup.lua.
 --
 -- The real startup.lua program is executed with an injected require/shell/term,
 -- so a missing library is simulated without deleting any file. Every case stops
 -- in the missing-library guard before the menu loop, so the suite never hangs.
 
 local H = ...
-
-local A = H.app
 
 local function newBsod()
     local b = { calls = {} }
@@ -196,49 +194,3 @@ H.eq(countIn(src, "bsod.show("), 2,
     "two blue screens: missing libraries and a write failure")
 H.eq(countIn(src, "MISSING_LIBRARY name="), 2,
     "the per-library token is built in the guard and in the log loop")
-
--- Watchdog degradation.
-
-H.group("watchdog-missing-libs")
-local logP = newLogger()
-local appP = A.new({
-    config = { low = 2, high = 10, window = 10, poll = 10 },
-    redstone = { setOutput = function() return true end },
-    logger = logP,
-    clock = function() return 0 end,
-    read = function() return 15 end,
-    power = false,
-    watchdog = H.watchdog,
-})
-H.eq(appP.power_fallback, true, "the app records the power fallback")
-H.eq(appP.logger_fallback, false, "an injected logger is not a fallback")
-H.eq(A.start(appP), "running", "a missing power module still starts")
-H.eq(countLines(logP, "MISSING_LIBRARY name=power fallback=alarm_only"), 1,
-    "the power degradation is logged")
-H.eq(countLines(logP, "WATCHDOG_SWITCH_FAIL"), 0,
-    "no switch failure is logged before any alarm")
-
-local savedTerm = _G.term
-local bufL = newTermBuffer()
-_G.term = bufL
-local appL = A.new({
-    config = { low = 2, high = 10, window = 10, poll = 10 },
-    redstone = { setOutput = function() return true end },
-    logger = false,
-    clock = function() return 0 end,
-    read = function() return 15 end,
-    power = false,
-    watchdog = H.watchdog,
-})
-local startMode = A.start(appL)
-_G.term = savedTerm
-
-H.eq(startMode, "running", "a missing logger still starts")
-H.eq(appL.logger_fallback, true, "the app records the logger fallback")
-H.eq(appL.logger, A.PRINT_LOGGER, "the built-in printer took over")
-H.contains(bufL.text, "MISSING_LIBRARY name=logger fallback=print",
-    "the logger degradation is printed")
-H.contains(bufL.text, "MISSING_LIBRARY name=power fallback=alarm_only",
-    "the power degradation is printed too")
-H.contains(bufL.text, "WATCHDOG_START", "the start line is still printable")
-H.contains(bufL.text, "[info]", "the fallback keeps the logger tag shape")

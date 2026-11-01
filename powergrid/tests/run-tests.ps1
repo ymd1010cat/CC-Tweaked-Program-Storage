@@ -2,11 +2,11 @@
 #
 #   pwsh -NoProfile -File powergrid/tests/run-tests.ps1
 #
-# Stages the watchdog modules (watchdog.lua, watchdog_app.lua, logger.lua) plus
-# the archived controller startup.lua and a PowerGrid.ini fixture on a throwaway
-# headless CraftOS-PC computer, runs tests/startup.lua and parses the
-# OFFLINE_* / TEST_FAIL markers. No game, redstone, printer or second computer
-# is involved: the suite injects fake redstone/logger/settings/clock objects.
+# Stages power.lua, switch.lua and logger.lua plus the archived controller
+# startup.lua and a PowerGrid.ini fixture on a throwaway headless CraftOS-PC
+# computer, runs tests/startup.lua and parses the OFFLINE_* / TEST_FAIL markers.
+# No game, redstone, printer or second computer is involved: the suite injects
+# fake redstone/speaker/clock objects.
 #
 # The staging directory (powergrid/.tests by default) is removed after a passing
 # run and kept for debugging when the run fails; -KeepStaging keeps it even on
@@ -16,7 +16,7 @@
 #   * the new .lua/.ps1 files are pure ASCII (the archived bsod.lua and README.md
 #     are pre-existing and may contain Chinese, so they are not gated);
 #   * the staged PowerGrid.ini is byte-identical after the run and no .settings
-#     file was created - the watchdog must not change the power mode.
+#     file was created - the switch front end must not touch the repo fixture.
 param(
     [int]$TimeoutSec = 300,
     [string]$DataDir = $env:POWERGRID_TEST_DIR,
@@ -51,18 +51,17 @@ foreach ($sub in @('tests', 'logs')) {
     New-Item -ItemType Directory -Force (Join-Path $computer $sub) | Out-Null
 }
 
-# Deploy layout: the two watchdog modules and logger.lua at the computer root.
+# Deploy layout: power.lua, switch.lua and logger.lua at the computer root.
 # The controller startup.lua is copied under tests/startup_source.lua as a
 # fixture, so the suite can assert it delegates the power writes to power.lua
 # (and keeps its printer/version behaviour) without the runner having to replace
 # its own /startup.lua with it.
 $copies = [ordered]@{
-    'logger.lua'       = 'logger.lua'
-    'power.lua'        = 'power.lua'
-    'watchdog.lua'     = 'watchdog.lua'
-    'watchdog_app.lua' = 'watchdog_app.lua'
-    'PowerGrid.ini'    = 'PowerGrid.ini'
-    'startup.lua'      = 'tests\startup_source.lua'
+    'logger.lua'    = 'logger.lua'
+    'power.lua'     = 'power.lua'
+    'switch.lua'    = 'switch.lua'
+    'PowerGrid.ini' = 'PowerGrid.ini'
+    'startup.lua'   = 'tests\startup_source.lua'
 }
 foreach ($pair in $copies.GetEnumerator()) {
     $source = Join-Path $root $pair.Key
@@ -82,7 +81,7 @@ Copy-Item (Join-Path $testsDir 'startup.lua') (Join-Path $computer 'startup.lua'
 # Static gate: every .lua/.ps1 this project adds is pure ASCII (repo rule).
 $staticProblems = @()
 $gateFiles = @()
-foreach ($name in @('power.lua', 'watchdog.lua', 'watchdog_app.lua')) {
+foreach ($name in @('power.lua', 'switch.lua')) {
     $gateFiles += (Join-Path $root $name)
 }
 foreach ($file in (Get-ChildItem -Path $testsDir -File |
@@ -99,7 +98,7 @@ foreach ($path in $gateFiles) {
         $staticProblems += "non-ASCII byte in $path"
     }
 }
-foreach ($required in @('power.lua', 'watchdog.lua', 'watchdog_app.lua',
+foreach ($required in @('power.lua', 'switch.lua',
         'tests\run.lua', 'tests\startup.lua', 'tests\startup_source.lua',
         'PowerGrid.ini')) {
     if (-not (Test-Path (Join-Path $computer $required))) {

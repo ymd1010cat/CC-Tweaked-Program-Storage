@@ -10,9 +10,9 @@ local H = dofile("/tests/harness.lua")
 H.openLog("/logs/suite.log")
 H.emit("POWERGRID_SUITE start")
 
--- watchdog_app.lua autostarts only when it is the running program; this flag
--- makes a dofile from a test always load the module instead.
-_G.POWERGRID_WATCHDOG_TEST = true
+-- switch.lua autostarts only when it is the running program; this flag makes a
+-- dofile from a test always load the module instead.
+_G.POWERGRID_SWITCH_TEST = true
 
 local function readAll(path)
     local f = fs.open(path, "r")
@@ -25,42 +25,6 @@ end
 local iniBefore = readAll("/PowerGrid.ini")
 H.note("PowerGrid.ini before: " .. tostring(iniBefore and iniBefore:gsub("[\r\n]+", "|")))
 
-local okW, watchdog = pcall(dofile, "/watchdog.lua")
-H.group("module-load")
-H.ok(okW, "watchdog.lua loads", H.errText(watchdog))
-H.isType(watchdog, "table", "watchdog.lua returns a table")
-if type(watchdog) == "table" then
-    H.isType(watchdog.new, "function", "watchdog.new exported")
-    H.isType(watchdog.sample, "function", "watchdog.sample exported")
-    H.isType(watchdog.status, "function", "watchdog.status exported")
-    H.isType(watchdog.sanitize, "function", "watchdog.sanitize exported")
-    H.isType(watchdog.DEFAULTS, "table", "watchdog.DEFAULTS exported")
-    H.eq(watchdog.VERSION, "1.0", "watchdog version")
-end
-
-local okA, app = pcall(dofile, "/watchdog_app.lua")
-H.ok(okA, "watchdog_app.lua loads", H.errText(app))
-H.isType(app, "table", "watchdog_app.lua returns a table")
-if type(app) == "table" then
-    H.isType(app.new, "function", "app.new exported")
-    H.isType(app.start, "function", "app.start exported")
-    H.isType(app.tick, "function", "app.tick exported")
-    H.isType(app.run, "function", "app.run exported")
-    H.isType(app.applyAlarm, "function", "app.applyAlarm exported")
-    H.isType(app.iniKeys, "function", "app.iniKeys exported")
-    H.isType(app.statusLine, "function", "app.statusLine exported")
-    H.isType(app.report, "function", "app.report exported")
-    H.isType(app.PRINT_LOGGER, "table", "app.PRINT_LOGGER exported")
-    H.eq(app.KEYS, nil, "no CraftOS settings key table on the driver")
-    H.eq(app.VERSION, "1.1", "watchdog_app version")
-    H.ne(app.isMainProgram(), true, "no autostart inside the suite")
-end
-
-H.watchdog = watchdog
-H.app = app
-H.readAll = readAll
-H.iniBefore = iniBefore
-
 local okP, power = pcall(dofile, "/power.lua")
 H.group("power-module-load")
 H.ok(okP, "power.lua loads", H.errText(power))
@@ -70,20 +34,36 @@ if type(power) == "table" then
     H.isType(power.read, "function", "power.read exported")
     H.isType(power.validate, "function", "power.validate exported")
     H.isType(power.describe, "function", "power.describe exported")
-    H.isType(power.config, "function", "power.config exported")
     H.isType(power.parse, "function", "power.parse exported")
     H.isType(power.setModeInText, "function", "power.setModeInText exported")
     H.isType(power.boot, "function", "power.boot exported")
     H.isType(power.errorLine, "function", "power.errorLine exported")
     H.isType(power.normalizeCode, "function", "power.normalizeCode exported")
     H.isType(power.legacyOf, "function", "power.legacyOf exported")
-    H.isType(power.WATCHDOG_KEYS, "table", "power.WATCHDOG_KEYS exported")
     H.isType(power.LEGACY_CODES, "table", "power.LEGACY_CODES exported")
     H.isType(power.DESCRIPTIONS, "table", "power.DESCRIPTIONS exported")
     H.eq(power.DEFAULT_MODE, 1, "power.DEFAULT_MODE is the main grid")
-    H.eq(power.VERSION, "1.2", "power version")
+    H.eq(power.VERSION, "1.3", "power version")
+    H.eq(power.WATCHDOG_KEYS, nil, "no watchdog section keys in power.lua")
+    H.eq(power.config, nil, "no watchdog config reader in power.lua")
 end
 H.power = power
+H.readAll = readAll
+H.iniBefore = iniBefore
+
+local okS, switch = pcall(dofile, "/switch.lua")
+H.group("switch-module-load")
+H.ok(okS, "switch.lua loads", H.errText(switch))
+H.isType(switch, "table", "switch.lua returns a table")
+if type(switch) == "table" then
+    H.isType(switch.run, "function", "switch.run exported")
+    H.isType(switch.parseArgs, "function", "switch.parseArgs exported")
+    H.isType(switch.report, "function", "switch.report exported")
+    H.isType(switch.loadPower, "function", "switch.loadPower exported")
+    H.eq(switch.VERSION, "1.0", "switch version")
+    H.ne(switch.isMainProgram(), true, "no autostart inside the suite")
+end
+H.switch = switch
 
 local names = {}
 for _, name in ipairs(fs.list("/tests") or {}) do
@@ -107,9 +87,9 @@ for _, name in ipairs(names) do
     end
 end
 
--- The controller keeps its own files: the watchdog must not have rewritten the
--- power config, and startup.lua must still keep all of its non-power behaviour
--- (the detailed delegation checks live in t_power.lua).
+-- The controller keeps its own files: the suite must not have rewritten the
+-- power config, and startup.lua must keep its behaviour (the detailed delegation
+-- checks live in t_power.lua).
 H.group("suite-integrity")
 local iniAfter = readAll("/PowerGrid.ini")
 H.eq(iniAfter, iniBefore, "PowerGrid.ini byte-identical after the suite")
@@ -126,9 +106,6 @@ H.lacks(startupSource, "configError",
     "controller startup.lua no longer treats config errors as fatal")
 H.lacks(startupSource, "watchdog",
     "controller startup.lua has no watchdog hook")
-local watchdogSrc = readAll("/watchdog.lua") or ""
-H.contains(watchdogSrc, "WATCHDOG state=", "status text lives in watchdog.lua")
-H.contains(watchdogSrc, "switch_to", "the pure module carries the switch target")
 
 H.summary()
 if H.log then

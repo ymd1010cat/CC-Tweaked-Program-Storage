@@ -1,13 +1,14 @@
 -- power.lua - PowerGrid.ini parsing/writing plus the power-mode primitive.
 --
--- PowerGrid.ini is the single configuration file for the whole project:
---   * new format: one "key=value" per line; blank lines and lines whose first
---     non-space character is '#' are comments;
---   * old format: the whole file is a bare number 0-3, which is what the
---     archived controller wrote. It keeps working: it is read as mode=<number>
---     with every watchdog setting at its default, and M.apply() keeps writing
---     the bare number for such a file, so an old controller's file is never
---     silently upgraded.
+-- This is the only configuration the project keeps: a single mode 0-3.
+-- PowerGrid.ini is either
+--   * new format: one "mode=<number>" line (blank lines and lines whose first
+--     non-space character is '#' are comments; unknown keys are preserved by
+--     writers and ignored by readers), or
+--   * old format: the whole file is a bare number, which is what the archived
+--     controller wrote. It keeps working and M.apply() keeps writing the bare
+--     number for such a file, so an old controller's file is never silently
+--     upgraded.
 --
 -- Error codes (one glance readable; M.LEGACY_CODES maps the old names):
 --   CONFIG_FILE_MISSING   file does not exist / cannot be read
@@ -15,7 +16,7 @@
 --   MODE_NOT_A_NUMBER     the mode value is not a number
 --   MODE_OUT_OF_RANGE     the mode value is outside 0-3
 --   MODE_KEY_MISSING      key=value file without a mode= line
---   CONFIG_WRITE_FAILED   the file could not be rewritten (only fatal one)
+--   CONFIG_WRITE_FAILED   the file could not be rewritten (the only fatal one)
 --
 -- A bad config never stops the program: M.boot() always returns a usable mode
 -- (M.DEFAULT_MODE = 1, Main Grid) plus the reason, so the caller logs one
@@ -26,11 +27,15 @@
 -- mode line, in place; comments, unknown keys, blank lines and the line order
 -- stay untouched. When there is no mode line yet it is appended at the end.
 --
+-- There is no software watchdog: a physical watchdog (redstone, timer, player)
+-- is expected to call M.apply() when it wants to switch the grid. See switch.lua
+-- for the tiny command line front end and README.md for the wiring notes.
+--
 -- opts (all optional, for tests): path, side, redstone, peripheral.
 
 local M = {}
 
-M.VERSION = "1.2"
+M.VERSION = "1.3"
 
 M.PATH = "PowerGrid.ini"
 M.SIDE = "back"
@@ -39,19 +44,6 @@ M.MIN = 0
 M.MAX = 3
 M.MODE_KEY = "mode"
 M.DEFAULT_MODE = 1
-
--- field name -> ini key, for the watchdog section.
-M.WATCHDOG_KEYS = {
-    enabled = "watchdog.enabled",
-    low = "watchdog.low",
-    high = "watchdog.high",
-    window = "watchdog.window",
-    poll = "watchdog.poll",
-    input_side = "watchdog.input_side",
-    alarm_side = "watchdog.alarm_side",
-    switch_to = "watchdog.switch_to",
-    restore = "watchdog.restore",
-}
 
 -- old error code -> new error code. Kept so old logs/tests can be compared.
 M.LEGACY_CODES = {
@@ -78,12 +70,6 @@ M.DESCRIPTIONS = {
     MODE_KEY_MISSING = "the file has no mode= line",
     CONFIG_WRITE_FAILED = "PowerGrid.ini could not be written",
 }
-
-local KNOWN = {}
-for _, key in pairs(M.WATCHDOG_KEYS) do
-    KNOWN[key] = true
-end
-KNOWN[M.MODE_KEY] = true
 
 -- Accept an old code and hand back the new one (anything else is returned as is).
 function M.normalizeCode(code)
@@ -354,55 +340,6 @@ function M.errorLine(code, opts)
         " file=" .. tostring(file) ..
         " fallback=" .. tostring(fallback) ..
         " detail=" .. tostring(message)
-end
-
--- Read the watchdog section. Returns the raw option table (field -> raw string,
--- only the keys that are present) plus a parse report:
---   path, format, mode, mode_error, bad_lines, unknown (sorted), entries.
--- Value validation is left to watchdog.lua's sanitize, which owns the defaults;
--- the report is what lets the driver log WATCHDOG_CONFIG_BAD lines.
-function M.config(opts)
-    if type(opts) ~= "table" then opts = {} end
-    local path = opts.path or M.PATH
-    local text = M.readText(path)
-    if text == nil then
-        return {}, {
-            path = path,
-            format = "missing",
-            mode = nil,
-            mode_error = "CONFIG_FILE_MISSING",
-            bad_lines = {},
-            unknown = {},
-            entries = {},
-        }
-    end
-
-    local parsed = M.parse(text)
-    local mode, modeError = M.modeFrom(parsed)
-
-    local raw = {}
-    for field, iniKey in pairs(M.WATCHDOG_KEYS) do
-        local value = parsed.raw[iniKey]
-        if value ~= nil then raw[field] = trim(value) end
-    end
-
-    local unknown = {}
-    for key, value in pairs(parsed.raw) do
-        if not KNOWN[key] then
-            unknown[#unknown + 1] = { key = key, value = trim(value) }
-        end
-    end
-    table.sort(unknown, function(a, b) return a.key < b.key end)
-
-    return raw, {
-        path = path,
-        format = parsed.format,
-        mode = mode,
-        mode_error = modeError,
-        bad_lines = parsed.bad_lines,
-        unknown = unknown,
-        entries = parsed.raw,
-    }
 end
 
 -- Apply a mode: rewrite the config file, drive the analog output, chirp the
