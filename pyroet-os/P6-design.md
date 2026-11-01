@@ -261,3 +261,12 @@ fatal 只有三类：`no_system`（1）、`rollback_fail`（9/14）、写盘失�
 6. **§8 的体积影响估算**：估算 `+13,600 B`、TOTAL ≈356,975；实测 P6-2 后 TOTAL **392,500 B**，P6-3 后 **401,640 B / SIZE_WARN**、`WINDOW_OK sum=601,640`（`install.set` 26 条，含 1,071 B 的根 starter）。门禁本身在 G1 已放宽为三层（硬门禁 629,145 / 目标线 349,525 / 更新窗口 900,000），见 `DECISIONS.md` §8.4。
 7. **§9.5 断言数**：估算 +700；实际 P6-2 达成 2,651 pass / 149 groups，P6-3 再 +229 断言 / +9 组到 **2,880 pass / 0 fail / 158 groups**（新增 `tests/t_layout.lua`，三个 recovery 套件按文件集模型重写）。
 8. **§10 第 2 条（是否保留槽指针兼容）在 UI 侧也关闭了（G2，2026-10-29）**：`launcher.app` 与 `settings.app` 里"先读槽指针、再读按槽 `boot.ok`/`.image`、都没有就显示 `slot ?`"的历史兜底已整段删除，两者只读全局 `/boot.ok` 的 `version` 与 `manifest_sha` 前 8 位（`manifest_sha=none` 时只显示版本）；`DECISIONS.md` §10.5/§10.6/§13.9 已按同一口径同步。
+
+## 12. §10 未决问题的结论（回写，2026-11-01；上面 §10 原样保留）
+
+§10 的三问在后续批次里都已定案，本节只记结论与出处，避免后来者按设计稿里的"未决"再去拍一次板：
+
+1. **`BACKUP_CAP` = 200,000 B**（`DECISIONS.md` §13.4 写死）。检查点在"收齐全部 `FILE`、算出会被备份的字节数、写 `prepare` 之前"；超限即 `OTA_REJECT stage=cap reason=too_big need=<b> cap=200000`，系统一字节不动。窗口门禁同口径：`TOTAL + 200,000 ≤ 900,000`。
+2. **`/boot.slot` 兼容层：不保留**。P6-3 已把 `recovery/{proto,flash,bootstrap}.lua` 改成文件集模型，写 `<root>/system`，无槽无指针；G2 又把 `launcher.app`/`settings.app` 的历史兜底读整段删除（`DECISIONS.md` §13.9）。现在全仓只有 `boot.migrate_layout()` 的删除动作与 `tests/t_boot.lua`/`t_startup.lua` 的旧布局 fixture 还会提到它，两者都不是"读指针"。
+3. **`/boot.ok` 在首帧后写，不推迟到 30 秒观察窗**。`DECISIONS.md` §2.7 已按 §13 标为历史口径；现行口径是 §13.2（`startup.lua` 首帧后写全局 `/boot.ok`）与 §13.7（回滚靠 `/boot.tries > 2`，`MAX_TRIES = 2`）。取舍：文件集模型下"启动后 30 秒内断电"会让本次更新白测一轮；3 次试启动足以拦住坏版本，回滚成功后写 `state=rolledback` 墓碑供下次开机清理。
+
