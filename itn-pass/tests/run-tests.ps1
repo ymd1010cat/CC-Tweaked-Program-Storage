@@ -44,10 +44,11 @@ foreach ($sub in @('auth', 'system', 'tests', 'logs')) {
 }
 
 # Deploy layout exactly as documented in itn-pass/README.md, plus the shared
-# net constants (/itnpass_net.lua sits next to /sha256.lua at the root) and the
-# run-mode resolver (/itnpass_mode.lua). terminal/startup.lua is staged under
-# tests/ so the suite can drive the real boot script without replacing the
-# runner's own /startup.lua.
+# net constants (/itnpass_net.lua sits next to /sha256.lua at the root), the
+# run-mode resolver (/itnpass_mode.lua) and the scripted batch tool
+# (/system/itnpass_batch.lua). terminal/startup.lua is staged under tests/ so
+# the suite can drive the real boot script without replacing the runner's own
+# /startup.lua.
 $copies = [ordered]@{
     'common\sha256.lua'                = 'sha256.lua'
     'common\itnpass_net.lua'           = 'itnpass_net.lua'
@@ -57,6 +58,7 @@ $copies = [ordered]@{
     'server\system\disk_writer.lua'    = 'system\disk_writer.lua'
     'server\system\itnpass_server.lua' = 'system\itnpass_server.lua'
     'server\system\itnpass_admin.lua'  = 'system\itnpass_admin.lua'
+    'server\system\itnpass_batch.lua'  = 'system\itnpass_batch.lua'
     'terminal\auth\itnpass_client.lua' = 'auth\itnpass_client.lua'
     'terminal\auth\itnpass_login.lua'  = 'auth\itnpass_login.lua'
     'terminal\auth\session.lua'        = 'auth\session.lua'

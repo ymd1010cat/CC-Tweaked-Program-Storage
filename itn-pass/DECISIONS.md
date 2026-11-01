@@ -220,13 +220,14 @@ PSK 签名/验签是 Sentinel 的认证范畴（`sentinel/terminal/auth/psk.lua:
 发布 zip **只放运行时 + 文档 + 许可证**，明确**不包含 `tests/`**：
 
 ```
-itn-pass/   16 个 lua（common/ server/ terminal/）
+itn-pass/   18 个 lua（common/ server/ terminal/）
 itn-pass/README.md
 itn-pass/DECISIONS.md
+itn-pass/docs/DISTRIBUTION.md
 LICENSE     （仓库根，zip 根目录）
 ```
 
-- 理由：`tests/` 是开发材料（N2 后 13 个文件、4,447 行、解包 178,511 B），解包到访客盘上既占
+- 理由：`tests/` 是开发材料（T3 后 14 个文件、5,330 行、解包 221,455 B），解包到访客盘上既占
   空间又没有可用性——`run-tests.ps1` 依赖 Windows + `C:\Program Files\CraftOS-PC\CraftOS-PC_console.exe`，
   在真实终端/站端上直接跑必然报错。
 - 实现：`tools/build_release.py` 的 `EXCLUDE_FROM_RELEASE = {"itn-pass": ("tests/",)}`，在 `build()`
@@ -234,9 +235,14 @@ LICENSE     （仓库根，zip 根目录）
   它的包照旧包含测试（不做全局排除，否则会改变 sentinel 现有产物的字节）。实测用 `git show
   HEAD:tools/build_release.py` 旧脚本与当前脚本各构建一遍 sentinel/cardkey/pylib：三份 sha256 完全
   相同，sentinel 包仍含 `sentinel/tests/`。
-- 结论：N2 之后 33 → **20 个成员**（17 lua + README + DECISIONS + LICENSE），压缩后体积
+- 结论：N2 之后 33 → **20 个成员**（N2 时是 17 lua + README + DECISIONS + LICENSE），压缩后体积
   85,517 B → 约 60 KB。精确字节不写死：README 与本文件自己也在包内，记一个数字会让文档自身
   变成下一次构建的差异源。
+- T3 追加：`/system/itnpass_batch.lua` 进包（18 个 lua / 22 个成员），新增的
+  `itn-pass/docs/DISTRIBUTION.md` **也进包**。理由：它是运维文档，README 8.6 直接引用它，
+  不放进去就会出现"包里的 README 让读者去看一个包内不存在的文件"。与 `tests/` 的区别是
+  "文档有用、测试没用且跑不起来"，所以 `EXCLUDE_FROM_RELEASE` 仍然只排除 `tests/`，
+  `docs/` 靠"不排除"自动进包，**构建脚本一行都不用改**（改脚本会影响其它项目的产物字节）。
 
 ## 11. B1 变更清单（骨架事实）
 
@@ -336,7 +342,81 @@ itn-pass 是**装机/分发凭证**系统，不是网络准入系统：它只回
 `free` 等于"任何能连到网络 A 的终端都能无限写盘"，没有身份、没有配额。默认值选 `pass`，让
 "忘记配置/配置写坏"的结果停留在保守的一侧，而不是把站端变成公共写盘机。
 
-## 14. 修订记录
+## 14. 批处理工具（T3：脚本化入口与存储边界）
+
+### 14.1 定位
+
+管理台（README 8）是给人手点的；`/system/itnpass_batch.lua` 是**同一套库的命令行入口**：
+`new` / `list` / `export` / `revoke` / `unrevoke` / `prune`，一条命令一次执行，输出
+"每项一行 JSON-ish + 最后一行 ASCII 摘要"（`ITNP_BATCH <命令> count=.. ok=..`），便于脚本消费。
+它不参与开机（`/startup.lua` 不加载它）、不监听网络、不读运行模式；屏幕被服务占着时按两次
+`Ctrl+T` 回 shell 再跑（README 10.7）。
+
+### 14.2 工具与存储的边界（唯一的数据入口是 store）
+
+- 工具只调用 `/auth/itnpass_store.lua` 的 `mint` / `commitBatch` / `export` / `list` / `stats` /
+  `revoke` / `unrevoke` / `prune`；**从不打开 `/auth/itnpass_passes.db`、从不自己派生卡密、
+  从不自己算指纹**。改 pepper 盐、改指纹算法、改预留语义只改 store 一处，工具的每条命令天然
+  获得与站端服务相同的语义（`t_batch.lua` 的 `batch.consistency` 组就是用来钉这一点的）。
+- 反过来的约束：**工具不能提供 store 没有的能力**。三个直接后果：
+  1. `unrevoke` 只能按完整卡密恢复（`store.unrevoke(code)` 的签名如此，README 8.5 也这么写）。
+     按 ID 恢复意味着要把明文存进库，等于放弃"库泄露 != 卡密泄露"这条性质（第 4 节接受风险的
+     缓解层之一）。所以本工具对 ID 输入直接返回 `error=needs_full_key`，**不是**绕过 store 去
+     直接改写库文件。任务书里写的 `unrevoke <id-prefix>` 因此实现为"完整卡密"语义 —— 这是唯一
+     与任务书字面不同的地方，理由是它需要动 store 源码才能做到，而 T3 的边界不允许改 store。
+  2. `--expires` 无法由站端自己判断：`lookup` 只认 `revoked` 与 `uses_left`，没有日期判断。
+     因此到期被实现为"把到期时间记进备注 + `prune` 时把到期证 `revoke` 掉"，即**到期是运维动作，
+     不是站端运行时判定**。想当硬门禁就必须把 `prune` 排进日常维护（DISTRIBUTION 6.3）。
+     文档里反复写这一条，因为"设了 30 天就自动失效"是最容易误读的期待。
+  3. 批次元数据（batch / profile / prefix / uses / expires）只能进 `note` 字段——store 的公开接口
+     只有 `mint(count, uses, note)`。好处：**数据库结构零改动**，老版本读到只是一条普通备注；
+     代价：`note` 是自由文本，工具只认自己写的 `itnp-batch/1 ...` 前缀，管理台手写的备注按
+     "无元数据"处理（profile 空、expires=0），不会被误当成批次记录。
+
+### 14.3 为什么不打印完整卡密
+
+明文只存在两个瞬间：`new` 进程的内存里，和它写出的 staging 文件里。屏幕会留下更多痕迹
+（旁边的人、截图、shell 的复制粘贴），所以：
+
+- `new` 只打印 `id`（12 位指纹前缀）与 `fp6`（前 6 位）；
+- `export --out PATH` 是**唯一**写出分发文件的命令，`PATH` 必须显式给出（缺了就是
+  `error=no_out`），没有"默认写到固定位置"的方便路径；
+- `revoke` 即使接受完整卡密，回显也换成该证的 12 位 ID（`t_batch.lua` 的
+  `batch.revoke_full_key_masked` / `*.no_plaintext*` 断言钉住）；
+- 日志行只写 ID（`target=` / `id=`）。
+
+已知副作用（接受）：`new` 之后必须 `export` 才能拿到明文；staging 写失败时整批**不入库**
+（明文与库保持"要么都有、要么都没有"）。staging 路径是
+`<export_dir>/.stage/<批次 ID>.txt`（默认 `/cardkeys/.stage/`），刻意与管理台的
+`cardkeys_*.txt`/`latest.txt` 分开。
+
+### 14.4 `revoke` 的 `--yes` 与 `prune` 的删除策略
+
+- `revoke` 没有 `--yes` 就是 `ok=0 error=confirmation_required`，库零改动，但**仍然留一行日志**。
+  理由：撤销不可逆（明文已删、次数不回收），防误触的价值高于少敲一次；失败尝试也要可审计。
+- `prune` 三件事，全部经 store：①清过期预留（`store.prune`）；②撤销 `expires` 已过的证；
+  ③删除"整批已死"（本批所有记录都已撤销/到期）的 staging 文件。
+  **孤儿 staging 保留**：找不到对应库记录的 staging 文件可能是库损坏后唯一的明文副本，
+  静默删除的代价高于留一份明文。`count` 报告实际改动数，便于对账。
+
+### 14.5 与 `free` 模式的关系
+
+`free` 下 `new`/`export` 照常工作（库照写），但站端不查库，卡密在 free 期间**没有约束力**；
+切回 `pass` 后它们立刻恢复有效。所以 free 期间发出的批次要么缩短 `--expires` 并跑 `prune`，
+要么事后 `revoke`。工具本身不读 `/itnpass_mode.lua`：生成与否是人的决定，约束力是站端的决定，
+让工具"以为自己处于 free 就不生成记录"只会制造半自动状态。
+
+### 14.6 测试
+
+`tests/t_batch.lua`：**289 断言 / 13 组**（离线 702/0/40 → **991/0/53**）。覆盖参数解析与边界、
+`note` 往返、状态优先级、`new` 默认/自定义/越界（count/uses/expires/profile/prefix、配置
+`max_batch` 与 `default_uses`）、staging 写失败时不入库、`list` 四种过滤、`export` 的路径与内容
+（字节回读、staging 清理、多批次歧义、`--batch`、`--keep`、目录/同路径/空批次）、`revoke` 的
+`--yes` 与失败原因、`unrevoke` 的完整卡密规则、`prune` 三类清理与孤儿保留、坏库（
+`STORE_DB_CORRUPT` 仍在、`.corrupt-*` 保留）、store 缺失时的 `store_unavailable`、日志关键字、
+以及与 store 扣次语义一致（`new` 不扣次、`commit` 扣 1、用完 `used up`）。
+
+## 15. 修订记录
 
 | 批次 | 变更 |
 | --- | --- |
@@ -344,3 +424,4 @@ itn-pass 是**装机/分发凭证**系统，不是网络准入系统：它只回
 | B3 | 协议 `itnpass_v1` / 频道 33 收敛到 `common/itnpass_net.lua`（新文件，部署为 `/itnpass_net.lua`）；服务端日志 tag 统一 `ITNP_*`（第 12 节）；界面标题改 `ITN-Pass Disk Writer` / `InterTeamNet Access` / `ITN-Pass Station`；导出头改 `# ITN-Pass batch`；本文件的行号引用按当前工作树刷新。 |
 | B6 | README 全量重写（16 节，中文，覆盖两条盘的部署布局、协议与 `netcheck` 判定、扣次语义、`ITNP_*` 日志、`.corrupt-*` 保留策略、离线测试 488/0/29、构建发布与安全风险）；发布包**排除 `tests/`**（`build_release.py` 的 `EXCLUDE_FROM_RELEASE`，仅 itn-pass 生效，31→19 成员，见 §10.1）；CI 接 itn-pass（dispatch options / tag 名单 / 分支循环 / `case` 分派）；根 `README.md` 三处同步。 |
 | N2 | 新增 `common/itnpass_mode.lua`（部署 `/itnpass_mode.lua`）+ 配置键 `mode`（默认 `"pass"`），解析优先级 = `/auth/itnpass_mode.txt` > 配置 > 默认，非法值 **fail-safe 到 `pass`**（日志 `ITNP_CONFIG_BAD` / `ITNP_MODE_BAD`，写 `/auth/itnpass_mode.log`）；`free` 模式：终端 kernel 跳过登录（合成 `guest`、`ITNP_FREE_SESSION`）、client 允许空 `code`、服务端 `verify` 不查库、`write` 不预留不扣次但照走 `disk_writer`（`ITNP_FREE_WRITE ok=.. files=.. bytes=..`）、管理台首页加 `MODE: pass` 与 `MODE: free`；写盘校验/回滚/空间预检/`netcheck` 在两种模式下完全一致（见 §13）。README 措辞统一改为"装机/分发凭证"（37 处词替换，不再出现旧称）；新增 2.5 运行模式一节；新增 `tests/t_mode.lua`（214 断言 / 11 组，离线 488/0/29 → **702/0/40**），`run-tests.ps1` 多 stage `/itnpass_mode.lua` 与 `tests/terminal_startup.lua`。 |
+| T3 | 新增 `/system/itnpass_batch.lua`（命令行批处理：`new <count> [--uses N] [--prefix P] [--profile NAME] [--expires DAYS]`、`list [--status ...]`、`export --out PATH [--batch ID] [--keep]`、`revoke <id-prefix|完整卡密> --yes`、`unrevoke <完整卡密>`、`prune`；一行摘要 + 每项一行 JSON-ish；明文只落 `<export_dir>/.stage/`，导出后默认删除；**不打印完整卡密**；每次执行一行 `ITNP_BATCH ...` 进 `/auth/itnpass_server.log`；全部数据操作经 store，见 §14）；新增 `docs/DISTRIBUTION.md`（批次生成/导出/带出站端/模式关系/到期与撤销/三条示例/故障表）；README 新增 8.6 批处理工具小节，同步 §10.1 日志表、§12 安全风险第 14 条、§13 基线、§14 发布包口径（18 lua / 22 成员 / `docs/` 进包）、§15 文件清单、§16 部署清单；新增 `tests/t_batch.lua`（289 断言 / 13 组，离线 702/0/40 → **991/0/53**），`run-tests.ps1` 多 stage `/system/itnpass_batch.lua`。 |

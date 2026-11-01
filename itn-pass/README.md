@@ -735,6 +735,32 @@ Card key:
 `[Error] no match (unrevoke needs the full code)`（前缀无法恢复，必须完整凭证）。之后
 `Press Enter to continue...`。
 
+### 8.6 批处理工具（`/system/itnpass_batch.lua`）
+
+管理台是给人手点的；要按脚本一次发很多张、按 profile 记录用途、按天到期、批量查询与撤销时，
+用同一套库的**命令行入口**：
+
+```
+/system/itnpass_batch.lua new 20 --uses 2 --prefix labA --profile pyroet-os --expires 30
+/system/itnpass_batch.lua export --out /disk/labA.txt --batch labA-20261101-093000
+/system/itnpass_batch.lua list --status active
+/system/itnpass_batch.lua revoke 7b1e04c9 --yes
+/system/itnpass_batch.lua unrevoke 2345-6789-ABCD-EFGH
+/system/itnpass_batch.lua prune
+```
+
+- 生成的明文落在 `/cardkeys/.stage/<批次 ID>.txt`（不是管理台的 `cardkeys_*.txt`），
+  `export --out <路径>` 写到显式路径后默认删除 staging；**任何命令都不打印完整卡密**。
+- 每张打一行 JSON（`id`/`fp6`/`uses_left`/`uses_total`/`status`/`batch`/`profile`/`expires`），
+  最后一行是 `ITNP_BATCH <命令> count=.. ok=..` 摘要，便于脚本消费。
+- `revoke` 必须带 `--yes`；`unrevoke` **必须给完整卡密**（库里只有指纹，见 8.5）；
+  `--expires` 只是记录到期，真正生效要靠 `prune` 把到期证撤销（站端不认日期，只认 `revoked`）。
+- 每次执行都往 `/auth/itnpass_server.log` 写一行 `ITNP_BATCH ...`（见 10.1）。
+- 完整的分发流程、参数边界、三条示例与故障表见 **[docs/DISTRIBUTION.md](docs/DISTRIBUTION.md)**。
+
+`free` 模式下照样能生成/导出，但站端不查库，卡密在 free 期间没有约束力；切回 `pass` 后它们
+立刻恢复有效，所以 free 期间发出的批次要么缩短到期，要么事后 `revoke`（见 2.5）。
+
 ## 9. 配置参考（`/auth/itnpass_config.lua`）
 
 文件返回一张纯表，键与默认值如下。"谁读"列是实际引用该键的模块。`channel` 与 `protocol` 不在
@@ -797,6 +823,7 @@ YYYY-MM-DD HH:MM:SS  <消息>
 | `ITNP_CONFIG_BAD` | `/auth/itnpass_mode.log`：`ITNP_CONFIG_BAD key=mode value=... fallback=pass`，配置里的模式值非法，已按 `pass` 处理 |
 | `ITNP_MODE_BAD` | `/auth/itnpass_mode.log`：`ITNP_MODE_BAD path=/auth/itnpass_mode.txt value=... keep=...`，覆盖文件非法，已忽略 |
 | `ITNP_ERROR` | 启动故障（`ITNP_ERROR fault: ...`）、心跳/回复发送失败、处理异常、prune 异常、commit 找不到预留 |
+| `ITNP_BATCH` | 批处理工具每次执行一行：`ITNP_BATCH new count=20 ok=1 batch=... uses=2 profile=... expires=... staged=...`、`... export count=.. out=... staging=purged`、`... revoke count=1 ok=1 target=<12 位 ID>`、`... prune count=.. reservations=.. expired=.. staging=..`、`... list count=.. total=.. shown=..`；失败带 `ok=0 error=<原因码>`（见 8.6） |
 
 - `ITNP_WRITE` 与 `ITNP_WRITE_FAIL` 同前缀，grep `ITNP_WRITE` 会同时命中两者；按完整 tag 搜。
 - `ITNP_FREE_WRITE` 与 `ITNP_WRITE` 不同前缀，grep `ITNP_WRITE` **不会**命中 free 模式的写盘行。
@@ -804,7 +831,8 @@ YYYY-MM-DD HH:MM:SS  <消息>
   `/auth/itnpass_mode.log`，格式与服务日志相同；不混进 `/auth/itnpass_server.log`（终端也可能写它）。
 - 故障码 `STORE_DB_CORRUPT` **不带** `ITNP_` 前缀：它同时是 `store.faults()` 返回给调用方的
   故障码，本身就是稳定的诊断标识，只镜像进同一个日志文件（见 10.4）。
-- 管理台不写日志文件（只打印屏幕），它的输出文案见第 8 节，没有 tag。
+- 管理台不写日志文件（只打印屏幕），它的输出文案见第 8 节，没有 tag；`itnpass_batch` 则每执行
+  一次都往同一个日志文件追加一行 `ITNP_BATCH`（见 8.6），所以一行 grep 就是完整的批次审计。
 - 日志只增不减；需要清理时可以直接删掉或清空文件（服务以追加方式打开，不会因此崩溃）。
 
 ### 10.2 故障旗标
@@ -902,6 +930,8 @@ modem 选择失败、频道打不开。成功选定 modem 后会被删除；若�
 | 终端 `free`、站端 `pass`，写盘一直 `[Failed] empty code` | 两端模式不一致：终端发空 `code`，站端 `pass` 模式拒绝空码；把两端模式文件统一后重启 |
 | `/auth/itnpass_mode.log` 出现 `ITNP_MODE_BAD` | 覆盖文件内容非法（拼错、大写、两行冲突），已忽略并保持配置值；改成小写 `pass`/`free` |
 | `/auth/itnpass_mode.log` 出现 `ITNP_CONFIG_BAD` | 配置里的 `mode` 值非法，已按 `pass` 处理；修 `/auth/itnpass_config.lua` 后重启 |
+| `itnpass_batch` 报 `ITNP_BATCH ... ok=0 error=...` | 参数越界、缺 `--yes`、staging 写不进、`--out` 不可用等；原因码与处理见 `docs/DISTRIBUTION.md` 第 9 节 |
+| `itnpass_batch list` 显示 `expired` 但证还能用 | 站端不认日期，只认 `revoked`；跑一次 `prune` 把到期证撤销（见 8.6 与 DISTRIBUTION 6.3） |
 
 ## 12. 安全说明与接受风险
 
@@ -938,6 +968,11 @@ modem 选择失败、频道打不开。成功选定 modem 后会被删除；若�
     连上网络 A 的终端都能反复写盘，没有次数上限。所以 `free` 只适合公开装机日/分发日，默认
     `pass` 才是常态。写盘校验、回滚、磁盘空间预检与 `netcheck` 在两种模式下完全一样，**不要**
     把 `free` 当成"方便调试、顺手一直开着"的开关。切换规则与两端一致性的坑见 2.5。
+14. **批处理工具的 staging 是明文。** `new` 把整批卡密写到 `/cardkeys/.stage/<批次 ID>.txt`，
+    这是"生成后、导出前"唯一的明文副本；导出成功后默认删除，失败或进程被杀时会留下。
+    能读站端盘的人本来就能拿到 pepper 和整个库（第 11 条同理），但**站端盘上不要长期存明文**：
+    分发完跑一次 `prune`（会清掉整批已死的 staging）或手工删掉 `.stage/` 下的文件。
+    另外 `--expires` 只是记录，站端不做日期判断，到期的证要 `prune` 才真正失效（见 8.6）。
 
 ## 13. 离线测试
 
@@ -955,14 +990,17 @@ pwsh -NoProfile -File itn-pass/tests/run-tests.ps1
   `auth/`、`system/`）加上 `tests/`，落在 `<DataDir>/computer/20`（`terminal/startup.lua` 额外
   stage 成 `tests/terminal_startup.lua`，供套件驱动真实开机脚本）。
 - **PASS 时自动删除 staging**；失败时保留供排查；`-KeepStaging` 让成功的运行也保留。
-- 基线（本仓库当前工作树，实测约 2.5 秒）：
+- 基线（本仓库当前工作树，实测约 4 秒）：
 
   ```
-  OFFLINE_PASS 702 / OFFLINE_FAIL 0 / OFFLINE_GROUPS 40
+  OFFLINE_PASS 991 / OFFLINE_FAIL 0 / OFFLINE_GROUPS 53
   ```
 
   `t_mode.lua` 是运行模式的专项套件（配置/覆盖文件优先级、终端 kernel 与界面、站端两条链路、
-  管理台 `MODE:` 行、开机仍跑 `netcheck`），占其中的 11 个 group、214 条断言。
+  管理台 `MODE:` 行、开机仍跑 `netcheck`），占其中的 11 个 group、214 条断言；
+  `t_batch.lua` 是批处理工具的专项套件（参数解析、批次元数据、`new`/`list`/`export`/`revoke`/
+  `unrevoke`/`prune`、坏库、日志关键字、与 store 的扣次语义一致），占 13 个 group、289 条断言，
+  并断言"完整卡密从不出现在 stdout"。
 
 - `tests/t_*.lua` 由 `tests/run.lua` 用 `fs.list("/tests")` 自动发现，新增测试文件不需要改
   `run.lua` 或 `run-tests.ps1`。
@@ -987,18 +1025,24 @@ python tools/build_release.py --project itn-pass --out dist/release
 发布包内容口径：**只放运行时 + 文档 + 许可证，不放 `tests/`。**
 
 ```
-itn-pass/     17 个 lua（common/ server/ terminal/）
+itn-pass/     18 个 lua（common/ server/ terminal/）
 itn-pass/README.md
 itn-pass/DECISIONS.md
+itn-pass/docs/DISTRIBUTION.md
 LICENSE       （仓库根）
 ```
 
-`tests/` 是开发材料，随发布包分发只会让访客盘多出 13 个文件、4,447 行的测试代码和一个
+`tests/` 是开发材料，随发布包分发只会让访客盘多出 14 个文件、5,330 行的测试代码和一个
 `run-tests.ps1`（它依赖 Windows + CraftOS-PC 路径，解包后直接跑必然报错）。排除规则写在
 `tools/build_release.py` 的 `EXCLUDE_FROM_RELEASE`，**只对 `itn-pass` 生效**（`sentinel/` 的
-`tests/` 照旧进包，其它项目的产物一个字节都不变）。实测：33 → **20 个成员**（17 lua + README +
-DECISIONS + LICENSE），zip 体积从约 85.5 KB 降到约 60 KB（精确字节以当次构建输出为准——README
-与 DECISIONS 自己也在包内）。
+`tests/` 照旧进包，其它项目的产物一个字节都不变）。实测：33 → **22 个成员**（18 lua + README +
+DECISIONS + docs/DISTRIBUTION.md + LICENSE），zip 体积从约 85.5 KB 降到约 60 KB；加入批处理工具
+与 `docs/` 之后当前约 90 KB（精确字节以当次构建输出为准——README、DECISIONS 与 DISTRIBUTION
+自己也在包内，写死字节数会让哈希自指）。
+
+`docs/` **进包**（与本项目其它 `tests/` 的处理相反）：它是运维文档，README 8.6 直接指向它，
+随包分发才不会出现"文档里说的文件不在包里"。`tools/build_release.py` 只排除 `tests/`，
+`docs/` 自动打进去，无需改构建脚本。
 
 版本口径：itn-pass 从 `1.0.0` 起，与 cardkey 的 `2.0.0` 分开走，互不影响；版本号在
 `tools/build_release.py` 的 `VERSIONS` 里（它也驱动 `--project` 的合法值与产物名）。
@@ -1028,6 +1072,7 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
 | `/system/itnpass_server.lua` | 协议、心跳、限流、nonce 去重、日志、写盘事务 |
 | `/system/disk_writer.lua` | payload 复制、空间预检、尺寸校验、回滚 |
 | `/system/itnpass_admin.lua` | 管理台：生成、列表/撤销、恢复 |
+| `/system/itnpass_batch.lua` | 批处理工具（命令行）：`new`/`list`/`export`/`revoke`/`unrevoke`/`prune`（见 8.6） |
 | `/payload/...` | 要写盘的内容（可用 `payload_dir` 改路径） |
 
 站端运行期文件：
@@ -1039,11 +1084,12 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
 | `/auth/itnpass_pepper.txt` | 首次加载自动创建；48 字符 + 换行；**必须备份** |
 | `/auth/itnpass_station_id` | 首次启动自动创建；24 字符；每台站端唯一 |
 | `/auth/itnpass_admin.db` | 首次设置管理员密码时创建 |
-| `/auth/itnpass_server.log` | 服务追加写的日志（`ITNP_*`） |
+| `/auth/itnpass_server.log` | 服务、批处理工具与模式诊断共同追加写的日志（`ITNP_*`；批处理见 8.6） |
 | `/auth/itnpass_mode.log` | 运行模式诊断（`ITNP_FREE_SESSION` / `ITNP_CONFIG_BAD` / `ITNP_MODE_BAD`） |
 | `/auth/itnpass_mode.txt` | **可选**覆盖文件：`pass` 或 `free`，存在且合法时优先于配置（见 2.5） |
 | `/auth/itnpass_fault.flag` | 仅启动失败时出现，一行原因 |
-| `/cardkeys/cardkeys_*.txt`、`/cardkeys/latest.txt` | 生成批次时的明文导出；拷出后手动删除 |
+| `/cardkeys/cardkeys_*.txt`、`/cardkeys/latest.txt` | 管理台生成批次时的明文导出；拷出后手动删除 |
+| `/cardkeys/.stage/<批次 ID>.txt` | 批处理工具 `new` 的明文 staging；`export` 成功后默认删除（见 8.6） |
 
 终端代码：
 
@@ -1072,7 +1118,8 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
    disk drive；每台终端一个有线 modem。
 2. 拷贝站端文件：`/startup.lua`、`/sha256.lua`、`/itnpass_net.lua`、`/itnpass_mode.lua`、
    `/auth/itnpass_config.lua`、`/auth/itnpass_store.lua`、`/system/itnpass_server.lua`、
-   `/system/disk_writer.lua`、`/system/itnpass_admin.lua`，以及 `/payload/`。
+   `/system/disk_writer.lua`、`/system/itnpass_admin.lua`、`/system/itnpass_batch.lua`，
+   以及 `/payload/`。只想用管理台发证的话 `itnpass_batch.lua` 可以不放。
 3. 接线：网络 A = 站端终端侧 modem + 所有终端；网络 B = 站端驱动器侧 modem + 驱动器。
    **网络 B 不接任何其它电脑。**
 4. 第一次开机站端：看是否出现 `/auth/itnpass_fault.flag`；若 modem 选择报错，按文本设置
@@ -1080,7 +1127,8 @@ CI（`.github/workflows/release-builds.yml`）已接 itn-pass：
 5. 首次进入管理台：设置管理员密码；立刻把 `/auth/itnpass_pepper.txt` 备份到站端之外。首页
    `MODE:` 行应显示 `MODE: pass`。
 6. 放好 payload，把软盘插进驱动器；管理台选 `1` 生成一批凭证；把 `/cardkeys/*.txt` 拷出
-   站端后删除。
+   站端后删除。要批量/按脚本发证时改用批处理工具（8.6）：`new` 生成 → `export --out <路径>`
+   导出到显式路径（staging 自动删除），流程见 `docs/DISTRIBUTION.md`。
 7. 把终端文件拷到每台终端（`/itnpass_net.lua` 与 `/itnpass_mode.lua` 都要带上；**不要**拷
    `/sha256.lua`，不要拷 `/auth` 下的服务器模块）。
 8. 依次开机终端：应出现 `InterTeamNet Access`。若锁死，按第 11 节排查网络 A、站端状态与
