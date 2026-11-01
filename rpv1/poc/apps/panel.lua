@@ -40,7 +40,23 @@ return function(M, node, args)
                 out.write(string.format("#%d %s up=%ss fwd=%s ip_rx=%s free=%sKB", id, tostring(e.role),
                     tostring(e.metrics.uptime), tostring(e.metrics.fwd), tostring(e.metrics.ip_rx), tostring(e.metrics.free_kb)))
                 y = y + 1
-                if y > 18 then break end
+                if y > 12 then break end
+            end
+            -- multi-hop path view: the destinations that are NOT one hop away are the
+            -- ones an operator is actually looking for
+            local summary = M.topo_flow_summary and M.topo_flow_summary(node) or nil
+            if summary then
+                out.setCursorPos(1, y)
+                out.write(string.format("paths flows=%d multi=%d unknown=%d", summary.flows, summary.multi, summary.unknown))
+                y = y + 1
+                for _, f in ipairs(summary.list or {}) do
+                    if f.hops and f.hops > 1 and y <= 18 then
+                        out.setCursorPos(1, y)
+                        out.write(string.format("%s via %s hops=%d", f.dst, tostring(f.via), f.hops))
+                        y = y + 1
+                    end
+                end
+                node.last_paths = { flows = summary.flows, multi = summary.multi, unknown = summary.unknown }
             end
         end)
         node:log("PANEL_DRAW nodes=%d target=%s ok=%s%s", #ids, mon and "monitor" or "term", tostring(okDraw),

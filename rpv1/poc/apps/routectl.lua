@@ -1,7 +1,8 @@
---[[- apps/routectl.lua — show interfaces / routes / arp / sockets / stats / capture.
+--[[- apps/routectl.lua — show interfaces / routes / arp / sockets / stats / paths / capture.
 
   app=routectl            (everything)
   app=routectl:routes
+  app=routectl:paths      (one line per destination: next hop, egress, hop count)
   app=routectl:capture
 ]]
 return function(M, node, args)
@@ -18,6 +19,16 @@ return function(M, node, args)
             for _, r in ipairs(M.route_list(node.routes)) do
                 sec("route %s via %s (%s)", r.dest, r.via, r.kind)
             end
+        end
+        if what == "all" or what == "paths" then
+            -- join the forwarding state with the collected map: dst is the destination
+            -- name, via the next hop, out the egress interface, hops the map distance
+            local summary = M.topo_flow_summary and M.topo_flow_summary(node) or { flows = 0, multi = 0, unknown = 0, list = {} }
+            for _, f in ipairs(summary.list or {}) do
+                sec("path dst=%s via=%s out=%s kind=%s hops=%s", f.dst, tostring(f.via), tostring(f.out),
+                    tostring(f.kind), f.hops and tostring(f.hops) or "?")
+            end
+            sec("paths flows=%d multi=%d unknown=%d", summary.flows, summary.multi, summary.unknown)
         end
         if what == "all" or what == "arp" then
             for ip, e in pairs(node.arp.cache) do sec("arp %s -> mac %d", M.int2ip(ip), e.mac) end

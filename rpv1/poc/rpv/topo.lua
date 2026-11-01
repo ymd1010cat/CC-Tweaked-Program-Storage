@@ -30,7 +30,14 @@ Config keys:
     topo_ttl=20                a node disappears from the map after this long
 
 API: rpv.topo_setup(node), rpv.topo_report(node), rpv.topo_input(node, text, src),
-     rpv.topo_dump(node), rpv.topo_text(node), rpv.topo_map(node), rpv.topo_stats(node)
+     rpv.topo_dump(node), rpv.topo_text(node), rpv.topo_map(node), rpv.topo_stats(node),
+     rpv.topo_hops(topo, from, to), rpv.topo_hops_to_ip(node, ip),
+     rpv.topo_flows(node), rpv.topo_flows_text(node), rpv.topo_flow_summary(node)
+
+Path view: `topo_flows` answers "where does traffic for X actually leave, and how
+far away is X?" by joining the local forwarding state (ARP cache, route table, NAT
+flows, fabric members, WAN peers) with the collected network map. It is what
+`routectl paths` prints and what `panel` shows as the multi-hop section.
 ]]
 local M = ...
 local u8, u16, u32, r32, byte, sub = M.u8, M.u16, M.u32, M.r32, M.byte, M.sub
@@ -249,6 +256,143 @@ function M.topo_text(node)
     end
     out[#out + 1] = "NETMAP_END"
     return table.concat(out, "\n")
+end
+
+-- ===== path view: one line per destination ==================================
+-- BFS over the collected map: 0 for "this node", n hops for a reachable node, nil
+-- when the collector has never seen one of the two (or the map is disconnected).
+function M.topo_hops(topo, from, to)
+    if not topo or not from or not to then return nil end
+    if from == to then return 0 end
+    if not topo.nodes[from] or not topo.nodes[to] then return nil end
+    local adj = {}
+    for _, l in pairs(topo.links or {}) do
+        adj[l.a] = adj[l.a] or {}
+        adj[l.b] = adj[l.b] or {}
+        adj[l.a][#adj[l.a] + 1] = l.b
+        adj[l.b][#adj[l.b] + 1] = l.a
+    end
+    local seen, frontier, depth = { [from] = true }, { from }, 0
+    while #frontier > 0 do
+        depth = depth + 1
+        local nextf = {}
+        for _, id in ipairs(frontier) do
+            for _, nb in ipairs(adj[id] or {}) do
+                if nb == to then return depth end
+                if not seen[nb] then
+                    seen[nb] = true
+                    nextf[#nextf + 1] = nb
+                end
+            end
+        end
+        frontier = nextf
+    end
+    return nil
+end
+
+-- distance from this node to whoever owns ip, as far as the map knows
+function M.topo_hops_to_ip(node, ip)
+    local topo = node.topo
+    if not topo or not ip then return nil end
+    local owner = topo.by_addr and topo.by_addr[ip]
+    if not owner then return nil end
+    return M.topo_hops(topo, node.id, owner)
+end
+
+-- enumerate the destinations this node currently knows how to reach. One entry per
+-- destination: where it leaves (out), what the next hop is (via), why we know it
+-- (kind) and how many map hops away it is (hops, nil when the map cannot tell).
+function M.topo_flows(node)
+    local out, seen = {}, {}
+    local function add(dst_text, dst_ip, kind, via_text, via_ip, device, to_id)
+        if seen[dst_text] then return end
+        seen[dst_text] = true
+        local out_iface = device
+        if not out_iface and dst_ip and node.routes then
+            local path = M.route_path(node.routes, dst_ip)
+            if path and path.iface then out_iface = path.iface.name end
+            if not via_text and path and path.next_hop then via_text = M.int2ip(path.next_hop) end
+        end
+        local hops
+        if to_id then
+            hops = M.topo_hops(node.topo, node.id, to_id)
+        elseif dst_ip then
+            hops = M.topo_hops_to_ip(node, dst_ip)
+        end
+        if not hops and via_ip then
+            local d = M.topo_hops_to_ip(node, via_ip)
+            if d then hops = d + 1 end
+        end
+        out[#out + 1] = {
+            dst = dst_text, via = via_text or "-", out = out_iface or "-",
+            kind = kind or "?", hops = hops,
+        }
+    end
+    -- 1. resolved neighbours: exactly one wire hop away
+    for ip in pairs(node.arp and node.arp.cache or {}) do
+        add(M.int2ip(ip), ip, "arp", M.int2ip(ip), ip)
+    end
+    -- 2. the route table (connected subnets are locally attached, not a path)
+    for _, r in ipairs(node.routes and node.routes.entries or {}) do
+        if r.kind ~= "connected" then
+            add(M.int2ip(r.net) .. "/" .. r.prefix, r.net, r.kind,
+                r.gw and M.int2ip(r.gw) or (r.iface and r.iface.name), r.gw,
+                r.iface and r.iface.name)
+        end
+    end
+    -- 3. translated flows: the peer is the far end, the internal host is the next hop
+    local nat = node.nat
+    if nat then
+        for _, f in pairs(nat.flows or {}) do
+            if f.peer then
+                add(M.int2ip(f.peer) .. ":" .. tostring(f.peer_port or 0), f.peer, "nat-flow",
+                    M.int2ip(f.int_ip) .. ":" .. tostring(f.int_port or 0), f.int_ip)
+            end
+        end
+    end
+    -- 4. cluster fabric: one logical hop per member (N members are one router hop)
+    local fab = node.fabric
+    if fab then
+        for member, p in pairs(fab.peers or {}) do
+            if not p.expires or p.expires > os.clock() then
+                add("fabric:" .. tostring(member), nil, "fabric", "member " .. tostring(member), nil,
+                    fab.iface and fab.iface.name, member)
+            end
+        end
+    end
+    -- 5. rednet WAN peers: reachable, but their distance is not in this map
+    local wan = node.wan
+    if wan then
+        for ip in pairs(wan.peers or {}) do
+            add("wan:" .. M.int2ip(ip), nil, "wan", "rednet " .. tostring(wan.peers[ip]), nil,
+                wan.iface and wan.iface.name)
+        end
+    end
+    table.sort(out, function(a, b) return a.dst < b.dst end)
+    return out
+end
+
+-- grep-friendly rendering, one destination per line
+function M.topo_flows_text(node)
+    local lines = {}
+    for _, f in ipairs(M.topo_flows(node)) do
+        lines[#lines + 1] = string.format("PATH dst=%s via=%s out=%s kind=%s hops=%s",
+            f.dst, tostring(f.via), tostring(f.out), tostring(f.kind),
+            f.hops and tostring(f.hops) or "?")
+    end
+    return lines
+end
+
+-- counts for the dashboard: how many destinations are more than one hop away, and
+-- how many the map cannot place at all
+function M.topo_flow_summary(node)
+    local flows = M.topo_flows(node)
+    local multi, unknown = 0, 0
+    for _, f in ipairs(flows) do
+        if f.hops and f.hops > 1 then multi = multi + 1 end
+        if not f.hops then unknown = unknown + 1 end
+    end
+    return { flows = #flows, multi = multi, unknown = unknown, list = flows }
 end
 
 function M.topo_dump(node, path)

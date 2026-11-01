@@ -309,7 +309,16 @@
    坏校验和单独计 `stats.ip_cksum_bad`（与"根本解析不出头"的 `ip_bad` 分开）。验收：离线
    [poc/tests/t_dad.lua](poc/tests/t_dad.lua)，套件 `OFFLINE_PASS 2968 / FAIL 0 / GROUPS 32`、
    lint 0 错 51 警；17 个新断言组覆盖探测帧布局、调度、冲突/让位/上限、`ip_parse` 开关与 node 接线。
-7. **可观测性**：`routectl`/`panel` 增加多跳路径可视化（结合 `topo` 的网络图输出每条流实际走的下一跳）。
+7. ✅ **多跳路径可视化**（已完成，离线可回归）：`poc/rpv/topo.lua` 新增
+   `topo_hops`（在收集到的 NETMAP 上做 BFS，本机=0/可达=n/不可定位=nil）、`topo_hops_to_ip`
+   （按 `by_addr` 找地址归属节点）、`topo_flows`（把 ARP 邻居、非 connected 路由、NAT 流、
+   fabric 成员、WAN 对端各展开成一条"目的 → 下一跳 → 出接口 → 跳数"，fabric 成员按一个逻辑跳、
+   WAN 距离记 `?`）、`topo_flows_text`、`topo_flow_summary`；`apps/routectl.lua` 新增
+   `paths` 子命令（`ROUTECTL path dst=.. via=.. out=.. kind=.. hops=..` + 汇总行），
+   `apps/panel.lua` 增加 `paths flows= multi= unknown=` 页脚与多跳目的列表。
+   验收：离线 [poc/tests/t_pathview.lua](poc/tests/t_pathview.lua)（四节点链 0/1/2/3 跳、
+   7 个目的、汇总 multi/unknown、文本渲染、两个 app 的接线静态断言）；套件
+   `OFFLINE_PASS 3021 / FAIL 0 / GROUPS 33`、lint 0 错 50 警 / 70 文件。
 
 
 ## 9. 不建议做（反范围）
@@ -359,7 +368,7 @@ poc/mc/                 Minecraft 真机 harness（rcon.py / run-mc.ps1 / server
 | 场景 | 结果 |
 | --- | --- |
 | `m1` | traceroute hop1=10.0.2.1（路由器）、hop2=10.0.1.2（主机）；3/3 ping 应答；socket 收发成功 |
-| `routectl` | 接口/路由/ARP/socket/统计/抓包报表 |
+| `routectl` | 接口/路由/ARP/socket/统计/抓包报表 + `paths`（目的→下一跳→出接口→跳数） |
 | `badcfg` | 4 条配置告警（重复频道、MTU<68、占用 rednet 频道、子网重叠） |
 
 ### M2 稳健 —— ✅

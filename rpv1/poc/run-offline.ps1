@@ -6,7 +6,10 @@
 # hosts.lua, wan_acl.lua, router.lua, rhtp_server.lua, backup_router.lua,
 # core_router.lua, ha_ctl.lua) on a single headless computer: no role.txt,
 # no running apps, no modems, no second computer, no topology. node2/startup.lua is
-# staged under node2/ so the router tests can exercise its app loader. The tests
+# staged under node2/ so the router tests can exercise its app loader; routectl.lua
+# and panel.lua are staged under node2/ too (t_pathview asserts the path view is
+# wired into them, and apps/ is linted — their usage blocks would trip the global?
+# heuristic because tools/lint.lua does not strip block comments). The tests
 # exercise the pure logic (codecs, route table, crypto KATs, WAN AEAD state machine,
 # NAT rewrite, multicast domains, QoS classes, HTTP framing/server/client/secure,
 # the adaptive router UI) and tools/lint.lua checks every Lua file.
@@ -37,6 +40,12 @@ Copy-Item (Join-Path $root "poc\apps\rhtp_client.lua") (Join-Path $dir "apps") -
 Copy-Item (Join-Path $root "poc\apps\backup_router.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\core_router.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\ha_ctl.lua") (Join-Path $dir "apps") -Force
+# routectl/panel are not loaded by the suite; t_pathview only asserts that the path
+# view is wired into them. They are staged under node2/ on purpose: apps/ is linted,
+# and their usage blocks ("app=routectl", "app=panel:4200") trip the global? heuristic
+# because tools/lint.lua does not strip block comments.
+Copy-Item (Join-Path $root "poc\apps\routectl.lua") (Join-Path $dir "node2\routectl.lua") -Force
+Copy-Item (Join-Path $root "poc\apps\panel.lua") (Join-Path $dir "node2\panel.lua") -Force
 Copy-Item (Join-Path $root "poc\tests\startup.lua") (Join-Path $dir "startup.lua") -Force
 # the bootstrap is staged under node2/ so tests/t_router.lua can load its app loader
 # (RPV_BOOT_TEST hook) without booting: same relative path as in the repo

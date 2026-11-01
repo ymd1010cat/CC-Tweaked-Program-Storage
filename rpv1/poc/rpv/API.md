@@ -225,6 +225,35 @@ Measured (`poc/run-topo.ps1`): a 2-router + 3-host network (routers running DV) 
 **5 nodes and 5 links** (router↔router plus every host↔router) in ~12 s, with the map
 written and framed; `tests/t_topo.lua` covers the parsing/link/expiry logic offline.
 
+**Path view (multi-hop visualisation).** The map is also used to answer "where does
+traffic for X actually leave, and how far away is X?":
+`rpv.topo_hops(topo, from, to)` (BFS over the collected links: `0` for this node,
+`n` hops, `nil` when the map cannot place either end), `rpv.topo_hops_to_ip(node, ip)`
+(the same distance to whoever owns `ip`, via `topo.by_addr`), and
+`rpv.topo_flows(node)` — one entry per destination the node currently knows:
+`{ dst, via, out, kind, hops }`.
+The destinations come from the local forwarding state only: every resolved neighbour
+(`kind=arp`), every non-connected route (`kind=dv|file|static|default|…`), every
+translated NAT flow (`kind=nat-flow`, the internal host is the next hop), every fabric
+member (`kind=fabric`, one logical hop, member count from the map) and every rednet
+WAN peer (`kind=wan`, distance unknown). `out` is the egress interface from
+`route_path`, `hops` is the map distance to the owner of the destination address
+(+1 for a route whose next hop is the owner). `rpv.topo_flows_text(node)` renders
+grep-friendly lines and `rpv.topo_flow_summary(node)` returns
+`{ flows, multi, unknown, list }`:
+
+```
+PATH dst=10.0.2.0/24 via=10.0.1.1 out=LAN kind=dv hops=2
+PATH dst=10.0.3.2:5000 via=10.0.1.9:7000 out=LAN kind=nat-flow hops=3
+PATH dst=wan:10.200.0.9 via=rednet 77 out=WAN kind=wan hops=?
+```
+
+`app=routectl:paths` (and `routectl` with no argument) prints these lines as
+`ROUTECTL path …` followed by `ROUTECTL paths flows= multi= unknown=`, and `panel`
+draws a `paths flows= multi= unknown=` footer plus up to six destinations that are
+more than one hop away. Offline coverage: `tests/t_pathview.lua` (a four-node chain
+gives distances 0/1/2/3).
+
 ### compatibility + operations (`compat.lua`, node hot reload)
 `rpv.compat_check()` → `ok, missing, optional`; `rpv.compat_setup(node)` logs
 `COMPAT ok=... os=... missing=... optional=...` at boot (called automatically by

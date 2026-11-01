@@ -98,7 +98,7 @@ local files = {
     "tests/t_hosts.lua", "tests/t_wan_acl.lua", "tests/t_router.lua",
     "tests/t_rhtp_server.lua", "tests/t_rhtp_client.lua", "tests/t_backup_router.lua", "tests/t_core_router_ha.lua",
     "tests/t_ha_e2e.lua", "tests/t_pool_iface.lua", "tests/t_ha_ctl.lua",
-    "tests/t_dad.lua",
+    "tests/t_dad.lua", "tests/t_pathview.lua",
 }
 local groups = 0
 for _, path in ipairs(files) do
