@@ -157,6 +157,11 @@ if not bit32 then
 end
 
 local unpack = unpack or table.unpack
+-- Forward declarations. The builtin lua() helper below converts its
+-- results through luaToPy/pyToLua, which are defined further down: without
+-- these declarations those references compiled into globals and lua(...)
+-- died with "attempt to call global 'luaToPy' (a nil value)".
+local luaToPy, pyToLua
 local py = {}
 
 -- ============================================================
@@ -1234,9 +1239,34 @@ function Parser:parsePostfix()
             expr = {type="Call", func=expr, args=args}
         elseif t.type=="OP" and t.value=="[" then
             self:next()
-            local index = self:parseExpression()
-            self:expect("OP", "]")
-            expr = {type="Index", obj=expr, index=index}
+            -- Subscript or slice: [i], [a:b], [a:b:c], [:b], [a:], [:]
+            local lower = nil
+            if not (self:peek().type=="OP" and self:peek().value==":") then
+                lower = self:parseExpression()
+            end
+            if self:peek().type=="OP" and self:peek().value==":" then
+                self:next()
+                local upper = nil
+                local after = self:peek()
+                if not (after.type=="OP" and (after.value=="]"
+                                              or after.value==":")) then
+                    upper = self:parseExpression()
+                end
+                local step = nil
+                if self:peek().type=="OP" and self:peek().value==":" then
+                    self:next()
+                    local afterStep = self:peek()
+                    if not (afterStep.type=="OP" and afterStep.value=="]") then
+                        step = self:parseExpression()
+                    end
+                end
+                self:expect("OP", "]")
+                expr = {type="Index", obj=expr,
+                        slice={lower=lower, upper=upper, step=step}}
+            else
+                self:expect("OP", "]")
+                expr = {type="Index", obj=expr, index=lower}
+            end
         elseif t.type=="OP" and t.value=="." then
             self:next()
             expr = {type="Attr", obj=expr, name=self:expect("NAME").value}
@@ -1752,9 +1782,12 @@ function Interpreter:getBuiltins()
             return t
         end,
         ["print"] = function(...)
-            local a = {...}
+            -- select('#') instead of #{...}: a nil argument (print(None),
+            -- print(f()) where f returns nothing) truncates the table and
+            -- used to print an empty line instead of None.
+            local count = select("#", ...)
             local p = {}
-            for i=1,#a do p[i]=pyStr(a[i], self) end
+            for i = 1, count do p[i] = pyStr((select(i, ...)), self) end
             print(table.concat(p, " "))
         end,
         ["len"] = function(x)
@@ -2066,6 +2099,99 @@ function Interpreter:getBuiltins()
     }
 end
 
+-- ---------- slice subscripts (seq[a:b:c]) ----------
+-- Python 3 bound rules. Supported for str, list and tuple; everything else
+-- (dicts included) is a TypeError. Instances that define __getitem__ are not
+-- handed a slice object: the subset has no `slice` type, so that case stays an
+-- explicit error instead of silently misbehaving.
+local function pySliceInt(v, what)
+    if type(v) ~= "number" or v ~= math.floor(v) then
+        error(makeException("TypeError",
+            what .. " must be an integer or None"), 0)
+    end
+    return v
+end
+
+local function pyClamp(v, lo, hi)
+    if v < lo then return lo end
+    if v > hi then return hi end
+    return v
+end
+
+-- Returns 0-based start/stop indexes for the walk below.
+local function pySliceBounds(lo, hi, step, len)
+    if step > 0 then
+        local first = 0
+        if lo ~= nil then
+            first = pySliceInt(lo, "slice index")
+            if first < 0 then first = first + len end
+        end
+        local last = len
+        if hi ~= nil then
+            last = pySliceInt(hi, "slice index")
+            if last < 0 then last = last + len end
+        end
+        return pyClamp(first, 0, len), pyClamp(last, 0, len)
+    end
+    local first = len - 1
+    if lo ~= nil then
+        first = pySliceInt(lo, "slice index")
+        if first < 0 then first = first + len end
+    end
+    local last = -1
+    if hi ~= nil then
+        last = pySliceInt(hi, "slice index")
+        if last < 0 then last = last + len end
+    end
+    return pyClamp(first, -1, len - 1), pyClamp(last, -1, len - 1)
+end
+
+-- Python subscripts accept negatives: -1 is the last element. Returns a
+-- 0-based position; the caller keeps its own range check.
+local function pyIndexPos(idx, len)
+    if idx < 0 then return idx + len end
+    return idx
+end
+
+local function pySliceApply(obj, lo, hi, stepRaw)
+    local step = 1
+    if stepRaw ~= nil then
+        step = pySliceInt(stepRaw, "slice step")
+        if step == 0 then
+            error(makeException("ValueError", "slice step cannot be zero"), 0)
+        end
+    end
+    local isString = (type(obj) == "string")
+    local len
+    if isString then
+        len = #obj
+    elseif type(obj) == "table"
+           and (obj.__pytype == "list" or obj.__pytype == "tuple") then
+        len = #obj
+    else
+        error(makeException("TypeError", "object is not sliceable"), 0)
+    end
+    local first, last = pySliceBounds(lo, hi, step, len)
+    local out = {}
+    local i = first
+    while true do
+        if step > 0 then
+            if i >= last then break end
+        else
+            if i <= last then break end
+        end
+        if isString then
+            out[#out + 1] = obj:sub(i + 1, i + 1)
+        else
+            out[#out + 1] = obj[i + 1]
+        end
+        i = i + step
+    end
+    if isString then return table.concat(out) end
+    out.__pytype = (obj.__pytype == "tuple") and "tuple" or "list"
+    return out
+end
+
 function Interpreter:eval(node)
     local t = node.type
     if t=="Number" then return node.value
@@ -2131,9 +2257,16 @@ function Interpreter:eval(node)
     elseif t=="Call" then return self:evalCall(node)
     elseif t=="Index" then
         local obj = self:eval(node.obj)
+        if node.slice then
+            local lo, hi, step = nil, nil, nil
+            if node.slice.lower then lo = self:eval(node.slice.lower) end
+            if node.slice.upper then hi = self:eval(node.slice.upper) end
+            if node.slice.step then step = self:eval(node.slice.step) end
+            return pySliceApply(obj, lo, hi, step)
+        end
         local idx = self:eval(node.index)
         if type(obj) == "string" then
-            local i = idx + 1
+            local i = pyIndexPos(idx, #obj) + 1
             if i < 1 or i > #obj then
                 error(makeException("IndexError",
                     "string index out of range"),0)
@@ -2151,7 +2284,7 @@ function Interpreter:eval(node)
                 local m = lookupMethod(obj.__class, "__getitem__")
                 if m then return m(obj, idx) end
             end
-            local i = idx + 1
+            local i = pyIndexPos(idx, #obj) + 1
             if i < 1 or i > #obj then
                 error(makeException("IndexError",
                     "list index out of range"),0)
@@ -2195,7 +2328,7 @@ function Interpreter:eval(node)
 end
 
 -- Lua <-> Python value conversion
-local function luaToPy(v)
+luaToPy = function(v)
     if type(v) ~= "table" then return v end
     local isArray = true
     local maxIndex = 0
@@ -2221,7 +2354,7 @@ local function luaToPy(v)
     return result
 end
 
-local function pyToLua(v)
+pyToLua = function(v)
     if type(v) ~= "table" then return v end
     if v.__pytype == "list" or v.__pytype == "tuple" then
         local t = {}
@@ -2381,13 +2514,14 @@ function Interpreter:makeFunction(name, params, body, vararg, kwarg)
         end
     end
 
-    local function bindArgs(args, funcScope)
+    local function bindArgs(args, argCount, funcScope)
         local kwData = nil
-        if #args > 0 then
-            local last = args[#args]
+        if argCount > 0 then
+            local last = args[argCount]
             if type(last) == "table" and last.__pykwargs then
                 kwData = last.data
-                table.remove(args)
+                args[argCount] = nil
+                argCount = argCount - 1
             end
         end
         for i, p in ipairs(params) do
@@ -2399,7 +2533,11 @@ function Interpreter:makeFunction(name, params, body, vararg, kwarg)
         end
         if vararg then
             local rest = {__pytype = "tuple"}
-            for i = #params + 1, #args do
+            -- table.insert (not indexed writes): keeping a None slot would
+            -- leave a hole in the tuple and Lua's # is undefined across
+            -- holes, which breaks len()/indexing. A None inside *args is
+            -- therefore dropped; see COVERAGE.md "known gaps".
+            for i = #params + 1, argCount do
                 table.insert(rest, args[i])
             end
             funcScope[vararg] = rest
@@ -2426,6 +2564,7 @@ function Interpreter:makeFunction(name, params, body, vararg, kwarg)
 
     if not isGenerator then
         return function(...)
+            local argCount = select("#", ...)
             local args = {...}
             local funcScope = {__isFunctionScope=true,
                 __globalNames=globalSet, __nonlocalNames=nonlocalSet}
@@ -2434,7 +2573,7 @@ function Interpreter:makeFunction(name, params, body, vararg, kwarg)
             for i, s in ipairs(capturedScopes) do newScopes[i] = s end
             newScopes[#newScopes + 1] = funcScope
             interp.scopes = newScopes
-            bindArgs(args, funcScope)
+            bindArgs(args, argCount, funcScope)
             local ok, result = pcall(function()
                 return interp:execBlock(body)
             end)
@@ -2448,6 +2587,7 @@ function Interpreter:makeFunction(name, params, body, vararg, kwarg)
     end
 
     return function(...)
+        local argCount = select("#", ...)
         local args = {...}
         local funcScope = {__isFunctionScope=true,
             __globalNames=globalSet, __nonlocalNames=nonlocalSet}
@@ -2457,7 +2597,7 @@ function Interpreter:makeFunction(name, params, body, vararg, kwarg)
 
         local savedForInit = interp.scopes
         interp.scopes = newScopes
-        bindArgs(args, funcScope)
+        bindArgs(args, argCount, funcScope)
         interp.scopes = savedForInit
 
         local co = coroutine.create(function()
@@ -2494,7 +2634,7 @@ function Interpreter:makeFunction(name, params, body, vararg, kwarg)
     end
 end
 
-local function makeInstance(class, args, interp)
+local function makeInstance(class, args, argCount, interp)
     local instance = {__pytype="instance", __class=class, __attrs={}}
     local init = lookupMethod(class, "__init__")
     if init then
@@ -2503,7 +2643,7 @@ local function makeInstance(class, args, interp)
             interp.currentClass, interp.currentInstance
         interp.currentClass = flags.definingClass or class
         interp.currentInstance = instance
-        local ok, err = pcall(init, instance, unpack(args))
+        local ok, err = pcall(init, instance, unpack(args, 1, argCount))
         interp.currentClass, interp.currentInstance =
             savedClass, savedInstance
         if not ok then error(err, 0) end
@@ -2513,13 +2653,18 @@ end
 
 function Interpreter:evalCall(node)
     local func = self:eval(node.func)
-    local args = {}
+    -- argCount is kept by hand: table.insert(t, nil) is a no-op, so a None
+    -- argument would otherwise be dropped and shift the ones after it.
+    local args, argCount = {}, 0
     local kwData = nil
     for _, a in ipairs(node.args) do
         if a.type == "StarArg" then
             local v = self:eval(a.expr)
             if type(v) == "table" then
-                for j = 1, #v do table.insert(args, v[j]) end
+                for j = 1, #v do
+                    argCount = argCount + 1
+                    args[argCount] = v[j]
+                end
             end
         elseif a.type == "DoubleStarArg" then
             local v = self:eval(a.expr)
@@ -2531,19 +2676,21 @@ function Interpreter:evalCall(node)
             if not kwData then kwData = {} end
             kwData[a.name] = self:eval(a.value)
         else
-            table.insert(args, self:eval(a))
+            argCount = argCount + 1
+            args[argCount] = self:eval(a)
         end
     end
     if kwData then
-        table.insert(args, {__pykwargs = true, data = kwData})
+        argCount = argCount + 1
+        args[argCount] = {__pykwargs = true, data = kwData}
     end
 
     if type(func) == "function" then
-        return func(unpack(args))
+        return func(unpack(args, 1, argCount))
     end
     if type(func) == "table" and func.__pytype == "instance" then
         local call = lookupMethod(func.__class, "__call__")
-        if call then return call(func, unpack(args)) end
+        if call then return call(func, unpack(args, 1, argCount)) end
         self:error("object is not callable")
     end
     if type(func) == "table" and func.__pytype == "class" then
@@ -2565,7 +2712,7 @@ function Interpreter:evalCall(node)
         if func.name == "dict" then
             return {__pytype="dict", data={}}
         end
-        return makeInstance(func, args, self)
+        return makeInstance(func, args, argCount, self)
     end
     self:error("object is not callable")
 end
@@ -3508,6 +3655,10 @@ function Interpreter:assignTarget(target, value)
     if target.type=="Name" then
         self:assign(target.name, value)
     elseif target.type=="Index" then
+        if target.slice then
+            error(makeException("TypeError",
+                "slice assignment is not supported"), 0)
+        end
         local obj = self:eval(target.obj)
         local idx = self:eval(target.index)
         if type(obj)=="table" then
@@ -3519,7 +3670,7 @@ function Interpreter:assignTarget(target, value)
                 error(makeException("TypeError",
                     "object does not support item assignment"), 0)
             else
-                obj[idx+1]=value
+                obj[pyIndexPos(idx, #obj) + 1] = value
             end
         else
             self:error("cannot assign to index")

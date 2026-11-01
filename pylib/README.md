@@ -6,13 +6,24 @@
 ## 内容
 
     pkg/                        按会话最终文件树还原的包内容
-        pylib/pythonlib.lua     解释器本体（Lua 手写，3647 行）
-        pylib/*.py              解释器 import 的 Python 模块（15 个）
+        pylib/pythonlib.lua     解释器本体（Lua 手写，3798 行，130760 -> 136733 字节，见 MANIFEST.md 的 post-export fix）
+        pylib/*.py              解释器 import 的 Python 模块（15 个，未改动）
         pyrepl.lua              REPL 前端（会话里写好但尚未集成进 psh）
-        legacy-py.lua           被 pythonlib.lua 取代的早期解释器（仅留档）
+        py.lua                  被 pythonlib.lua 取代的早期解释器（仅留档）
         manifest                本项目包管理器格式的清单（name/version/bin/file）
+    tests/                      离线回归套件（本轮新增）
+        run-tests.ps1           入口：staging -> CraftOS-PC headless -> PASS/FAIL
+        startup.lua, run.lua    引导与驱动（自动发现 t_*.lua）
+        harness.lua             断言/日志工具（每行同时写 logs/suite.log）
+        t_core.lua              核心语言特性（算术/字符串/容器/控制流/函数/类/异常/print/None）
+        t_slices.lua            切片下标（含"不支持必须报错"的 4 条）
+        t_modules.lua           15 个 .py 的 import 覆盖（ok/parse_error/runtime_error）
+        t_legacy.lua            pkg/py.lua（旧版）的状态
+        t_perf.lua              性能实测 + 将来优化必须保持的语义网
+        COVERAGE.md             覆盖表（逐模块状态 + 语法点现状 + 已知缺口）
+    DECISIONS.md                决策记录（修了什么/为什么没修/性能项为什么押后）
     MANIFEST.md                 还原说明：每个文件的字节数、行数、块位置、修订数
-    SHA256SUMS                  每个导出文件的 SHA256
+    SHA256SUMS                  每个导出文件的 SHA256（路径相对 pkg/）
 
 ## 来源与还原方法
 
@@ -27,20 +38,49 @@
   同一文件有多个版本时，优先选"自带文件头且以 `return <module>` 结尾"的整文件块，
   再按体积取最大——单看"最后一块"会选到会话里引用的补丁片段。
 
+## 测试入口（本轮实测，2026-11-01）
+
+`pwsh -NoProfile -File pylib\tests\run-tests.ps1`：把 `pkg/pylib/pythonlib.lua`、15 个 `.py`
+（放到 `/pylib/`）、`pkg/py.lua`（放到 `/legacy-py.lua`）和 `tests/` staging 到
+`pylib/.tests/computer/20`，用 CraftOS-PC console headless 跑 `tests/startup.lua`，判据取自
+`/logs/suite.log`（CraftOS 对重定向 stdout 做块缓冲，只看 stdout 会误判）。
+PASS 自动删 staging；失败保留；`-KeepStaging` 成功后也保留。
+
+当前基线：**PYLIB_PASS 188 / PYLIB_FAIL 0 / PYLIB_GROUPS 27**（实测整跑约 2 秒，含 CraftOS 启动）。
+
 ## 已验证
 
-- 3 个 Lua 文件在 lua51/52/53/54/luajit21 下都能编译。
-- 15 个 `.py` 都能被 Python 3 的 `ast.parse` 解析（语法完整、未被截断）。
-- 解释器在 CraftOS 桩环境（`fs`/`term`/`print`）里能加载并跑通核心语言特性：
-  算术与 print、字符串/列表、函数闭包、类与 `__init__`、`try/except`、`while`/`if`。
+- 本轮环境限制：本机没有 `lua`/`lua5.1`/`lua54`/`luajit` 可执行文件，所以"在
+  lua51/52/53/54/luajit21 下都能编译"这条**无法在本轮复验**（那是导出时的会话记录）；
+  本轮的实际验证环境是 CraftOS-PC 的 Lua 5.2，套件在它上面完整跑通。
+- 15 个 `.py` 都能被子集解析器解析（0 个 `parse_error`）。其中 **12 个能 import 并执行
+  模块体**，3 个落在 `runtime_error`（argparse、copy：内置异常不能作基类；pathlib：
+  缺 `os.path`）。逐条原因见 `tests/COVERAGE.md` §1。
+- 解释器核心语言特性在 CraftOS 里实测可用：算术与 print、字符串/列表/字典/元组、
+  推导式、闭包与 `nonlocal`/`global`、默认参数、类与 `__init__`、继承、
+  `try/except/finally`、`while`/`if`/`for`/`break`/`continue`、f-string。
+- 切片下标 `seq[a:b:c]`（省略界、负界、负步长、表达式边界）本轮实现并验证；
+  负下标 `l[-1]`、`print(None)`、位置参数里的 `None` 一并修好（`DECISIONS.md` §2）。
+- 旧版 `pkg/py.lua` 能加载但跑不了任何程序，报
+  `Parse error at line 1: Expected NEWLINE, got NAME`——与本文档原描述一致，已断言。
 
 ## 已知限制（交付时请留意）
 
-- 14 项"未完成"里的 Python 相关项：会话末尾明确列着 **REPL 尚未集成进 psh**、
-  **性能槽位化未做**（AST 缓存与常量折叠已做）。
-- 用子集解释器 `import` 导出的 pylib 模块时，个别模块会触发子集解析器的语法限制
-  （例如 `json.py` 第 175 行的下标里出现 `:`），说明这些 `.py` 用的是比解释器当前
-  解析器更新的语法，或解释器仍有未覆盖的语法点。模块本身是**合法 Python 3**
-  （`ast.parse` 通过），但这不等于子集解释器能跑它们——**上机后再确认一次**。
-- 早期解释器 `legacy-py.lua` 正是"`Parser:parseBlock` 在期望 INDENT 前不跳过换行"
-  的那一版，会报 `Parse error at line 1: Expected NEWLINE, got NAME`；保留只为留档。
+- **`class X(Exception)` 不支持**：内置异常名是构造函数而不是类，报
+  `base class not found or not a class: Exception`（argparse.py:80、copy.py:38）。
+  修它要同时改内置异常的数据模型、`raise`、`except` 三处语义，超出"低风险缺口"范围，
+  本轮只把它写成断言并记录根因（`DECISIONS.md` §3.1）。
+- **`pathlib.py` 无法 import**：`import os.path` 找不到模块；内置模块表只有
+  `math/random/time/os`（`DECISIONS.md` §3.2）。
+- **切片赋值不支持**（`l[0:1] = [...]` 抛 `TypeError: slice assignment is not supported`）；
+  **dict 切片不支持**（`TypeError: object is not sliceable`）；对带 `__getitem__` 的实例
+  也不传 `slice` 对象（子集没有 `slice` 类型）。
+- **`None` 落在 `*args` 里会被丢掉**：保留洞会让 Lua 的 `#` 未定义，连 `len()`/下标都不可用。
+- **`type(x)` 返回类名字符串**（`"int"`、`"tuple"`），不是类对象；`l[99] = x` 不检查范围。
+  都列在 `tests/COVERAGE.md` §2。
+- **性能槽位化未做（押后）**，附实测依据：宿主 VM 上字符串键哈希访问并不比数组槽慢
+  （边际 4.5ns 量级，数组槽 4.5-5.0ns，差异在噪声内），解释器每迭代 2450ns 里名字查找只占十几纳秒，槽位化收益
+  上限约 1–3%，而重写面覆盖全部名字解析路径。更划算的顺序是先补 AST 缓存（本导出件里
+  **没有** AST 缓存或常量折叠代码，旧说法"AST 缓存与常量折叠已做"在这个导出件上不成立）、
+  再降每次调用的 scope 拷贝与 `pcall` 开销（`DECISIONS.md` §4）。
+- REPL `pyrepl.lua` 仍未集成进 psh（与导出时记录一致，本轮未动）。

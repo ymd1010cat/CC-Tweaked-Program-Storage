@@ -28,3 +28,37 @@ Not imported by the interpreter, left out: gen_rsa.py, geometry.py
 
 ## package manifest
 `pkg/manifest` in the package format of this project's package manager, ready for a repository to serve.
+
+## post-export fixes (2026-11-01)
+
+`pylib/pythonlib.lua` was modified after the export, so the byte/line numbers in
+the "interpreter" section above are the historical extraction record. Measured
+now: 136733 bytes, 3798 lines (was 130760 / 3647). Everything else is untouched -
+the 15 `pylib/*.py`, `pyrepl.lua` and `manifest` hash to the same SHA256 as at
+export time.
+
+Reasons (full write-up in DECISIONS.md):
+
+1. slice subscripts `seq[a:b:c]` - the parser rejected `:` outright, which
+   blocked 5 of the 15 exported modules (argparse.py:38, collections.py:48,
+   json.py:175, pathlib.py:33, string.py:18). Implemented for str/list/tuple
+   with CPython bound rules; slice assignment, dict slicing and step 0 raise
+   explicit errors instead of producing a value.
+2. `luaToPy` / `pyToLua` forward declaration - `getBuiltins()` referenced both
+   names before their `local function` definition, so those references compiled
+   to globals and the builtin `lua()` failed with "attempt to call global
+   'luaToPy' (a nil value)". This was why `cc.py` could not be imported.
+3. the `print` builtin counted arguments with `#{...}`, so a nil argument
+   (`print(None)`, `print(f())` for a function without `return`) printed an
+   empty line. It now uses `select("#", ...)`.
+4. `evalCall` collected positional arguments with `table.insert(args, ...)`,
+   and a nil insert is a no-op: `f(1, None, 3)` silently passed `1, 3`.
+   Argument counting is now explicit and `unpack(args, 1, argCount)` is used.
+   A `None` inside `*args` is still dropped (documented in tests/COVERAGE.md).
+5. negative subscripts (`l[-1]`) raised IndexError while slices already accepted
+   negative bounds; both now normalise through `pyIndexPos`.
+
+`SHA256SUMS` was regenerated (new `pythonlib.lua` hash) and its stale
+`legacy-py.lua` row was renamed to `py.lua`: the file was never renamed on disk,
+only the checksum list kept the pre-export name, so that row could not be
+verified.
