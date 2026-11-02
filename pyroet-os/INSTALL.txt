@@ -10,8 +10,9 @@ in-game paths.
   about 601,778 B free: image 401,778 B + backup cap 200,000 B.
 - Release archive pyroet-os-v1.0.0.zip (pyroet-os/ tree plus LICENSE).
   tests/ and tools/ are NOT shipped (development material).
-- A modem for networking or a rednet install (side from /etc/network.conf,
-  default back). Without one the system still boots; net reports degraded.
+- A modem for networking or a rednet install (the modem is auto-discovered;
+  pocket computers have no sides). Without one the system still boots; net
+  reports degraded.
 - /recovery/*.lua is optional for booting but is the only rescue path.
 
 1. ARCHIVE -> TARGET PATHS
@@ -201,7 +202,8 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
   prefix=24
   gateway=10.0.0.1
   dns=10.0.0.1
-  iface_side=back
+There is no iface_side key: the modem is auto-discovered. A stale
+iface_side=<side> line is ignored and logged as NET_CONFIG_IGNORED.
 dns= is the resolver for name lookups (one IPv4). Omit it and the gateway is
 used; dns=0 means "no resolver cache" (the gateway is still the server).
 rhtp_secret=<64 hex> turns on PSK sealing for RHTP responses (optional,
@@ -277,7 +279,7 @@ the update or reflash.
 cannot be proven; boot stops on purpose (no reboot loop). Reflash.
 "BOOT_FATAL reason=no_system": /system is gone; only a flash restores it.
 NET_* / health=degraded: config errors never block boot. Read the NET_* line;
-parse errors include the line number. Check modem, iface_side, ip.
+parse errors include the line number. Check modem, ip.
 "capability denied: <cap>": /etc/perms/<app>.cfg denies it (or the app is not
 a system package). A corrupt decision file denies everything and is never
 rewritten; delete it to be asked again.

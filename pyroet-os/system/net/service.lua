@@ -38,7 +38,7 @@ Config keys (all optional except `ip`):
     ip=10.0.0.5            required, strict dotted decimal (no leading zero)
     prefix=24              default 24, 1..32
     gateway=10.0.0.1       optional; omitted means local subnet only
-    iface_side=back        modem side, default "back"
+    iface_side             ignored; the modem is auto-discovered (DECISIONS 39.2)
     iface_name=NET         default "NET"
     channel=4100           default 4100, 1..65532 (65533-65535 are rednet's)
     mtu=256                default 256, >= 68 (IPv4 minimum)
