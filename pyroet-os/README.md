@@ -529,9 +529,14 @@ index.txt         app <name> <version> <dir>      # 目录包：manifest.lua + m
   `R:fetch(path, size)` 用 `max_bytes` 分块并回调 `progress(done, total)`。
 - **失败**：非 2xx → `nil, "rhtp <code>"`；超时 `nil, "timeout"`（有 `node:pump` 时按截止时间泵，
   没有也不会空转）；坏状态行 `nil, "bad response"`；单包超过 `MAX_DATAGRAM`（60000）→ `nil, "too large"`。
-- **安全边界**：RHTP 没有 TLS、没有签名。完整性靠 SHA-256（OTA 的 `manifest_sha` + 每文件 `sha256`、
-  appstore 的 `SHA256.txt`），**真实性未签名**——能改写链路的人可以换一份自洽的新镜像，客户端只能证明
-  "拿到的东西和描述一致"。这是已记录风险（DECISIONS.md §45.5），不是待修 bug。
+- **传输鉴权（可选，`rhtp_secret=`）**：`/etc/network.conf` 配 `rhtp_secret=<64 hex>` 后，客户端给每个
+  请求带 `Rhtp-Seal: 1` 头，服务端对响应体做 **PSK 密封**（ChaCha20 加密 + HMAC-SHA256 截断 16 字节的
+  tag，tag 绑定"请求随机 nonce + 状态行 + 密文"，`system/net/rhtp_secure.lua`，两端共享同一 PSK）。
+  客户端验 tag 失败 → `nil, "seal bad"`；**请求密封而服务端明文应答 → fail-closed `nil, "seal required"`**。
+  每个请求随机生成 8 字节 nonce、每块（`off/len`）独立 nonce，无持久计数器。只有响应被密封（GET 请求
+  无秘密），证书式的对端身份鉴别不属于本设计。**默认不配 = 明文（向后兼容旧服务器），是不安全默认**：
+  完整性仍靠 SHA-256，但真实性未加密/未签名，能改写链路的人可以换一份自洽的新镜像。
+  **两端必须用同一 PSK**：换 PSK 即换可信源；PGM 侧（部署的 rhtp_server）用同一个 64 hex 才能解密。
 
 **顺序即安全保证**：
 
@@ -675,7 +680,7 @@ WINDOW_OK  : sum=913752 limit=10685760
 | 限制 | 具体表现 / 影响 |
 | --- | --- |
 | **DNS 已实现（明文）** | `services.lua` 仍未 vendor，但 `node:lookup(name)` 返回 `nil` 时 `system/net/dns.lua` 会真的发 DNS QUERY（UDP 53 / A 记录 / 1 s x 2 / 正向缓存 ≤60 s），解析器地址取 `/etc/network.conf` 的 `dns=`（缺省 `gateway`）。**DNS 是明文 UDP**：可被伪造/篡改到与 RHTP 同一程度，没有 DNSSEC；日志 `DNS_QUERY` / `DNS_ANSWER` / `DNS_TIMEOUT` / `DNS_NXDOMAIN` / `DNS_BAD_PACKET`（DECISIONS.md §45.6） |
-| **RHTP 无 TLS / 无签名** | 完整性靠 SHA-256（OTA manifest_sha + 每文件 sha256、appstore 可选 SHA256.txt），真实性不签名；链路可被替换成自洽的另一份镜像（DECISIONS.md §45.5） |
+| **RHTP 默认明文，可开 `rhtp_secret=` 密封** | 不配 = 明文：完整性靠 SHA-256（OTA manifest_sha + 每文件 sha256、appstore 可选 SHA256.txt），真实性不签名/不加密。配 `rhtp_secret=<64hex>`（`/etc/network.conf`、两端同一 PSK）后，客户端请求带 `Rhtp-Seal: 1`，服务端对响应体做 ChaCha20+HMAC16 密封（`system/net/rhtp_secure.lua`，按请求 nonce，无持久计数器）；验签失败 `seal bad`、密封请求遇明文应答 fail-closed `seal required`。**仍无 TLS**：PSK 是共享对称秘密，做的是"同源保密+完整性"，不是证书式身份鉴别；换 PSK 即换可信源（DECISIONS.md §45.9） |
 | **app 侧 RHTP 由桌面泵驱动** | `kernel/desktop.lua` 每个 tick 调一次 `net` 服务的 `pump()`，所以 app 里发起的 RHTP 请求（与 DNS 查询）能收包（`DESKTOP_PUMP`）。预算 0.02 s：`node:pump` 会阻塞并消费它自己 pull 到的非网络事件，所以预算刻意很小——长时间按住键期间的理论丢帧是这条接线的已知代价（DECISIONS.md §45.6） |
 | **无 ICMP / 无 ping** | `icmp` 模块已裁；`probe()` 用 UDP 一发一收，所以"端口无响应 / 主机不在线 / 被丢弃"对外都只能表现为 timeout |
 | **无 DHCP / NAT / 路由 / WAN ACL / 多跳** | `nat`/`wan`/`wansec`/`fabric`/`topo`/`qos`/`mcast`/`dv` 全部裁掉；掌机只做端点，不转发、不做网关 |

@@ -67,7 +67,9 @@ local function hex_encode(s)
 end
 
 -- last resort when no rpv table is reachable: load the module directly (module
--- files are `local M = ...`, so an empty table is enough to own one instance)
+-- files are `local M = ...`, so an empty table is enough to own one instance).
+-- The full module is kept so the sealer can use hkdf/chacha20/hmac/unhex too,
+-- not just the sha256/hex the dns mirror header needs.
 local fallback_crypto = nil
 local function load_crypto()
     if fallback_crypto then return fallback_crypto end
@@ -77,7 +79,7 @@ local function load_crypto()
             if loaded and type(chunk) == "function" then
                 local ok, mod = pcall(chunk, {})
                 if ok and type(mod) == "table" and type(mod.sha256) == "function" then
-                    fallback_crypto = { sha256 = mod.sha256, hex = mod.hex }
+                    fallback_crypto = mod
                 end
             end
         end
@@ -139,6 +141,59 @@ local function parse_request(data)
     return method, (target:gsub("[?#].*$", ""))
 end
 
+-- the 8-byte request nonce, echoed from a `Rhtp-Seal: 1 <16-hex>` marker (the
+-- standalone rhtp_secure.lua copy seals with it). Absent -> nil (plaintext
+-- server, unchanged). Returns a table of raw bytes (Lua has no bitwise).
+local function parse_nonce(data)
+    local hex = tostring(data or ""):match("Rhtp%-Seal: 1 (%x+)")
+    if not hex or #hex ~= 16 then return nil end
+    local out = {}
+    for i = 1, 8 do
+        out[i] = tonumber(hex:sub(i * 2 - 1, i * 2), 16)
+    end
+    return out
+end
+
+-- a 64-hex PSK turns into a sealer (from apps/rhtp_secure.lua, the same
+-- standalone copy that seals the client cross-test); anything else -> nil
+-- (plaintext server). The sealer is cached per server instance.
+local sealer_mod = nil
+local function load_sealer(secret, crypto)
+    if type(secret) ~= "string" or #secret ~= 64 then return nil end
+    if not sealer_mod then
+        local path = "apps/rhtp_secure.lua"
+        local ok, chunk = pcall(loadfile, path)
+        if not ok or type(chunk) ~= "function" then
+            ok, chunk = pcall(loadfile, "rhtp_secure.lua")
+        end
+        if not ok or type(chunk) ~= "function" then return nil end
+        local ok2, mod = pcall(chunk, {})
+        if not ok2 or type(mod) ~= "table" or type(mod.new) ~= "function" then return nil end
+        sealer_mod = mod
+    end
+    local ok, instance = pcall(sealer_mod.new, { psk_hex = secret, crypto = crypto })
+    if not ok or type(instance) ~= "table" then return nil end
+    return instance
+end
+
+-- when the request carries the seal marker and this server has a sealer, wrap
+-- the routed response in a sealed envelope; otherwise pass it through. A server
+-- that cannot seal (no crypto) still answers plaintext -- secrecy/integrity is
+-- the client's ask, and the client fails closed when the reply is unsealed.
+local function seal_response(data, response, sealer)
+    if not sealer then return response end
+    local nonce = parse_nonce(data)
+    if not nonce then return response end
+    local code, reason = response:match("^RHTP/%d+%.%d+ (%d%d%d) ([^\r\n]*)")
+    local body = response:match("\r?\n\r?\n(.*)$")
+    if not code then return response end
+    local bin = string.char(nonce[1], nonce[2], nonce[3], nonce[4],
+        nonce[5], nonce[6], nonce[7], nonce[8])
+    local ok, sealed = pcall(sealer.seal, sealer, tonumber(code), reason, body, bin)
+    if not ok or type(sealed) ~= "string" then return response end
+    return sealed
+end
+
 local function route(data, hash)
     local method, path = parse_request(data)
     if method ~= "GET" or not path then return NOT_FOUND end
@@ -176,10 +231,15 @@ function M.handle_request(data, log)
 end
 
 -- ===== socket server ======================================================
--- start_rhtp(node, port[, rpv]) -> socket. Without the library table the reply
--- falls back to the socket's own sendto(), which calls rpv.udp_send internally.
-function M.start_rhtp(node, port, rpv_lib)
+-- start_rhtp(node, port[, rpv][, opts]) -> socket. Without the library table
+-- the reply falls back to the socket's own sendto(), which calls rpv.udp_send
+-- internally. opts.secret (64-hex PSK) turns the server into a sealer: when a
+-- request carries a `Rhtp-Seal: 1 <nonce>` marker, the response is wrapped in
+-- the same envelope apps/rhtp_secure.lua opens, so "mainland" clients can ask
+-- the server to seal and verify integrity end to end.
+function M.start_rhtp(node, port, rpv_lib, opts)
     local bind_port = tonumber(port) or M.DEFAULT_PORT
+    opts = opts or {}
     -- per-instance state: two servers started from the same module table keep
     -- their own transport (and the explicit argument always wins)
     local RP = resolve_rpv(rpv_lib)
@@ -188,10 +248,25 @@ function M.start_rhtp(node, port, rpv_lib)
     local function log(fmt, ...)
         if type(node.log) == "function" then node:log(fmt, ...) end
     end
+    -- the sealer needs the full crypto suite (hkdf/chacha20/hmac/unhex), not
+    -- just the sha256/hex a transport stub carries: load the library directly
+    -- when RP is a thin transport, and fall back to RP only if it has them all
+    local sealer_crypto = load_crypto()
+    if not sealer_crypto then
+        local okmod = RP
+        if type(okmod) ~= "table" or type(okmod.hkdf_sha256) ~= "function"
+            or type(okmod.chacha20_xor) ~= "function"
+            or type(okmod.hmac_sha256) ~= "function" or type(okmod.unhex) ~= "function" then
+            okmod = nil
+        end
+        sealer_crypto = okmod
+    end
+    local sealer = load_sealer(opts.secret, sealer_crypto)
 
     local sock
     sock = node:bind(bind_port, function(data, src, sport)
         local response = handle(data, log, hash)
+        response = seal_response(data, response, sealer)
         local ok, err
         if RP then
             ok, err = pcall(RP.udp_send, node, src, bind_port, sport, response)
@@ -203,7 +278,8 @@ function M.start_rhtp(node, port, rpv_lib)
             tostring(response:match("^[^\r\n]*")), #response)
     end)
 
-    log("RHTP_START port=%d lib=%s", bind_port, tostring(RP ~= nil))
+    log("RHTP_START port=%d lib=%s seal=%s", bind_port, tostring(RP ~= nil),
+        tostring(sealer ~= nil))
     return sock
 end
 
@@ -212,7 +288,8 @@ function M.new(o)
     local opts = o or {}
     local self = { rpv = opts.rpv, node = opts.node, port = tonumber(opts.args) or M.DEFAULT_PORT, sock = nil }
     self.start = function()
-        self.sock = M.start_rhtp(self.node, self.port, self.rpv)
+        self.sock = M.start_rhtp(self.node, self.port, self.rpv,
+            { secret = opts.secret })
         return self.sock ~= nil
     end
     return self

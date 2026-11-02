@@ -40,6 +40,7 @@ Copy-Item (Join-Path $root "poc\apps\rhtp_client.lua") (Join-Path $dir "apps") -
 Copy-Item (Join-Path $root "poc\apps\backup_router.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\core_router.lua") (Join-Path $dir "apps") -Force
 Copy-Item (Join-Path $root "poc\apps\ha_ctl.lua") (Join-Path $dir "apps") -Force
+Copy-Item (Join-Path $root "poc\apps\rhtp_secure.lua") (Join-Path $dir "apps") -Force
 # routectl/panel are not loaded by the suite; t_pathview only asserts that the path
 # view is wired into them. They are staged under node2/ on purpose: apps/ is linted,
 # and their usage blocks ("app=routectl", "app=panel:4200") trip the global? heuristic

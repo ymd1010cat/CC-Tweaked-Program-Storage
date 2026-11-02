@@ -17,8 +17,8 @@ Client API:
 
 * R.new{node=, log=, timeout=, port=, max_bytes=, host=, pump=, clock=,
   client_port=, debug=, rpv=, dns=, fs=, dns_server=, dns_gateway=,
-  dns_cache=, dns_config_path=, dns_module=}. `node` is an rpv node
-  (node.bind / node.lookup).
+  dns_cache=, dns_config_path=, dns_module=, secret=, secure=, rand=}. `node`
+  is an rpv node (node.bind / node.lookup).
   `timeout` defaults to 3 s, `port` (the server port used for a bare "/path"
   target) to 8080, `max_bytes` to 4096 (the fetch chunk size), `debug=false`
   suppresses RHTP_RESOLVE only. `pump(seconds)` is the host's node pump; it
@@ -28,6 +28,14 @@ Client API:
   module loads `/system/net/dns.lua` lazily, and the `dns_*` keys are handed
   to `dns.new` (the net service passes its already parsed `/etc/network.conf`
   values, so there is exactly one config parser per process).
+  Sealing (DECISIONS.md 44): `secret` is a 64-hex PSK, `secure` is a prebuilt
+  net/rhtp_secure.lua object (when both are given `secure` wins). With a
+  working secure object every request starts with a fresh 8-byte random nonce
+  (a `Rhtp-Seal: 1 <nonce>` marker is added to the request line) and the
+  response must be a sealed envelope, else the call fails closed
+  (`nil, "seal required"` / `nil, "seal bad"`). `rand(n)` overrides the nonce
+  source (default: the secure object's own crypto.random_bytes). Without a
+  secret/secure object the client behaves exactly as before (plaintext).
 * R.parse_url(url) -> {scheme="rhtp", host=, port=, path=} | nil, reason.
   `rhtp://<host>[:<port>]/<path>`; a bare `<host>[:<port>]/<path>` is read as
   rhtp://. Any other explicit scheme is refused ("bad scheme") -- there is no
@@ -36,7 +44,9 @@ Client API:
   RHTP code and is only returned for a 2xx answer; 4xx/5xx is
   nil, "rhtp <code>". opts: {timeout=, offset=, length=, limit=}; offset and
   length add the chunk extension to the request, limit caps the body a single
-  response may carry (default R.MAX_DATAGRAM).
+  response may carry (default R.MAX_DATAGRAM). When sealing is enabled the
+  response must be a sealed envelope: an unscaled answer to a sealed request
+  is nil, "seal required", and a mismatched tag/nonce is nil, "seal bad".
 * c:fetch(url, size[, opts]) -> true, body | nil, reason. With a numeric size
   the body is pulled in `max_bytes` chunks as `GET <path> off=<n> len=<n>`,
   expecting `206 Partial Content` with exactly that segment; a server that
@@ -67,9 +77,13 @@ instead of spinning. Logs: RHTP_GET host= ip= path= code= bytes=, RHTP_TIMEOUT,
 RHTP_BAD_RESPONSE, RHTP_CHUNK off= len=, RHTP_DNS_FAIL host=, RHTP_RESOLVE
 host= ip=, RHTP_TOO_LARGE path= bytes= limit=, RHTP_SEND_FAIL.
 
-No TLS and no signature: integrity comes from the SHA-256 the caller checks
-(kernel/ota.lua for images, appstore's SHA256.txt for packages). DECISIONS.md
-section 44 records that boundary.
+Sealing: by default RHTP is plaintext -- no TLS and no signature; integrity
+comes from the SHA-256 the caller checks (kernel/ota.lua for images, appstore's
+SHA256.txt for packages), and DECISIONS.md section 44 records that boundary.
+When the net service is configured with a `rhtp_secret` (64 hex), every request
+carries a fresh random nonce and the response must be a PSK-sealed envelope
+(ChaCha20 + HMAC16, net/rhtp_secure.lua); a sealed request facing an unscaled
+answer fails closed. See R.new below for the `secret`/`secure`/`rand` keys.
 
 No non-ASCII bytes in this file.
 ]]
@@ -113,6 +127,35 @@ R.MAX_PUMP_STEPS = 64
 R.CLIENT_PORT_FIRST = 49152
 R.CLIENT_PORT_LAST = 65532
 R.CLIENT_PORT_SPAN = R.CLIENT_PORT_LAST - R.CLIENT_PORT_FIRST + 1
+R.SEAL_MARKER = "Rhtp-Seal"
+R.SEAL_REQUIRE = "seal required"
+
+-- net/rhtp_secure.lua, loaded lazily on first secret use (nil = unavailable).
+-- Same shape as net/dns.lua: a pure module cache, one module per process.
+local SECURE_MODULE
+local function load_rhtp_secure(fsx)
+    if SECURE_MODULE ~= nil then return SECURE_MODULE end
+    local candidates = { "/system/net/rhtp_secure.lua", "system/net/rhtp_secure.lua" }
+    for i = 1, #candidates do
+        local path = candidates[i]
+        local exists = false
+        if type(fsx) == "table" and type(fsx.exists) == "function" then
+            local ok, found = pcall(fsx.exists, path)
+            exists = ok and found == true
+        end
+        -- without a filesystem probe (headless / tests) still try to load the
+        -- absolute path directly; it resolves in the same environment that
+        -- loaded rhtp.lua itself
+        if exists or fsx == nil then
+            local ok, module = pcall(dofile, path)
+            if ok and type(module) == "table" and type(module.new) == "function" then
+                SECURE_MODULE = module
+                return module
+            end
+        end
+    end
+    return nil
+end
 
 local function short(value, max)
     local s = tostring(value == nil and "nil" or value)
@@ -286,6 +329,21 @@ function R.new(opts)
     self.dns_gateway = o.dns_gateway
     self.dns_cache = o.dns_cache
     self.dns_config_path = o.dns_config_path
+    -- Sealing (DECISIONS.md 44): a prebuilt net/rhtp_secure.lua object, or a
+    -- 64-hex PSK from which the net service builds one. `secure` wins over
+    -- `secret`. rand(n) is the 8-byte per-request nonce source; it defaults to
+    -- the secure object's crypto.random_bytes.
+    self.secure = o.secure
+    self.rand = o.rand
+    if self.secure == nil and type(o.secret) == "string" then
+        if #o.secret == 64 and o.secret:match("^[0-9a-fA-F]+$") ~= nil then
+            local secure_lib = load_rhtp_secure(self.fs)
+            if secure_lib then
+                local ok, obj = pcall(secure_lib.new, { psk_hex = o.secret })
+                if ok and type(obj) == "table" then self.secure = obj end
+            end
+        end
+    end
     return self
 end
 
@@ -506,6 +564,37 @@ function R:url_of(target)
     return R.parse_url(target)
 end
 
+-- One fresh 8-byte random nonce for a sealed request (DECISIONS.md 44). Uses
+-- `rand(8)` when injected, else the secure object's crypto.random_bytes. The
+-- source must return exactly 8 bytes to bound the ChaCha20 nonce.
+function R:nonce()
+    if not self.secure then return nil end
+    if type(self.rand) == "function" then
+        local n = self.rand(8)
+        if type(n) == "string" and #n == 8 then return n end
+    end
+    if type(self.secure.crypto) == "table"
+        and type(self.secure.crypto.random_bytes) == "function" then
+        return self.secure.crypto.random_bytes(8)
+    end
+    return nil
+end
+
+-- Seal handling for one response text. Given the request nonce, opens the
+-- envelope: a matching seal -> code, body; an unscaled answer to a sealed
+-- request -> nil, R.SEAL_REQUIRE (fail closed, DECISIONS.md 44); a mismatch ->
+-- nil, "seal bad". Honors a pre-negotiated `soft` mode that returns a nil code
+-- with the plain response body so the caller can log the failure.
+function R:open_response(text, bin_nonce)
+    if not self.secure then
+        return R.parse_response(text)
+    end
+    local code, body = self.secure:open(text, bin_nonce)
+    if code ~= nil then return code, body end
+    if body == "plain" then return nil, R.SEAL_REQUIRE end
+    return nil, body
+end
+
 -- GET one path. Returns status, body for a 2xx answer; nil, reason otherwise.
 function R:get(target, opts)
     local o = opts or {}
@@ -526,20 +615,45 @@ function R:get(target, opts)
         end
         request = request .. " off=" .. tostring(offset) .. " len=" .. tostring(length)
     end
+    -- Sealing (DECISIONS.md 44): one fresh nonce per request, echoed in the
+    -- response envelope. The marker keeps `GET <path>` as the first two tokens
+    -- (the reference server's parse_request reads only those) and carries the
+    -- 16-hex nonce as an extra token the server binds into the tag.
+    local bin_nonce = nil
+    if self.secure then
+        bin_nonce = self:nonce()
+        if not bin_nonce then
+            self.failures = self.failures + 1
+            self:log("RHTP_SEAL_FRAMING path=%s err=no nonce source", short(url.path, 40))
+            return nil, "bad nonce"
+        end
+        request = request .. " " .. R.SEAL_MARKER .. ": 1 " .. self.secure.crypto.hex(bin_nonce)
+    end
     local text, err = self:exchange(ip, url.port, request, o.timeout)
     if not text then return nil, err end
-    local code, body = R.parse_response(text)
+    local code, body = self:open_response(text, bin_nonce)
     if not code then
         self.failures = self.failures + 1
-        self:log("RHTP_BAD_RESPONSE host=%s path=%s bytes=%d",
-            short(url.host, 40), short(url.path, 40), #text)
-        return nil, "bad response"
+        if body == R.SEAL_REQUIRE then
+            self:log("RHTP_SEAL_REQUIRED host=%s path=%s bytes=%d",
+                short(url.host, 40), short(url.path, 40), #text)
+        elseif body == "seal bad" then
+            self:log("RHTP_SEAL_BAD host=%s path=%s bytes=%d",
+                short(url.host, 40), short(url.path, 40), #text)
+        else
+            self:log("RHTP_BAD_RESPONSE host=%s path=%s bytes=%d",
+                short(url.host, 40), short(url.path, 40), #text)
+        end
+        return nil, body
     end
-    self:log("RHTP_GET host=%s ip=%s path=%s code=%d bytes=%d",
+    local sealed = self.secure ~= nil
+    self:log("RHTP_GET host=%s ip=%s path=%s code=%d bytes=%d sealed=%s",
         short(url.host, 40), short(ip_text, 16), short(url.path, 64),
-        code, #body)
+        code, #body, sealed and "1" or "0")
     if code < 200 or code > 299 then
         self.failures = self.failures + 1
+        self:log("RHTP_STATUS host=%s path=%s code=%d",
+            short(url.host, 40), short(url.path, 40), code)
         return nil, "rhtp " .. tostring(code)
     end
     local limit = tonumber(o.limit) or R.MAX_DATAGRAM

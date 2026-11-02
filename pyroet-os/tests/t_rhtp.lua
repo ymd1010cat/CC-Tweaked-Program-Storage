@@ -9,6 +9,9 @@ No non-ASCII bytes in this file.
 ]]
 
 local R = assert(loadfile("/system/net/rhtp.lua"))()
+local S = assert(loadfile("/system/net/rhtp_secure.lua"))()
+local CRYPTO = assert(loadfile("/system/rpv/crypto.lua"))({})
+local PSK = string.rep("ab", 32) -- 64 hex chars
 
 return function(H)
     local IP_BOX = R.parse_ip("10.0.0.9")
@@ -437,5 +440,214 @@ return function(H)
         H.eq("twice_1", select(2, c7:get("rhtp://box/a")), "a")
         H.eq("twice_2", select(2, c7:get("rhtp://box/b")), "b")
         H.eq("twice_ports", #node.ports, 0)
+    end
+
+    -- -----------------------------------------------------------------
+    -- Sealing (DECISIONS.md 44). A sealed server seals every answer when the
+    -- request line carries `Rhtp-Seal: 1 <nonce16>` and echoes that nonce.
+    local secure = assert(S.new{ psk_hex = PSK, crypto = CRYPTO })
+    local RAND_NONCE = "\169\170\171\172\173\174\175\176" -- 8 bytes
+
+    -- opts: fail(return_type), bad_tag, bad_nonce, no_header
+    local function sealed_server(routes, o)
+        local so = o or {}
+        return function(request)
+            local text = tostring(request)
+            local path = text:match("^GET (%S+)")
+            local nonce16 = text:match("Rhtp%-Seal: 1 (%x+)$")
+            local body = (routes or {})[path]
+            if body == nil then
+                return "RHTP/1.0 404 Not Found\r\n\r\nnope"
+            end
+            if so.no_header then
+                return "RHTP/1.0 200 OK\r\n\r\n" .. body
+            end
+            local bn = nonce16 and CRYPTO.unhex(nonce16:lower()) or RAND_NONCE
+            if so.bad_nonce then bn = bn:sub(1, 7) .. string.char(bn:byte(8) + 1) end
+            local sealed = assert(secure:seal(200, "OK", body, bn))
+            if so.bad_tag then
+                -- flip one hex char in the tag field (the 32-hex token that
+                -- ends the Rhtp-Seal line), leaving status/ciphertext intact
+                local _, tag = sealed:match("(%x+)%s+(%x+)\r?\n\r?\n")
+                sealed, _ = sealed:gsub("%x+\r?\n\r?\n",
+                    (tag:sub(1, 1) == "a" and "b" or "a") .. tag:sub(2)
+                        .. "\r\n\r\n", 1)
+            end
+            return sealed
+        end
+    end
+
+    H.group("rhtp.sealed_header")
+    do
+        local node = make_node({
+            hosts = { box = IP_BOX },
+            lookup = function() return nil end,
+            reply = sealed_server({ ["/hello"] = "world" }),
+        })
+        local c = new_client(node, {
+            secure = secure,
+            rand = function(n) return RAND_NONCE end,
+        })
+        local code, body = c:get("rhtp://box/hello")
+        H.eq("seal_code", code, 200)
+        H.eq("seal_body", body, "world")
+        H.eq("seal_request", node.sent[1].data,
+            "GET /hello Rhtp-Seal: 1 "
+            .. CRYPTO.hex(RAND_NONCE))
+    end
+
+    H.group("rhtp.sealed_nosecret")
+    do
+        -- no secret/secure -> the old plaintext path, marker absent
+        local node = make_node({
+            hosts = { box = IP_BOX },
+            lookup = function() return nil end,
+            reply = server({ ["/hello"] = "world" }),
+        })
+        local c = new_client(node)
+        local code, body = c:get("rhtp://box/hello")
+        H.eq("nosecret_code", code, 200)
+        H.eq("nosecret_body", body, "world")
+        H.eq("nosecret_request", node.sent[1].data, "GET /hello")
+    end
+
+    H.group("rhtp.sealed_required")
+    do
+        -- a sealed request answered with a plain (unsealed) response fails
+        -- closed with "seal required"
+        local node = make_node({
+            hosts = { box = IP_BOX },
+            lookup = function() return nil end,
+            reply = sealed_server({ ["/hello"] = "world" }, { no_header = true }),
+        })
+        local c, lines = new_client(node, {
+            secure = secure,
+            rand = function() return RAND_NONCE end,
+        })
+        local code, err = c:get("rhtp://box/hello")
+        H.eq("required_code", code, nil)
+        H.eq("required_err", err, "seal required")
+        H.has(lines, "RHTP_SEAL_REQUIRED host=box path=/hello")
+        H.eq("required_failures", c:status().failures, 1)
+    end
+
+    H.group("rhtp.seal_bad_tag")
+    do
+        -- a tampered tag fails the MAC -> "seal bad"
+        local node = make_node({
+            hosts = { box = IP_BOX },
+            lookup = function() return nil end,
+            reply = sealed_server({ ["/hello"] = "world" }, { bad_tag = true }),
+        })
+        local c, lines = new_client(node, {
+            secure = secure,
+            rand = function() return RAND_NONCE end,
+        })
+        local code, err = c:get("rhtp://box/hello")
+        H.eq("badtag_code", code, nil)
+        H.eq("badtag_err", err, "seal bad")
+        H.has(lines, "RHTP_SEAL_BAD host=box path=/hello")
+    end
+
+    H.group("rhtp.seal_bad_nonce")
+    do
+        -- a response echoing a different nonce must fail the MAC too
+        local node = make_node({
+            hosts = { box = IP_BOX },
+            lookup = function() return nil end,
+            reply = sealed_server({ ["/hello"] = "world" }, { bad_nonce = true }),
+        })
+        local c, lines = new_client(node, {
+            secure = secure,
+            rand = function() return RAND_NONCE end,
+        })
+        local code, err = c:get("rhtp://box/hello")
+        H.eq("badnonce_code", code, nil)
+        H.eq("badnonce_err", err, "seal bad")
+    end
+
+    H.group("rhtp.sealed_chunk")
+    do
+        -- chunked fetch: each chunk carries its own fresh nonce
+        local node = make_node({
+            hosts = { box = IP_BOX },
+            lookup = function() return nil end,
+            reply = function(request)
+                local text = tostring(request)
+                local path = text:match("^GET (%S+)")
+                local nonce16 = text:match("Rhtp%-Seal: 1 (%x+)$")
+                local bn = nonce16 and CRYPTO.unhex(nonce16:lower()) or RAND_NONCE
+                local body = "0123456789"
+                if path == "/file" then
+                    local off = tonumber(text:match("off=(%d+)"))
+                    local len = tonumber(text:match("len=(%d+)"))
+                    local seg = off and len and body:sub(off + 1, off + len) or body
+                    return assert(secure:seal(206, "Partial Content", seg, bn))
+                end
+                return "RHTP/1.0 404 Not Found\r\n\r\nnope"
+            end,
+        })
+        local c, lines = new_client(node, {
+            max_bytes = 4,
+            secure = secure,
+            rand = function() return RAND_NONCE end,
+        })
+        local ok, body = c:fetch("rhtp://box/file", 10)
+        H.eq("chunk_ok", ok, true)
+        H.eq("chunk_body", body, "0123456789")
+        H.eq("chunk_requests", #node.sent, 3)
+        -- each request carries the seal marker (per-chunk nonce re-used for
+        -- determinism here; the marker must be present on every chunk)
+        for i = 1, #node.sent do
+            H.has({ node.sent[i].data }, "Rhtp-Seal: 1")
+        end
+    end
+
+    H.group("rhtp.sealed_mixed")
+    do
+        -- left insecure + right secure behave independently on one client set
+        local plain = make_node({
+            hosts = { box = IP_BOX },
+            lookup = function() return nil end,
+            reply = server({ ["/a"] = "A" }),
+        })
+        local c1 = new_client(plain)
+        H.eq("mixed_plain", select(2, c1:get("rhtp://box/a")), "A")
+
+        local secured = make_node({
+            hosts = { box = IP_BOX },
+            lookup = function() return nil end,
+            reply = sealed_server({ ["/b"] = "B" }),
+        })
+        local c2 = new_client(secured, {
+            secure = secure,
+            rand = function() return RAND_NONCE end,
+        })
+        H.eq("mixed_sealed", select(2, c2:get("rhtp://box/b")), "B")
+    end
+
+    H.group("rhtp.secret_hex")
+    do
+        -- a 64-hex `secret` builds the secure object; a bad one stays plaintext
+        local node = make_node({
+            hosts = { box = IP_BOX },
+            lookup = function() return nil end,
+            reply = sealed_server({ ["/x"] = "y" }),
+        })
+        local c = new_client(node, {
+            secret = PSK,
+            rand = function() return RAND_NONCE end,
+        })
+        H.eq("secret_hex_code", select(1, c:get("rhtp://box/x")), 200)
+        H.has({ node.sent[#node.sent].data }, "Rhtp-Seal")
+
+        local nodeBad = make_node({
+            hosts = { box = IP_BOX },
+            lookup = function() return nil end,
+            reply = server({ ["/x"] = "y" }),
+        })
+        local cBad = new_client(nodeBad, { secret = "nothex" })
+        H.eq("secret_bad_code", select(1, cBad:get("rhtp://box/x")), 200)
+        H.eq("secret_bad_request", nodeBad.sent[#nodeBad.sent].data, "GET /x")
     end
 end

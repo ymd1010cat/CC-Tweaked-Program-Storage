@@ -124,6 +124,11 @@ pyroet-os/system/net/dns.lua
 # node, with the project's own URL parser, the off/len chunk extension and the
 # DNS/hosts name resolution. 29 -> 30 entries with this line.
 pyroet-os/system/net/rhtp.lua
+# PSK-sealed RHTP response envelope (DECISIONS.md 44): reuses the rpv
+# http_secure HKDF/ChaCha20/HMAC design adapted for RHTP's stateless per-request
+# random-nonce envelope (no persistent counter -- a deliberate deviation
+# documented in the file header). 31 -> 32 entries with this line.
+pyroet-os/system/net/rhtp_secure.lua
 # P4: launcher + settings + the first-start permission table (DECISIONS.md
 # 8.4/8.5). The desktop packages are listed file by file on purpose: a directory
 # entry would sweep in whatever development material ends up next to them.

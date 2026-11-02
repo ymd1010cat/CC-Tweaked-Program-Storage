@@ -135,6 +135,7 @@ local KNOWN_KEYS = {
     role = true, hosts_file = true, probe_port = true, dns = true,
     hosts_interval = true, neighbor_ttl = true,
     rhtp_port = true, rhtp_chunk = true, rhtp_timeout = true,
+    rhtp_secret = true,
 }
 
 local function short(value, max)
@@ -375,6 +376,22 @@ function S.parse_config(text)
     end
     cfg.rhtp_timeout = rhtp_timeout
 
+    -- PSK secret for sealed RHTP responses (DECISIONS.md 45.9). `rhtp_secret`
+    -- must be exactly 64 hex chars (32 bytes) or nil; anything else is a config
+    -- error (never silently ignored). A nil secret leaves RHTP on the old,
+    -- plaintext path; when set, every sealed-request response is encrypted and
+    -- MACed and the client fails closed on any mismatch.
+    if raw.rhtp_secret ~= nil and raw.rhtp_secret ~= "" then
+        local secret = tostring(raw.rhtp_secret)
+        if type(raw.rhtp_secret) ~= "string"
+            or #secret ~= 64
+            or secret:match("^[0-9a-fA-F]+$") == nil then
+            return nil, "bad rhtp_secret '" .. short(secret, 24)
+                .. "' (want 64 hex chars or absent)"
+        end
+        cfg.rhtp_secret = secret:lower()
+    end
+
     local unknown = {}
     for key in pairs(raw) do
         if not KNOWN_KEYS[key] then unknown[#unknown + 1] = key end
@@ -509,6 +526,31 @@ function S:load_rhtp_module()
     return nil
 end
 
+-- net/rhtp_secure.lua is the PSK seal open/close module (DECISIONS.md 44).
+-- Loaded lazily, and only when a `rhtp_secret` is configured; a missing module
+-- degrades the client to the plaintext path with a NET_RHTP_SEAL_FAIL line
+-- instead of a crash.
+function S:load_rhtp_secure_module()
+    local fsx = self.fs
+    local candidates = { "/system/net/rhtp_secure.lua", "system/net/rhtp_secure.lua" }
+    for i = 1, #candidates do
+        local path = candidates[i]
+        if fsx and type(fsx.exists) == "function" then
+            local ok, exists = pcall(fsx.exists, path)
+            if ok and exists then
+                local loaded, module = pcall(dofile, path)
+                if loaded and type(module) == "table"
+                    and type(module.new) == "function" then
+                    return module
+                end
+                self:log("NET_RHTP_SECURE_FAIL path=%s err=%s",
+                    short(path, 40), short(module, 60))
+            end
+        end
+    end
+    return nil
+end
+
 -- The one RHTP client this service owns. `self.node` is the only rpv node in the
 -- process, so every caller shares it and no app ever creates its own node.
 function S:rhtp_client()
@@ -521,11 +563,30 @@ function S:rhtp_client()
         return nil, "no rhtp module"
     end
     local cfg = self.cfg or {}
+    -- Build the PSK secure object once (DECISIONS.md 44). crypto and nonce_base
+    -- are left nil so net/rhtp_secure.lua derives them lazily from rhtp_secret.
+    local secure = nil
+    if type(cfg.rhtp_secret) == "string"
+        and #cfg.rhtp_secret == 64
+        and cfg.rhtp_secret:match("^[0-9a-f]+$") ~= nil then
+        local smod = self.rhtp_secure_module or self:load_rhtp_secure_module()
+        self.rhtp_secure_module = smod
+        if type(smod) == "table" and type(smod.new) == "function" then
+            local ok, obj = pcall(smod.new, { psk_hex = cfg.rhtp_secret })
+            if ok and type(obj) == "table" then
+                secure = obj
+                self:log("NET_RHTP_SEALED enabled")
+            else
+                self:log("NET_RHTP_SEAL_FAIL %s", short(obj, 40))
+            end
+        end
+    end
     local client = mod.new({
         node = self.node,
         rpv = self.rpv,
         fs = self.fs,
         log = function(line) self:log("%s", tostring(line)) end,
+        secure = secure,            -- nil -> old plaintext path (DECISIONS.md 44)
         port = cfg.rhtp_port or S.DEFAULT_RHTP_PORT,
         max_bytes = cfg.rhtp_chunk or S.DEFAULT_RHTP_CHUNK,
         timeout = cfg.rhtp_timeout or S.DEFAULT_RHTP_TIMEOUT,
@@ -540,11 +601,12 @@ function S:rhtp_client()
         dns_config_path = self.config_path,
     })
     self.rhtp = client
-    self:log("NET_RHTP port=%d chunk=%d timeout=%.2f dns=%s",
+    self:log("NET_RHTP port=%d chunk=%d timeout=%.2f dns=%s seal=%s",
         cfg.rhtp_port or S.DEFAULT_RHTP_PORT,
         cfg.rhtp_chunk or S.DEFAULT_RHTP_CHUNK,
         cfg.rhtp_timeout or S.DEFAULT_RHTP_TIMEOUT,
-        short(cfg.dns or (cfg.gateway and "gateway") or "none", 24))
+        short(cfg.dns or (cfg.gateway and "gateway") or "none", 24),
+        secure and "on" or "off")
     return client
 end
 

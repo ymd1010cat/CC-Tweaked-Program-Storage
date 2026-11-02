@@ -204,6 +204,15 @@ Then check: ls /system ; ls /system/kernel ; ls /system/system ; ls /recovery
   iface_side=back
 dns= is the resolver for name lookups (one IPv4). Omit it and the gateway is
 used; dns=0 means "no resolver cache" (the gateway is still the server).
+rhtp_secret=<64 hex> turns on PSK sealing for RHTP responses (optional,
+default off = plaintext). The handheld and the deployed rhtp_server must share
+the SAME 64-hex secret: the client sends Rhtp-Seal: 1 on each request; the
+server seals the response body (ChaCha20 + HMAC-SHA256 tag bound to a per
+request random nonce and the status line, /system/net/rhtp_secure.lua). The
+client rejects a bad tag ("seal bad") and fails closed if the server replies
+plaintext to a sealed request ("seal required"). Leaving it unset keeps the
+old plaintext behavior but is the insecure default (integrity via SHA-256
+only, no authenticity). See DECISIONS.md 45.9.
 /etc/hosts.conf ("<hostname> <ipv4>"; static names, checked BEFORE DNS):
   router 10.0.0.1
   server 10.0.0.10
