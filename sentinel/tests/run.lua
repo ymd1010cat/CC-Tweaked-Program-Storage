@@ -796,6 +796,98 @@ local function consoleExitTests()
 end
 
 ---------------------------------------------------------------------------
+-- console: "4. Write Key to Disk" copies the key to the floppy
+---------------------------------------------------------------------------
+
+-- The drive is faked so the flow can be driven without hardware; the files are
+-- real, so the assertions read what the terminal would later copy.
+local function consoleDiskTests()
+    local realPeripheral = peripheral
+    ensureDir("/disk")
+    local diskMount = "/disk"
+
+    local function runAdmin(inputs)
+        local out = {}
+        setInputs(table.unpack(inputs))
+        local realPrint = print
+        local ok, err = pcall(function()
+            print = function(text) out[#out + 1] = tostring(text) end
+            dofile("/system/user_admin.lua")
+        end)
+        print = realPrint
+        setInputs()
+        return ok, err, table.concat(out, "\n")
+    end
+
+    local function useDrive()
+        peripheral = {
+            getNames = function() return { "left", "drive_1" } end,
+            getType = function(name)
+                if name == "left" then return "modem" end
+                if name == "drive_1" then return "drive" end
+                return nil
+            end,
+            call = function(name, method)
+                if name ~= "drive_1" then return nil end
+                if method == "isDiskPresent" then return true end
+                if method == "getMountPath" then return diskMount end
+                if method == "getDiskID" then return 1 end
+                return nil
+            end,
+            wrap = function() return {} end,
+        }
+    end
+
+    local terminalKeys = dofile("/auth/terminal_keys.lua")
+    local expectedKey = terminalKeys.get(TERMINAL_ID)
+
+    -- 1. No drive: the flow must say so and write nothing.
+    peripheral = {
+        getNames = function() return { "left" } end,
+        getType = function(name)
+            if name == "left" then return "modem" end
+            return nil
+        end,
+        call = function() return nil end,
+        wrap = function() return {} end,
+    }
+    if fs.exists("/disk/psk.txt") then fs.delete("/disk/psk.txt") end
+    if fs.exists("/disk/terminal_id.txt") then fs.delete("/disk/terminal_id.txt") end
+    -- login, menu 5, submenu 4, pause, submenu 0, menu 0
+    local okNoDrive, errNoDrive, textNoDrive =
+        runAdmin({ "rootuser", "rootpw", "5", "4", "", "0", "0" })
+    check("console.disk.no_drive_ran", okNoDrive, tostring(errNoDrive))
+    check("console.disk.no_drive_reported",
+        contains(textNoDrive, "no disk drive"))
+    check("console.disk.no_drive_wrote_nothing",
+        readFile("/disk/psk.txt") == nil)
+
+    -- 2. Drive present: both files land with the registered values.
+    useDrive()
+    local okDrive, errDrive, textDrive =
+        runAdmin({ "rootuser", "rootpw", "5", "4", TERMINAL_ID, "", "0", "0" })
+    check("console.disk.write_ran", okDrive, tostring(errDrive))
+    check("console.disk.reports_ok", contains(textDrive, "[OK] Wrote key for"))
+    check("console.disk.psk_matches_db",
+        readFile("/disk/psk.txt") == expectedKey, tostring(readFile("/disk/psk.txt")))
+    check("console.disk.id_matches",
+        readFile("/disk/terminal_id.txt") == TERMINAL_ID)
+
+    -- 3. Unknown terminal id: refused, and the disk keeps the previous values.
+    local okUnknown, errUnknown, textUnknown =
+        runAdmin({ "rootuser", "rootpw", "5", "4", "no-such-id", "", "0", "0" })
+    check("console.disk.unknown_ran", okUnknown, tostring(errUnknown))
+    check("console.disk.unknown_refused",
+        contains(textUnknown, "terminal id not registered"))
+    check("console.disk.unknown_keeps_previous",
+        readFile("/disk/psk.txt") == expectedKey)
+
+    peripheral = realPeripheral
+    if fs.exists("/disk/psk.txt") then fs.delete("/disk/psk.txt") end
+    if fs.exists("/disk/terminal_id.txt") then fs.delete("/disk/terminal_id.txt") end
+end
+
+---------------------------------------------------------------------------
 -- audit: terminal signing with role -> audit server verification
 ---------------------------------------------------------------------------
 
@@ -974,10 +1066,11 @@ offlineLoginTests()
 clientOpenTests()
 uiDeniedTests()
 consoleExitTests()
+consoleDiskTests()
 auditTests()
 
 print("OFFLINE_PASS " .. tostring(pass))
 print("OFFLINE_FAIL " .. tostring(fail))
-print("OFFLINE_GROUPS 11")
+print("OFFLINE_GROUPS 12")
 print("OFFLINE_RESULT pass=" .. tostring(pass) .. " fail=" .. tostring(fail))
 print("TEST_DONE")

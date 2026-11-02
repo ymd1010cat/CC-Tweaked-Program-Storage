@@ -251,7 +251,7 @@ User: <name> (root)
   Change Role 的提示是 `Role (admin/operator/user/guest): `，直接回车默认 `guest`。
   规则见第 11 节。
 - `5. Manage Terminal Keys` 的子菜单是 `1. List`、`2. Add / Show Key`、`3. Remove`、
-  `0. Back`。给终端登记时选 `2`，输入 `Terminal ID: `，输出形如：
+  `4. Write Key to Disk`、`0. Back`。给终端登记时选 `2`，输入 `Terminal ID: `，输出形如：
 
   ```
   Terminal ID: <id>
@@ -264,6 +264,26 @@ User: <name> (root)
 
   同一个 ID 再次执行 Add 会返回原来的密钥（不会换新）。`3. Remove` 需要输入字面量
   `yes` 确认。终端 ID 允许空格，不允许 `|` 与控制字符，最长 64 字符。
+
+- `4. Write Key to Disk` 把某个已登记终端的密钥写到**驱动器的软盘**上，用来免除手抄：
+  CC 屏幕不能拖拽选择，而密钥是 32 位随机字符。选它、输入 `Terminal ID: `，控制台会把
+  该终端的密钥写成 `<挂载点>/psk.txt`、把 ID 写成 `<挂载点>/terminal_id.txt`
+  （挂载点取自驱动器外设的 `getMountPath`，通常就是 `/disk`；多台驱动器按名字排序取第一台，
+  与审计服务器选盘规则一致），然后提示：
+
+  ```
+  [OK] Wrote key for <id> to:
+    /disk/psk.txt
+    /disk/terminal_id.txt
+
+  On that terminal, before /startup.lua is installed:
+    copy /disk/psk.txt /auth/psk.txt
+    copy /disk/terminal_id.txt /auth/terminal_id.txt
+  ```
+
+  没有驱动器、盘没插好或 ID 未登记时会打印 `[Error] ...` 并且**不写任何文件**；写盘失败
+  （写保护）报 `cannot write to <挂载点> (write protected?)`。终端侧只需两条 `copy`，
+  顺序仍是先放 `/auth/psk.txt` 与 `/auth/terminal_id.txt`，最后再装 `/startup.lua`。
 
 - `6. Exit to Shell` 是防退出机制**唯一放行**的出口，只对 root 开放：进入控制台本就要求
   root，选项里还会再判一次 `role_policy.allows(role, "root")`。选中后先说明后果（会停止

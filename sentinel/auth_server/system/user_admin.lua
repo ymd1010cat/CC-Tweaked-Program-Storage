@@ -21,6 +21,8 @@ local CONSOLE_EXIT_FLAG = "SENTINEL_CONSOLE_EXIT"
 local MAX_TERMINAL_ID_LENGTH = 64
 local ACCESS_DENIED_DELAY = 1
 local IDLE_DELAY = 30
+-- Mount path used when a drive peripheral does not answer getMountPath.
+local DISK_MOUNT_FALLBACK = "/disk"
 
 local userManager = nil
 local terminalKeys = nil
@@ -360,6 +362,93 @@ local function removeTerminalKey()
     pause()
 end
 
+-- Mount path of the first drive peripheral (names sorted, like the audit
+-- server picks its drive). Returns nil plus a reason when there is no usable
+-- drive, so the flow can say why instead of failing silently.
+local function findDriveMount()
+    if type(peripheral) ~= "table" or type(peripheral.getNames) ~= "function" then
+        return nil, "no peripheral API"
+    end
+    local okNames, names = pcall(peripheral.getNames)
+    if not okNames or type(names) ~= "table" then
+        return nil, "cannot list peripherals"
+    end
+    table.sort(names)
+    for i = 1, #names do
+        local name = names[i]
+        local okType, kind = pcall(peripheral.getType, name)
+        if okType and kind == "drive" then
+            local okPresent, present = pcall(peripheral.call, name, "isDiskPresent")
+            if okPresent and present == false then
+                return nil, "no disk in " .. tostring(name)
+            end
+            local okPath, mount = pcall(peripheral.call, name, "getMountPath")
+            if okPath and type(mount) == "string" and mount ~= "" then
+                return mount
+            end
+            return DISK_MOUNT_FALLBACK
+        end
+    end
+    return nil, "no disk drive"
+end
+
+-- Copies one terminal's key to the floppy, so the operator never retypes the 32
+-- random characters (a CC screen cannot drag-select). The terminal then only
+-- needs "copy /disk/psk.txt /auth/psk.txt" before /startup.lua is installed.
+local function writeKeyToDiskFlow()
+    clearScreen()
+    print("=== Write Key to Disk ===")
+    if not terminalKeys then
+        print("[Error] /auth/terminal_keys.lua is not loadable")
+        return pause()
+    end
+    local mount, why = findDriveMount()
+    if not mount then
+        print("[Error] " .. tostring(why))
+        print("Attach a drive with a floppy disk and try again.")
+        return pause()
+    end
+    write("Terminal ID: ")
+    local id = trim(readLine())
+    if id == "" then
+        print("No terminal id given.")
+        return pause()
+    end
+    if not validTerminalId(id) then
+        print("[Error] invalid terminal id")
+        return pause()
+    end
+    local ok, key = pcall(terminalKeys.get, id)
+    if not ok or type(key) ~= "string" or key == "" then
+        print("[Error] terminal id not registered: " .. id)
+        return pause()
+    end
+    local function writeDisk(name, text)
+        local handle = fs.open(mount .. "/" .. name, "w")
+        if not handle then return false end
+        local wrote = pcall(function()
+            handle.write(text)
+        end)
+        handle.close()
+        return wrote
+    end
+    local wroteKey = writeDisk("psk.txt", key)
+    local wroteId = writeDisk("terminal_id.txt", id)
+    if not wroteKey or not wroteId then
+        print("[Error] cannot write to " .. mount .. " (write protected?)")
+        return pause()
+    end
+    print("")
+    print("[OK] Wrote key for " .. id .. " to:")
+    print("  " .. mount .. "/psk.txt")
+    print("  " .. mount .. "/terminal_id.txt")
+    print("")
+    print("On that terminal, before /startup.lua is installed:")
+    print("  copy " .. mount .. "/psk.txt /auth/psk.txt")
+    print("  copy " .. mount .. "/terminal_id.txt /auth/terminal_id.txt")
+    pause()
+end
+
 local function terminalKeysMenu()
     while true do
         clearScreen()
@@ -368,6 +457,7 @@ local function terminalKeysMenu()
         print("1. List")
         print("2. Add / Show Key")
         print("3. Remove")
+        print("4. Write Key to Disk")
         print("0. Back")
         print("")
         write("Select an option: ")
@@ -378,6 +468,8 @@ local function terminalKeysMenu()
             addTerminalKey()
         elseif choice == "3" then
             removeTerminalKey()
+        elseif choice == "4" then
+            writeKeyToDiskFlow()
         elseif choice == "0" then
             return
         end
