@@ -185,6 +185,10 @@ Offline mode is disabled. Connect to the auth server.
 （`/system/auth_server.lua`）和根控制台（`/system/user_admin.lua`）。两者共用同一块
 屏幕，控制台退出后 1 秒会自动重新进入。
 
+`/startup.lua` 一开始就把 `os.pullEvent` 换成 `os.pullEventRaw`，所以 Ctrl+T 产生的
+`terminate` 只是普通事件，服务和控制台都不会被打断；服务若异常返回，控制台会锁死屏幕，
+而不是掉回 CraftOS shell。唯一放行的出口是 root 控制台的 `6. Exit to Shell`（见 4.3）。
+
 正常启动横幅：
 
 ```
@@ -239,7 +243,8 @@ User: <name> (root)
 3. List Users
 4. Change Role
 5. Manage Terminal Keys
-0. Exit
+6. Exit to Shell
+0. Log Out
 ```
 
 - 增加用户、删除用户、修改角色都经过共享的 `/auth/user_manager.lua`；Add User 与
@@ -259,6 +264,20 @@ User: <name> (root)
 
   同一个 ID 再次执行 Add 会返回原来的密钥（不会换新）。`3. Remove` 需要输入字面量
   `yes` 确认。终端 ID 允许空格，不允许 `|` 与控制字符，最长 64 字符。
+
+- `6. Exit to Shell` 是防退出机制**唯一放行**的出口，只对 root 开放：进入控制台本就要求
+  root，选项里还会再判一次 `role_policy.allows(role, "root")`。选中后先说明后果（会停止
+  服务、`/auth` 可在 shell 中读取），然后要求**再输入一次本账号密码**做二次确认：
+  打印 `Security Check Required` 与 `Password: `（遮蔽输入），用 `/auth/users.db` 当场
+  重新校验，并从库里重读角色——账号口令错、已被降权或已被删除都会拒绝（口令错打印
+  `Incorrect password.`，其他拒绝打印 `Access denied.`），等待 1 秒后回到菜单。
+  校验通过才停止认证服务、把机器交给 CraftOS shell；同时把 `os.pullEvent` 恢复成原版，
+  所以 shell 里 Ctrl+T 照常可用。**shell 能读 `/auth`**（`users.db`、
+  `terminal_keys.db`、`psk.txt`、`server_id`），所以这条路径只给 root，并且每次尝试都会
+  往 `/auth/console.log` 追加一行：成功是
+  `CONSOLE_EXIT_TO_SHELL user=<name> role=<role>`，被拒是
+  `CONSOLE_SHELL_DENIED ... reason=bad_password|not_root`。回到服务需要重启机器。
+- `0. Log Out` 返回登录界面（控制台 1 秒后自动重启），不会退出到 shell。
 
 ### 4.4 `/auth/user_manager.lua` 与 `/auth/role_policy.lua` 是认证链路的一部分
 

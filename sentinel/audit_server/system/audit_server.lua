@@ -134,10 +134,23 @@ local function ensureDir(path)
     return ok and fs.isDir(path)
 end
 
--- "Sleep forever" used by the fatal paths and by the supervisor.
+-- "Sleep forever" used by the fatal paths and by the supervisor. Uses
+-- os.pullEventRaw so a Ctrl+T terminate is drained as an ordinary event and
+-- can never kill the lock (and never throw an error out of os.sleep).
 local function haltForever()
     while true do
-        os.sleep(3600)
+        os.pullEventRaw()
+    end
+end
+
+-- os.sleep that is immune to Ctrl+T: a "terminate" error thrown out of
+-- os.sleep is caught and the wait re-attempted, so an in-flight loop body can
+-- never be aborted by a stray terminate. Falls back to a plain os.sleep call
+-- when the harness has stubbed it out (offline tests).
+local function safeSleep(seconds)
+    while true do
+        local ok = pcall(os.sleep, seconds)
+        if ok then return end
     end
 end
 
@@ -874,7 +887,7 @@ local function heartbeatLoop(iterOk)
         end
         M.heartbeatTick()
         iterOk()
-        os.sleep(state.cfg.heartbeat_interval)
+        safeSleep(state.cfg.heartbeat_interval)
     end
 end
 
@@ -885,7 +898,7 @@ local function archiveLoop(iterOk)
         end
         M.archiveTick()
         iterOk()
-        os.sleep(state.cfg.archive_retry_interval)
+        safeSleep(state.cfg.archive_retry_interval)
     end
 end
 
@@ -894,7 +907,7 @@ local function listenLoop(iterOk)
         if state.faulted then
             haltForever()
         end
-        local _, side, channel, _, message = os.pullEvent("modem_message")
+        local _, side, channel, _, message = os.pullEventRaw("modem_message")
         if state.faulted then
             haltForever()
         end
@@ -927,7 +940,7 @@ function M.supervise(name, fn)
                 haltForever()
             end
         end
-        os.sleep(state.cfg.restart_delay_seconds)
+        safeSleep(state.cfg.restart_delay_seconds)
     end
 end
 
@@ -1044,6 +1057,9 @@ function M.main()
         function() M.supervise("archive", archiveLoop) end,
         function() M.supervise("listen", listenLoop) end
     )
+    -- The supervised loops never return, but if one ever unwinds the whole
+    -- parallel.waitForAny, lock the machine here instead of falling to a shell.
+    haltForever()
 end
 
 function M.snapshot()

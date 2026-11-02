@@ -227,6 +227,29 @@ local function staticTests()
     local admin = source("/system/user_admin.lua")
     check("static.user_admin_no_root_compare", not contains(admin, 'user.role == "root"'))
     check("static.user_admin_policy", contains(admin, "role_policy"))
+    check("static.user_admin_exit_flag", contains(admin, "SENTINEL_CONSOLE_EXIT"))
+    check("static.user_admin_shell_gate",
+        contains(admin, 'rolePolicy.allows(actor.role, "root")'))
+    check("static.user_admin_shell_menu", contains(admin, "Exit to Shell"))
+    check("static.user_admin_shell_repassword",
+        contains(admin, "Security Check Required"))
+
+    -- The root console may hand the machine back to the shell, so the startup
+    -- file must be able to undo its process-wide terminate immunity.
+    local authStartup = source("/tests/auth_startup.lua")
+    check("static.auth_startup_raw_events",
+        contains(authStartup, "os.pullEvent = os.pullEventRaw"))
+    check("static.auth_startup_saves_native",
+        contains(authStartup, "local nativePullEvent = os.pullEvent"))
+    check("static.auth_startup_restores_native",
+        contains(authStartup, "os.pullEvent = nativePullEvent"))
+    check("static.auth_startup_exit_flag",
+        contains(authStartup, "SENTINEL_CONSOLE_EXIT"))
+    -- runConsoleLock is referenced by runService, so it must be declared first;
+    -- a later declaration would leave runService calling a nil global.
+    check("static.auth_startup_lock_declared_first",
+        (authStartup:find("local function runConsoleLock", 1, true) or math.huge)
+            < (authStartup:find("local function runService", 1, true) or -1))
 
     local terminalAudit = source("/system/audit.lua")
     check("static.audit_client_v5", contains(terminalAudit, "secure_auth_v5"))
@@ -721,6 +744,58 @@ local function uiDeniedTests()
 end
 
 ---------------------------------------------------------------------------
+-- console: root Exit to Shell needs the password again
+---------------------------------------------------------------------------
+
+-- Drives the real /system/user_admin.lua through its login screen and menu with
+-- the stubbed read(). Input order per run: username, password, menu choice,
+-- confirmation password, and a trailing "0" so an unexpected loop cannot spin
+-- forever (read() returns nil and the menu would retry with no yield).
+local function consoleExitTests()
+    local outputs = {}
+    local function runAdmin(inputs)
+        for i = #outputs, 1, -1 do outputs[i] = nil end
+        setInputs(table.unpack(inputs))
+        local realPrint = print
+        local ok, err = pcall(function()
+            print = function(text) outputs[#outputs + 1] = tostring(text) end
+            dofile("/system/user_admin.lua")
+        end)
+        print = realPrint
+        setInputs()
+        return ok, err, table.concat(outputs, "\n")
+    end
+
+    _G.SENTINEL_CONSOLE_EXIT = nil
+    local okWrong, errWrong, textWrong =
+        runAdmin({ "rootuser", "rootpw", "6", "wrongpw", "0" })
+    check("console.exit.wrong_password_ran", okWrong, tostring(errWrong))
+    check("console.exit.prompts_password",
+        contains(textWrong, "Security Check Required"))
+    check("console.exit.wrong_password_blocked",
+        _G.SENTINEL_CONSOLE_EXIT ~= true)
+    check("console.exit.wrong_password_message",
+        contains(textWrong, "Incorrect password."))
+
+    _G.SENTINEL_CONSOLE_EXIT = nil
+    local okRight, errRight, textRight =
+        runAdmin({ "rootuser", "rootpw", "6", "rootpw", "0" })
+    check("console.exit.right_password_ran", okRight, tostring(errRight))
+    check("console.exit.right_password_requests_shell",
+        _G.SENTINEL_CONSOLE_EXIT == true)
+    check("console.exit.right_password_message",
+        contains(textRight, "Dropping to the CraftOS shell"))
+    _G.SENTINEL_CONSOLE_EXIT = nil
+
+    local log = readFile("/auth/console.log") or ""
+    check("console.exit.denied_attempt_logged",
+        contains(log, "CONSOLE_SHELL_DENIED")
+            and contains(log, "reason=bad_password"))
+    check("console.exit.handover_logged",
+        contains(log, "CONSOLE_EXIT_TO_SHELL user=rootuser"))
+end
+
+---------------------------------------------------------------------------
 -- audit: terminal signing with role -> audit server verification
 ---------------------------------------------------------------------------
 
@@ -898,10 +973,11 @@ clientLoginTests()
 offlineLoginTests()
 clientOpenTests()
 uiDeniedTests()
+consoleExitTests()
 auditTests()
 
 print("OFFLINE_PASS " .. tostring(pass))
 print("OFFLINE_FAIL " .. tostring(fail))
-print("OFFLINE_GROUPS 10")
+print("OFFLINE_GROUPS 11")
 print("OFFLINE_RESULT pass=" .. tostring(pass) .. " fail=" .. tostring(fail))
 print("TEST_DONE")

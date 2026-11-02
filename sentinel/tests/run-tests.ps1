@@ -53,6 +53,7 @@ $copies = [ordered]@{
     'audit_server\auth\audit_config.lua' = 'auth\audit_config.lua'
     'auth_server\system\auth_server.lua' = 'system\auth_server.lua'
     'auth_server\system\user_admin.lua'  = 'system\user_admin.lua'
+    'auth_server\startup.lua'          = 'tests\auth_startup.lua'
     'audit_server\system\audit_server.lua' = 'system\audit_server.lua'
     'terminal\system\audit.lua'        = 'system\audit.lua'
     'terminal\system\netcheck.lua'     = 'system\netcheck.lua'

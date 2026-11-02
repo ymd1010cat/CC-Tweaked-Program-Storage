@@ -132,9 +132,22 @@ local function findWiredModem()
 end
 
 -- Stop without dropping to a shell; the root console keeps running next to it.
+-- Ctrl+T is deliberately not served here (pullEventRaw): a server machine must
+-- never fall back to a CraftOS shell, so terminate just sleeps the loop.
 local function halt()
     while true do
-        os.pullEvent("terminate")
+        os.pullEventRaw("terminate")
+    end
+end
+
+-- os.sleep that is immune to Ctrl+T: a "terminate" error thrown out of
+-- os.sleep is caught and the wait re-attempted, so an in-flight heartbeat or
+-- door pulse can never be aborted by a stray terminate. Falls back to a plain
+-- os.sleep call when the harness has stubbed it out (offline tests).
+local function safeSleep(seconds)
+    while true do
+        local ok = pcall(os.sleep, seconds)
+        if ok then return end
     end
 end
 
@@ -347,7 +360,7 @@ local function pulseDoor()
     end
     local raised = pcall(redstone.setOutput, OPEN_REDSTONE_SIDE, 1)
     if not raised then return false end
-    os.sleep(OPEN_PULSE_SECONDS)
+    safeSleep(OPEN_PULSE_SECONDS)
     pcall(redstone.setOutput, OPEN_REDSTONE_SIDE, 0)
     return true
 end
@@ -406,7 +419,7 @@ local function heartbeatLoop()
         if modem then
             pcall(modem.transmit, CHANNEL, CHANNEL, beat)
         end
-        os.sleep(HEARTBEAT_INTERVAL)
+        safeSleep(HEARTBEAT_INTERVAL)
     end
 end
 
@@ -432,7 +445,11 @@ end
 
 local function requestLoop()
     while true do
-        local event, _side, channel, replyChannel, message = os.pullEvent("modem_message")
+        -- pullEventRaw: a Ctrl+T "terminate" input is drained as an ordinary
+        -- event so it can never hit the running service coroutine. Without it
+        -- the service would be killed and parallel.waitForAny below would let
+        -- the whole machine fall to a CraftOS shell.
+        local event, _side, channel, replyChannel, message = os.pullEventRaw("modem_message")
         -- Named locals on purpose: ("modem_message", side, channel,
         -- replyChannel, message, distance).
         if event == "modem_message" and channel == CHANNEL then
@@ -487,6 +504,11 @@ function M.run()
     end
 
     parallel.waitForAny(heartbeatLoop, requestLoop)
+
+    -- The service loops never return (pullEventRaw keeps them alive even
+    -- through Ctrl+T), but if a loop body ever errors out of parallel, lock
+    -- the machine here instead of falling to a shell.
+    halt()
 end
 
 -- The service starts itself when this file is run, but the offline test suite

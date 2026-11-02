@@ -4,6 +4,12 @@
 -- The audit server is one module: /system/audit_server.lua returns a table and
 -- is started here. A load failure is fatal, exactly like a missing modem.
 
+-- Ignore Ctrl+T process-wide before anything else runs. os.sleep and every
+-- os.pullEvent call look up the current os.pullEvent, so swapping it for the
+-- raw variant makes a server "terminate" an ordinary, discarded event. A stray
+-- Ctrl+T can never kill the supervised loops or the parallel framework.
+os.pullEvent = os.pullEventRaw
+
 local ok, server = pcall(dofile, "/system/audit_server.lua")
 if not ok or type(server) ~= "table" or type(server.main) ~= "function" then
     print("FATAL: cannot load /system/audit_server.lua")

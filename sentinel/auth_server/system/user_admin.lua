@@ -12,6 +12,11 @@ local ROLE_POLICY_PATH = "/auth/role_policy.lua"
 local SHA_PATH = "/sha256.lua"
 local USERS_DB_PATH = "/auth/users.db"
 local SERVER_ID_PATH = "/auth/server_id"
+local CONSOLE_LOG_PATH = "/auth/console.log"
+
+-- Read by /startup.lua. The console runs inside os.run({}, ...), whose
+-- environment keeps its own writes, so this must be assigned on _G explicitly.
+local CONSOLE_EXIT_FLAG = "SENTINEL_CONSOLE_EXIT"
 
 local MAX_TERMINAL_ID_LENGTH = 64
 local ACCESS_DENIED_DELAY = 1
@@ -124,6 +129,25 @@ local function loginScreen()
         print("Access denied.")
         os.sleep(ACCESS_DENIED_DELAY)
     end
+end
+
+-- Append one line to /auth/console.log. Best effort: a console that cannot log
+-- still works, the record just stays missing.
+local function timestamp()
+    local ok, value = pcall(function()
+        return os.date("!%Y-%m-%dT%H:%M:%SZ")
+    end)
+    if ok and type(value) == "string" then return value end
+    return "?"
+end
+
+local function appendLog(line)
+    local handle = fs.open(CONSOLE_LOG_PATH, "a")
+    if not handle then return end
+    pcall(function()
+        handle.writeLine(timestamp() .. " " .. tostring(line))
+    end)
+    handle.close()
 end
 
 local function report(ok, message)
@@ -360,6 +384,53 @@ local function terminalKeysMenu()
     end
 end
 
+-- The one exit the anti-exit defence deliberately allows: a root operator may
+-- hand this computer back to the CraftOS shell (maintenance, recovery). Because
+-- that stops the service and exposes /auth, the account password is asked for
+-- again as a second confirmation (same idea as the terminal's Exit to CraftOS).
+-- The password is re-checked against /auth/users.db and the role is re-read from
+-- the database, so a downgraded or deleted account cannot take this exit.
+-- Returns true when the shell handover was requested; mainMenu then unwinds so
+-- /startup.lua can see the flag and finish.
+local function exitToShellFlow(actor)
+    clearScreen()
+    print("=== Exit to Shell ===")
+    if not rolePolicy or not rolePolicy.allows(actor.role, "root") then
+        print("[Error] only a root account may exit to the shell")
+        appendLog("CONSOLE_SHELL_DENIED user=" .. tostring(actor.name)
+            .. " role=" .. tostring(actor.role) .. " reason=not_root")
+        pause()
+        return false
+    end
+    print("This stops the auth service and leaves the CraftOS shell")
+    print("running on this computer. Until it reboots, /auth (users,")
+    print("terminal keys, PSK) is readable there.")
+    print("")
+    print("Security Check Required")
+    write("Password: ")
+    local confirmed = authenticate(actor.name, readSecret())
+    if not confirmed then
+        print("Incorrect password.")
+        appendLog("CONSOLE_SHELL_DENIED user=" .. tostring(actor.name)
+            .. " role=" .. tostring(actor.role) .. " reason=bad_password")
+        os.sleep(ACCESS_DENIED_DELAY)
+        return false
+    end
+    if not rolePolicy.allows(confirmed.role, "root") then
+        print("Access denied.")
+        appendLog("CONSOLE_SHELL_DENIED user=" .. tostring(actor.name)
+            .. " role=" .. tostring(confirmed.role) .. " reason=not_root")
+        os.sleep(ACCESS_DENIED_DELAY)
+        return false
+    end
+    appendLog("CONSOLE_EXIT_TO_SHELL user=" .. tostring(confirmed.name)
+        .. " role=" .. tostring(confirmed.role))
+    _G[CONSOLE_EXIT_FLAG] = true
+    print("")
+    print("[OK] Dropping to the CraftOS shell. Auth service stopped.")
+    return true
+end
+
 local function mainMenu(actor)
     while true do
         clearScreen()
@@ -371,7 +442,8 @@ local function mainMenu(actor)
         print("3. List Users")
         print("4. Change Role")
         print("5. Manage Terminal Keys")
-        print("0. Exit")
+        print("6. Exit to Shell")
+        print("0. Log Out")
         print("")
         write("Select an option: ")
         local choice = readLine()
@@ -385,6 +457,8 @@ local function mainMenu(actor)
             changeRoleFlow(actor)
         elseif choice == "5" then
             terminalKeysMenu()
+        elseif choice == "6" then
+            if exitToShellFlow(actor) then return end
         elseif choice == "0" then
             return
         end
