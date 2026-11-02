@@ -88,10 +88,64 @@ local T, M = ...
             for list in src:gmatch("local%s+([%w_,%s]+)=?") do
                 for name in list:gmatch("[%a_][%w_]*") do locals[name] = true end
             end
+            -- Documentation blocks (`--[[- ... ]]`) are prose, not statements, but a
+            -- line inside one does not start with `--`, so the global? rule used to
+            -- report their `X = value` lines as accidental globals. Blank every
+            -- comment (line and chunk) to spaces -- newlines are kept so line numbers
+            -- still line up -- and run the statement checks against that copy.
+            -- This has to be a character scanner, not a `--[[` search: a line comment
+            -- is allowed to mention `--[[` in prose, and a `--` inside a string is
+            -- not a comment at all.
+            local function strip_comments(text)
+                local out = {}
+                local i = 1
+                local n = #text
+                while i <= n do
+                    local c = text:sub(i, i)
+                    if c == '"' or c == "'" then
+                        -- keep the literal as-is but step over it, so a `--` inside
+                        -- does not open a phantom comment
+                        local j = i + 1
+                        while j <= n do
+                            local ch = text:sub(j, j)
+                            if ch == "\\" then
+                                j = j + 2
+                            elseif ch == c then
+                                j = j + 1
+                                break
+                            else
+                                j = j + 1
+                            end
+                        end
+                        out[#out + 1] = text:sub(i, j - 1)
+                        i = j
+                    elseif c == "-" and text:sub(i + 1, i + 1) == "-" then
+                        local level = text:match("^%[(=*)%[", i + 2)
+                        local stop
+                        if level then
+                            local close = "]" .. level .. "]"
+                            local s = text:find(close, i + 4 + #level, true)
+                            stop = s and (s + #close - 1) or n
+                        else
+                            local nl = text:find("\n", i, true)
+                            stop = nl and (nl - 1) or n
+                        end
+                        out[#out + 1] = (text:sub(i, stop):gsub("[^\n]", " "))
+                        i = stop + 1
+                    else
+                        out[#out + 1] = c
+                        i = i + 1
+                    end
+                end
+                return table.concat(out)
+            end
+            local codeLines = {}
+            for l in strip_comments(src):gmatch("[^\n]*") do codeLines[#codeLines + 1] = l end
             local lineno = 0
             local braceDepth = 0
             for line in src:gmatch("[^\n]*") do
                 lineno = lineno + 1
+                local cline = codeLines[lineno] or line
                 if #line > 200 then warn(path, "long-line", "line " .. lineno .. " has " .. #line .. " columns") end
                 if line:find("%s+$") then warn(path, "trailing-space", "line " .. lineno) end
                 if line:find("\t") then warn(path, "tab", "line " .. lineno) end
@@ -101,16 +155,16 @@ local T, M = ...
                 -- accidental-global detection only makes sense at statement level:
                 -- table constructor fields (inside braces, or ending with a comma) are not
                 -- assignments to globals
-                local isCode = not line:find("^%s*%-%-") and not line:find("^%s*local")
-                    and not line:find("^%s*function") and not line:find("^%s*return") and not line:find("^%s*end")
-                if braceDepth == 0 and isCode and not line:find(",%s*$") then
-                    local name = line:match("^%s*([A-Za-z_][%w_]*)%s*=[^=]")
+                local isCode = not cline:find("^%s*%-%-") and not cline:find("^%s*local")
+                    and not cline:find("^%s*function") and not cline:find("^%s*return") and not cline:find("^%s*end")
+                if braceDepth == 0 and isCode and not cline:find(",%s*$") then
+                    local name = cline:match("^%s*([A-Za-z_][%w_]*)%s*=[^=]")
                     if name and not whitelist[name] and not locals[name] then
                         warn(path, "global?", "line " .. lineno .. ": " .. name .. " assigned without `local`")
                     end
                 end
-                for _ in line:gmatch("{") do braceDepth = braceDepth + 1 end
-                for _ in line:gmatch("}") do braceDepth = math.max(0, braceDepth - 1) end
+                for _ in cline:gmatch("{") do braceDepth = braceDepth + 1 end
+                for _ in cline:gmatch("}") do braceDepth = math.max(0, braceDepth - 1) end
             end
         end
     end

@@ -66,7 +66,8 @@ foreach ($required in @("startup.lua", "system\startup.lua", "system\boot.lua",
     "system\system\appstore.app\manifest.lua", "system\system\appstore.app\main.lua",
             "system\system\installer.app\manifest.lua", "system\system\installer.app\main.lua",
         "recovery\proto.lua", "recovery\flash.lua", "recovery\bootstrap.lua",
-        "ota\server.lua", "install.set", "tools\pushpkg.lua", "tools\sizecheck.py")) {
+        "ota\server.lua", "install.set", "tools\pushpkg.lua", "tools\sizecheck.py",
+        "tools\gen_psk.lua", "tools\seal_selftest.lua")) {
     if (-not (Test-Path (Join-Path $osRoot $required))) {
         Write-Output "OFFLINE_ERROR missing source: pyroet-os/$required"
         exit 2
@@ -129,6 +130,11 @@ Copy-Item (Join-Path $osRoot "examples\files.app\*") (Join-Path $comp "tests\fil
     # tools/ is development material, not image payload: t_pushpkg drives a
     # copy of the pusher that the OTHER computer would run
     Copy-Item (Join-Path $osRoot "tools\pushpkg.lua")   (Join-Path $comp "tests\pushpkg.lua") -Force
+    # the PSK tools are development material too: t_seal_selftest drives them
+    # from /tests so both the generator and the no-network seal proof are
+    # covered by the suite (they are NOT in install.set and never ship)
+    Copy-Item (Join-Path $osRoot "tools\gen_psk.lua")       (Join-Path $comp "tests\gen_psk.lua") -Force
+    Copy-Item (Join-Path $osRoot "tools\seal_selftest.lua") (Join-Path $comp "tests\seal_selftest.lua") -Force
     # the size gate itself is staged too: t_budget pins its three constants (the
     # build gate is 10 MiB / 7 MiB since 2026-11-01), so a silent widening or
     # tightening of sizecheck.py fails the suite instead of only the build

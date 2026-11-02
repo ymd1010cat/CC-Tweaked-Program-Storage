@@ -215,6 +215,42 @@ client rejects a bad tag ("seal bad") and fails closed if the server replies
 plaintext to a sealed request ("seal required"). Leaving it unset keeps the
 old plaintext behavior but is the insecure default (integrity via SHA-256
 only, no authenticity). See DECISIONS.md 45.9.
+
+4.1 SEALED RHTP: TURN IT ON ON BOTH ENDS
+Sealing is a pair action. Doing it on one end only fails closed, on purpose.
+
+  step 1 - make a key (on the handheld, or any machine with the image):
+      gen_psk
+    It prints two lines; both are the same secret:
+      rhtp_secret=<64 hex>          paste into /etc/network.conf
+      opts.secret = "<64 hex>"     paste into the deployed rhtp_server
+    Store it somewhere safe; it is the trust source for that network.
+
+  step 2 - handheld: add the rhtp_secret= line to /etc/network.conf and reboot
+    (or just restart the net service). /kernel.log then shows
+    NET_RHTP_SEALED enabled.
+
+  step 3 - server: every deployed rhtp_server must use the same secret. In
+    rpv1/poc/apps/rhtp_server.lua that is the 4th argument:
+      start_rhtp(node, 8080, rpv, { secret = "<64 hex>" })
+    or, when the app is started by node2/startup.lua, put the secret in the
+    opts table the shell passes to the app. A server without a secret answers
+    plaintext; a sealed client then reports "seal required" and downloads fail.
+
+  step 4 - prove it locally (no server needed): run seal_selftest on the
+    handheld. It derives the key tree, seals and opens a sample response and
+    checks that tampered ciphertext, a wrong PSK and an unsealed response are
+    all refused:
+      SEAL_SELFTEST RESULT ok
+    A failure line names the step ("tamper rejected", "wrong psk rejected",
+    "plaintext rejected") so a broken image or a bad key is obvious.
+
+  What it does and does not buy: responses are confidential and integrity
+  checked against anyone who does not hold the PSK, and a plaintext downgrade
+  is refused. It is not a certificate: no peer identity, no hostname
+  validation, and anyone holding the PSK is trusted. Replace the PSK to
+  revoke trust (both ends at once).
+
 /etc/hosts.conf ("<hostname> <ipv4>"; static names, checked BEFORE DNS):
   router 10.0.0.1
   server 10.0.0.10

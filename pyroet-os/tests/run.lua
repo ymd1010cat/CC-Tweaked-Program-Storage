@@ -42,7 +42,7 @@ H.rmrf(H.root)
 H.mkdirp(H.root)
 
 local FILES = { "t_boot", "t_kernel", "t_apps", "t_caps", "t_startup",
-    "t_net_hosts", "t_net_service", "t_net_app", "t_rhtp", "t_rhtp_secure", "t_dns",
+    "t_net_hosts", "t_net_service", "t_net_app", "t_rhtp", "t_rhtp_secure", "t_seal_selftest", "t_dns",
     "t_permissions", "t_launcher", "t_settings", "t_desktop",
     "t_desktop_loop", "t_apps_ui",
     "t_installer", "t_installer_app", "t_installer_bridge", "t_ota", "t_sys_ota", "t_web", "t_files", "t_appstore", "t_pushpkg", "t_ota_server",
