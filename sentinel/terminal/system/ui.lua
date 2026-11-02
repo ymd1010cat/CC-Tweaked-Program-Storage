@@ -6,14 +6,6 @@ local token, session, sandbox, auth = ...
 
 local rolePolicy = dofile("/auth/role_policy.lua")
 
-local function loadUserManager()
-    local ok, chunk = pcall(loadfile, "/auth/user_manager.lua")
-    if not ok or type(chunk) ~= "function" then return nil end
-    local okRun, module = pcall(chunk)
-    if okRun and type(module) == "table" then return module end
-    return nil
-end
-
 local function showHeader(user)
     term.clear()
     term.setCursorPos(1, 1)
@@ -27,20 +19,16 @@ local function prompt(text)
     return read()
 end
 
+-- The terminal never manages accounts: users, roles and passwords live only in
+-- the auth server's /auth/users.db and are changed from its root console. No
+-- legacy branch keeps an Add/Delete/Change Role menu alive for old deployments.
 local function buildMenu(user)
     local items = { { id = "vault", label = "Open Vault" } }
-    local manager = nil
     if rolePolicy.allows(user.role, "root") then
-        manager = loadUserManager()
-        if manager then
-            items[#items + 1] = { id = "add", label = "Add User" }
-            items[#items + 1] = { id = "delete", label = "Delete User" }
-            items[#items + 1] = { id = "role", label = "Change Role" }
-        end
         items[#items + 1] = { id = "exit", label = "Exit to CraftOS" }
     end
     items[#items + 1] = { id = "logout", label = "Logout" }
-    return items, manager
+    return items
 end
 
 local function renderMenu(user, items)
@@ -138,98 +126,11 @@ local function exitToCraftOS(user)
     return "break"
 end
 
-local function promptRole()
-    local role = prompt("Role (admin/operator/user/guest): ")
-    if role == nil or role == "" then return "user" end
-    if role == "admin" or role == "operator" or role == "user" or role == "guest" then
-        return role
-    end
-    print("[Error] Invalid role: " .. tostring(role))
-    print("Allowed: admin, operator, user, guest")
-    if role == "root" then
-        print("Root accounts cannot be created through UI.")
-    end
-    return nil
-end
-
-local function doAddUser(manager)
-    print("=== Add User ===")
-    local name = prompt("Username: ")
-    if name == nil or name == "" then
-        print("[Error] Name cannot be empty.")
-        return
-    end
-    write("Password: ")
-    local password = read("*")
-    if password == nil or password == "" then
-        print("[Error] Password cannot be empty.")
-        return
-    end
-    local role = promptRole()
-    if not role then return end
-
-    local ok, message = manager.addUser(name, password, role)
-    if ok then
-        print("[OK] " .. tostring(message))
-    else
-        print("[Error] " .. tostring(message))
-    end
-end
-
-local function doDeleteUser(manager, requester)
-    print("=== Delete User ===")
-    local name = prompt("Username: ")
-    if name == nil or name == "" then
-        print("[Error] Name cannot be empty.")
-        return
-    end
-    local answer = prompt("Confirm delete '" .. name .. "'? (yes/no): ")
-    if answer ~= "yes" then return end
-
-    local ok, message = manager.deleteUser(name, requester)
-    if ok then
-        print("[OK] " .. tostring(message))
-    else
-        print("[Error] " .. tostring(message))
-    end
-end
-
-local function doChangeRole(manager, requester)
-    print("=== Change Role ===")
-    local name = prompt("Username: ")
-    if name == nil or name == "" then
-        print("[Error] Name cannot be empty.")
-        return
-    end
-    local role = promptRole()
-    if not role then return end
-
-    local ok, message = manager.changeRole(name, role, requester)
-    if ok then
-        print("[OK] " .. tostring(message))
-    else
-        print("[Error] " .. tostring(message))
-    end
-end
-
-local function runSubmenu(id, manager, user)
-    if not manager then return end
-    if id == "add" then
-        doAddUser(manager)
-    elseif id == "delete" then
-        doDeleteUser(manager, user.name)
-    elseif id == "role" then
-        doChangeRole(manager, user.name)
-    end
-    print("Press Enter to return...")
-    read()
-end
-
 while true do
     local user = session.validate(token)
     if not user then return end
 
-    local items, manager = buildMenu(user)
+    local items = buildMenu(user)
     renderMenu(user, items)
     local choice = tonumber(read())
 
@@ -248,8 +149,6 @@ while true do
             result = exitToCraftOS(user)
         elseif item.id == "logout" then
             return "break"
-        else
-            runSubmenu(item.id, manager, user)
         end
         if result == "break" then return "break" end
         sleep(0.5)

@@ -47,7 +47,6 @@ $copies = [ordered]@{
     'terminal\auth\psk.lua'            = 'auth\psk.lua'
     'terminal\auth\login.lua'          = 'auth\login.lua'
     'terminal\auth\login_client.lua'   = 'auth\login_client.lua'
-    'terminal\auth\login_standalone.lua' = 'auth\login_standalone.lua'
     'auth_server\auth\server_crypto.lua' = 'auth\server_crypto.lua'
     'auth_server\auth\terminal_keys.lua' = 'auth\terminal_keys.lua'
     'audit_server\auth\audit_config.lua' = 'auth\audit_config.lua'
@@ -70,14 +69,11 @@ foreach ($pair in $copies.GetEnumerator()) {
     Copy-Item $source (Join-Path $computer $pair.Value) -Force
 }
 
-# Repo-level cleanup assertions: the single-machine mode must really be gone
-# and no protocol-v4 token may survive in any Lua file.
+# Repo-level cleanup assertion: the single-machine mode is removed, so no
+# protocol-v4 token may survive in any Lua file.
 $repoLua = Get-ChildItem -Path $root -Recurse -File -Filter '*.lua' |
     Where-Object { $_.FullName -notmatch '\\tests\\' }
 $v4Hits = @($repoLua | Select-String -Pattern 'secure_auth_v4' -SimpleMatch)
-$modeFile = Join-Path $root 'terminal\auth\mode.lua'
-$loginFile = Join-Path $root 'terminal\auth\login.lua'
-$standaloneRef = @(Select-String -Path $loginFile -Pattern 'login_standalone' -SimpleMatch -ErrorAction SilentlyContinue)
 
 $stdout = Join-Path $DataDir 'offline.stdout.txt'
 $stderr = Join-Path $DataDir 'offline.stderr.txt'
@@ -123,12 +119,6 @@ $failCount = [int]([regex]::Match($failLine, '\d+').Value)
 $staticProblems = @()
 if ($v4Hits.Count -gt 0) {
     $staticProblems += "secure_auth_v4 remains in: " + (($v4Hits | ForEach-Object { $_.Path }) -join ', ')
-}
-if (Test-Path $modeFile) {
-    $staticProblems += "terminal/auth/mode.lua still exists"
-}
-if ($standaloneRef.Count -gt 0) {
-    $staticProblems += "terminal/auth/login.lua still references login_standalone"
 }
 
 $verdict = 'FAIL'

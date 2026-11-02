@@ -12,7 +12,7 @@ Sentinel 是给 ComputerCraft / CraftOS 用的一套门禁与用户管理方案�
 权限跟随账户：角色保存在认证服务器的 `/auth/users.db`，终端只是持有 PSK 的合法请求方，
 它既不在本地校验账号，也没有任何本地授权或本地开门能力。角色权重由共享的纯模块
 `/auth/role_policy.lua` 统一解释（root=4、admin=3、operator=2、user=1；`guest` 是 `user`
-的历史别名）。终端每次登录都必须连上认证服务器，独立/离线模式已废弃。
+的历史别名）。终端每次登录都必须连上认证服务器；独立/离线模式已移除且不再维护。
 
 一次完整动作的数据流：
 
@@ -127,7 +127,6 @@ users.db 快照里的真实角色”规范化后再比对（见 5.3），两处�
 | `/auth/role_policy.lua` | `sentinel/common/role_policy.lua` |
 | `/auth/login.lua` | `sentinel/terminal/auth/login.lua` |
 | `/auth/login_client.lua` | `sentinel/terminal/auth/login_client.lua` |
-| `/auth/login_standalone.lua` | `sentinel/terminal/auth/login_standalone.lua`（仅作离线模式拒绝兜底） |
 | `/auth/psk.lua` | `sentinel/terminal/auth/psk.lua` |
 | `/auth/psk.txt` | `sentinel/terminal/auth/psk.txt`（换成控制台发给你的密钥） |
 | `/auth/terminal_id.txt` | `sentinel/terminal/auth/terminal_id.txt`（换成控制台登记的 ID） |
@@ -140,23 +139,24 @@ users.db 快照里的真实角色”规范化后再比对（见 5.3），两处�
 
 运行时生成：`/audit_queue/<nonce>.evt`（审计队列）、`/lock.flag`（自检失败时）、
 `/anti.txt`（退出 CraftOS 的两阶段标记）。客户端不部署 `/auth/users.db` 与
-`/auth/user_manager.lua`，也不再有 `/auth/mode.lua`（见 2.4）。
+`/auth/user_manager.lua`；独立（离线）模式已彻底移除，`/auth/mode.lua` 与
+`/auth/login_standalone.lua` 都不再存在（见 2.4）。
 
-### 2.4 独立终端（已废弃）
+### 2.4 独立模式（已移除，不再维护）
 
-独立/离线终端模式在 stage-1 改造中退役：`/auth/mode.lua` 已从仓库删除，即使机器上还留着
-旧文件也会被忽略；`/auth/login.lua` 始终加载 `login_client.lua`。`login_standalone.lua`
-保留为拒绝模块，任何调用都会报：
+独立/离线终端模式已退役，**不再维护也不保留任何兜底模块**：
 
-```
-Offline mode is disabled. Connect to the auth server.
-```
+- `/auth/mode.lua` 已从仓库删除，即使机器上还留着旧文件也会被忽略（读取它的代码不存在）。
+- `/auth/login.lua` 始终加载 `login_client.lua`，不存在“本地校验”的分支。
+- `login_standalone.lua` 已从仓库**删除**，也不再保留任何等价模块：终端侧没有“离线登录”的
+  代码路径可用。
 
-所以不再有“独立终端”这第三种部署：不要往终端复制 `/auth/users.db` 或
-`/auth/user_manager.lua`，终端也不做任何本地账号校验或本地授权。原独立终端机器要改为
-2.3 的客户端部署（补 `/auth/psk.lua`、`/auth/psk.txt`、`/auth/terminal_id.txt`、
-`/system/netcheck.lua` 与 `/auth/role_policy.lua`），原有账号迁移到认证服务器的
-`/auth/users.db`（root 仍只由 `setup_root.lua` 创建）。
+所以只有三种部署：认证服务器 / 审计服务器 / 客户端终端（见 2.1–2.3）。不要往终端复制
+`/auth/users.db` 或 `/auth/user_manager.lua`，终端也不做任何本地账号校验或本地授权；
+所有用户相关操作只在认证服务器上做。原独立终端机器按 2.3 重新部署（补 `/auth/psk.lua`、
+`/auth/psk.txt`、`/auth/terminal_id.txt`、`/system/netcheck.lua` 与
+`/auth/role_policy.lua`），账号统一迁到认证服务器的 `/auth/users.db`（root 仍只由
+`setup_root.lua` 创建）。
 
 ## 3. 前置条件与接线
 
@@ -641,28 +641,15 @@ Select an option:
 | 序号 | 条目 | 可见条件 |
 |---|---|---|
 | 1 | `Open Vault` | 所有人 |
-| 2..4 | `Add User`、`Delete User`、`Change Role` | `role_policy.allows(role, "root")` 通过且 `/auth/user_manager.lua` 可加载 |
-| 最后 | `Exit to CraftOS` | `role_policy.allows(role, "root")` 通过 |
+| 2 | `Exit to CraftOS` | `role_policy.allows(role, "root")` 通过 |
 | 末条 | `Logout` | 所有人 |
 
-`0` 是 `Logout (shortcut)`，始终存在。客户端终端不部署 `user_manager.lua`，所以即使
-是 root，在客户端也只会看到 `Open Vault`、`Exit to CraftOS`、`Logout` 三项；
-Add/Delete/Change Role 只有在机器上额外部署了 `/auth/user_manager.lua` 时才会出现。
-角色判断统一走 `/auth/role_policy.lua`，不再有硬编码的 `role == "root"`。
+`0` 是 `Logout (shortcut)`，始终存在。终端**没有任何账号管理入口**：用户、角色与口令
+只在认证服务器的 `/auth/users.db` 里，只能在那台机器的根控制台改（见 4.3）。仓库不再为
+“终端上额外部署 `user_manager.lua`”保留旧版分支——那种部署已被移除。角色判断统一走
+`/auth/role_policy.lua`，没有硬编码的 `role == "root"`。
 
 输入数字选择；非法输入被静默忽略并重新显示菜单。条目执行后等待 0.5 秒再回到菜单。
-
-子菜单与提示：
-
-- Add User：`=== Add User ===`，依次问 `Username: `、`Password: `、
-  `Role (admin/operator/user/guest): `（直接回车 = `user`；`guest` 仍接受，是 `user` 的
-  历史别名）。角色非法时打印 `[Error] Invalid role: <r>`、
-  `Allowed: admin, operator, user, guest`；填 `root` 时额外打印
-  `Root accounts cannot be created through UI.`。
-- Delete User：`=== Delete User ===`，问 `Confirm delete '<u>'? (yes/no): `，只有字面量
-  `yes` 才会执行，其他输入静默取消。
-- Change Role：`=== Change Role ===`，问用户名与新角色，规则同上。
-- 结果统一打印 `[OK] <消息>` 或 `[Error] <消息>`，随后 `Press Enter to return...`。
 
 ### 6.5 Open Vault
 
@@ -748,7 +735,7 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 
 | 项目 | 旧独立终端 | 现在 |
 |---|---|---|
-| 登录模块 | `/auth/login_standalone.lua` 本地比对 | `login.lua` 始终加载 `login_client.lua`；`login_standalone.lua` 只负责报 `Offline mode is disabled. Connect to the auth server.` |
+| 登录模块 | `/auth/login_standalone.lua` 本地比对 | `login.lua` 始终加载 `login_client.lua`；`login_standalone.lua` 已从仓库删除 |
 | `/auth/mode.lua` | 切换 client/standalone | 已删除；旧文件被忽略 |
 | 本地账号库 | 终端 `/auth/users.db` + `user_manager.lua` | 终端不部署；账号只在认证服务器 |
 | 开机自检 | 不做 | 始终做 3 秒 netcheck，失败锁机 |
@@ -756,11 +743,8 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 | 开门 | 本机 left 红石 | 发 `open_request`，由认证服务器脉冲 |
 | Exit to CraftOS 复核 | 本地库 | 网络重认证 |
 
-把旧独立终端改为客户端部署的步骤：删掉本机 `/auth/users.db`、`/auth/user_manager.lua`
-与 `/auth/mode.lua`；按 2.3 补齐 `/auth/psk.lua`、`/auth/psk.txt`、
-`/auth/terminal_id.txt`、`/system/netcheck.lua` 与 `/auth/role_policy.lua`；在认证服务器
-控制台登记该终端（见 4.3），并把原有账号重建到认证服务器的 `/auth/users.db`（没有自动
-迁移工具；root 仍只由 `setup_root.lua` 创建）。
+不提供旧版迁移路径：仓库里没有迁移工具，也不保留任何旧部署兜底模块。新机器直接按 2.3
+部署客户端终端即可（root 仍只由 `setup_root.lua` 创建）。
 
 ## 8. `/auth/audit_config.lua` 全量参考
 
@@ -839,7 +823,7 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 | `[Error] Server timeout.` | 认证请求 8 秒内无回包 | 检查网络与服务器负载；重启认证服务器 |
 | `[Error] Invalid credentials` | 口令错误；服务器缺 `/auth/user_manager.lua`；或账号角色缺失/未知导致服务端 `success = false` | 先确认口令与账号角色；再检查服务器文件与 `/auth/role_policy.lua` |
 | `[Error] Server returned no usable role.` | 服务器回了 `success = true`，但 role 为空或不在合法集合内；常见于 `users.db` 角色字段拼错/缺失，或终端缺 `/auth/role_policy.lua` | 在认证服务器用 `Change Role` 写成 admin/operator/user/guest；确认终端部署了 `role_policy.lua` |
-| 终端报 `Offline mode is disabled. Connect to the auth server.` | 旧部署仍调用 `login_standalone.lua`（例如未更新 `login.lua`）；终端已没有本地账号库 | 按 2.3 更新登录模块，删除 `/auth/mode.lua`、`/auth/users.db` 与 `/auth/user_manager.lua` |
+| 终端反复 `System error, returning to login...` | 登录/菜单/审计某模块加载或运行期抛错，常见于部署文件缺失或版本混搭 | 按第 12 节核对文件清单与版本 |
 | `Open Vault` 弹窗 `[!] Permission denied` 后直接回到登录 | 账号角色低于 operator（user/guest）、角色被管理员收回/删除，或认证服务器缺 `/auth/role_policy.lua`；终端收回闭环生效 | 正常现象；需要权限就用 root 在认证服务器改成 operator/admin，再重新登录 |
 | 审计日志不增长但 `/auth/audit_reject.log` 有 `reason=role_mismatch` | 审计服务器的 users.db 快照与认证服务器不一致（改过角色/增删用户但没重新复制）；或已登录终端还在用旧角色 | 重新复制 `/auth/users.db`；让终端重新登录；对照 `CLAIMED` 与 `REAL` |
 | `/auth/audit_reject.log` 有 `reason=users_db_unavailable` | 审计服务器缺 `/auth/users.db` 快照或文件损坏 | 按 2.2 复制 users.db 后重启；确实不需要校验时才把 `role_check` 设为 `false` |
@@ -902,8 +886,8 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 15. 开门执行机构在认证服务器：终端连门禁红石都没有。`open_request` 只证明“这台终端
     持有登记的 PSK”和“它声称的用户名”；服务器不校验口令，用户名由终端软件从当前会话
     填入。能改终端程序的人本来就能读本机 PSK，所以物理安全仍是系统的安全上限（第 2 条）。
-16. 离线模式是明确拒绝而不是静默降级：`login.lua` 不读 `/auth/mode.lua`，
-    `login_standalone.lua` 只会报 `Offline mode is disabled. Connect to the auth server.`。
+16. 离线模式不是“静默降级”，而是根本不存在：`login.lua` 不读 `/auth/mode.lua`，
+    仓库也不提供 `login_standalone.lua` 或任何等价模块。
 17. 审计服务器的防伪造是“验签 + 角色交叉校验”两道：对称 PSK 让终端能签出任意 `role`，
     所以审计服务器不把 payload 里的 `role` 当事实，而是用本机 users.db 快照复核；不一致
     就丢弃并写 `/auth/audit_reject.log`（见 5.3）。快照本身也是本机文件，能改文件的人
@@ -938,7 +922,6 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 | `sentinel/terminal/startup.lua` | `/startup.lua` | 客户端终端 | 启动、沙箱、自检、anti 两阶段 |
 | `sentinel/terminal/auth/login.lua` | `/auth/login.lua` | 客户端终端 | 始终加载 login_client（登录/复核/开门请求） |
 | `sentinel/terminal/auth/login_client.lua` | `/auth/login_client.lua` | 客户端终端 | 网络挑战-响应、角色校验、`open_request` |
-| `sentinel/terminal/auth/login_standalone.lua` | `/auth/login_standalone.lua` | 客户端终端 | 旧部署兜底：只报离线模式已禁用 |
 | `sentinel/terminal/auth/psk.lua` | `/auth/psk.lua` | 客户端终端 | 读取 PSK、签名、验签 |
 | `sentinel/terminal/auth/psk.txt` | `/auth/psk.txt` | 客户端终端 | 32 字符 PSK（需替换） |
 | `sentinel/terminal/auth/terminal_id.txt` | `/auth/terminal_id.txt` | 客户端终端 | 终端 ID（需替换） |
@@ -948,7 +931,7 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 | `sentinel/terminal/system/netcheck.lua` | `/system/netcheck.lua` | 客户端终端 | 3 秒网络自检 |
 | `sentinel/terminal/system/audit.lua` | `/system/audit.lua` | 客户端终端 | 审计队列（含 role）、重发、ack 删除 |
 | `sentinel/terminal/system/kernel.lua` | `/system/kernel.lua` | 客户端终端 | 登录/菜单循环与审计循环 |
-| `sentinel/terminal/system/ui.lua` | `/system/ui.lua` | 客户端终端 | 菜单、开门请求、退出、用户管理 |
+| `sentinel/terminal/system/ui.lua` | `/system/ui.lua` | 客户端终端 | 菜单、开门请求、退出（无账号管理） |
 | `sentinel/setup_root.lua` | `/setup_root.lua`（临时） | 认证服务器 | 一次性创建 root |
 | `sentinel/auth_server/startup.lua` | `/startup.lua` | 认证服务器 | 服务 + 控制台并行启动 |
 | `sentinel/auth_server/auth/server_crypto.lua` | `/auth/server_crypto.lua` | 认证/审计服务器 | 服务器侧签名与验签 |
@@ -974,8 +957,7 @@ stage-1 改造后只有一种终端部署：必须连接认证服务器的客户
 4. 认证服务器：用 root 登录控制台，`5. Manage Terminal Keys` → `2. Add / Show Key`，
    登记每台终端，记下 ID 与 Key。
 5. 终端：把 ID 写进 `/auth/terminal_id.txt`，把 Key 写进 `/auth/psk.txt`，按 2.3 放好
-   其余文件（含 `role_policy.lua`）。从旧独立终端迁移时先删掉 `/auth/mode.lua`、
-   `/auth/users.db` 与 `/auth/user_manager.lua`。
+   其余文件（含 `role_policy.lua`）。
 6. 审计服务器：按 2.2 放好文件，**从认证服务器复制 `/auth/terminal_keys.db` 与
    `/auth/users.db`**，并放入 `/auth/role_policy.lua`，按现场修改
    `/auth/audit_config.lua`（`protocol` 保持 `secure_auth_v5`），重启，确认 `Ready.` 与

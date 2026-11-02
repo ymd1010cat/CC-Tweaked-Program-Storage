@@ -1,4 +1,4 @@
--- Sentinel one-time root account setup (standalone / auth server machine).
+-- Sentinel one-time root account setup (auth server machine).
 -- Deploy: /setup_root.lua
 --
 -- Refuses to run when any root account already exists. The account is created

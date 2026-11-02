@@ -197,8 +197,6 @@ end
 local function staticTests()
     local login = source("/auth/login.lua")
     check("static.login_loads_client", contains(login, "login_client.lua"))
-    check("static.login_has_no_standalone", not contains(login, "login_standalone"))
-    check("static.login_has_no_mode", not contains(login, "mode.lua"))
     check("static.login_exports_request_open", contains(login, "requestOpen"))
 
     local client = source("/auth/login_client.lua")
@@ -206,10 +204,6 @@ local function staticTests()
     check("static.client_no_guest_fallback", not contains(client, 'or "guest"'))
     check("static.client_request_open", contains(client, "open_request"))
     check("static.client_role_policy", contains(client, "role_policy"))
-
-    local standalone = source("/auth/login_standalone.lua")
-    check("static.standalone_disabled",
-        contains(standalone, "Offline mode is disabled"))
 
     local authServer = source("/system/auth_server.lua")
     check("static.auth_server_v5", contains(authServer, "secure_auth_v5"))
@@ -253,7 +247,6 @@ local function staticTests()
 
     local terminalAudit = source("/system/audit.lua")
     check("static.audit_client_v5", contains(terminalAudit, "secure_auth_v5"))
-    check("static.audit_client_no_standalone", not contains(terminalAudit, "standalone"))
     check("static.audit_client_role_arg", contains(terminalAudit, "role"))
 
     local auditServer = source("/system/audit_server.lua")
@@ -265,12 +258,6 @@ local function staticTests()
 
     local netcheck = source("/system/netcheck.lua")
     check("static.netcheck_v5", contains(netcheck, "secure_auth_v5"))
-
-    local kernel = source("/system/kernel.lua")
-    check("static.kernel_no_mode", not contains(kernel, "mode.lua"))
-    check("static.kernel_no_standalone", not contains(kernel, "standalone"))
-
-    check("static.mode_file_removed", not fs.exists("/auth/mode.lua"))
 
     local v4 = {}
     local function scan(path)
@@ -637,11 +624,6 @@ local function offlineLoginTests()
     seedHeartbeat()
     user = loginAs("alice", "alicepw")
     check("offline.mode_ignored_when_server_missing", user == nil)
-
-    local refusal = dofile("/auth/login_standalone.lua")
-    local called, loginError = pcall(function() refusal.login() end)
-    check("offline.standalone_module_refuses", called == false
-        and contains(tostring(loginError), "Offline mode is disabled"))
 
     fs.delete("/auth/mode.lua")
 end

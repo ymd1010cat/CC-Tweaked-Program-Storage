@@ -1,4 +1,4 @@
--- Sentinel shared user store (standalone terminal and auth server).
+-- Sentinel user store (deployed on the auth server only; terminals never hold it).
 -- Deploy: /auth/user_manager.lua
 --
 -- Users live in /auth/users.db as textutils.serialize of
