@@ -126,7 +126,8 @@ local USAGE = table.concat({
     "options:",
     "  --dirs=a,b              shard search directories",
     "  --shards=p1,p2          explicit shard file list",
-    "  --cache=N               sector cache size (default 64)",
+    "  --manifest=path         CRC32 manifest (default: image.crc32 in a shard dir)",
+    "  --cache=N               sector cache size (default 64, max 4096)",
     "  --slice=N               instructions per render/sleep cycle",
     "  --max-steps=N           stop after N instructions",
     "  --geometry=S,H,C        floppy geometry for INT 13h (default 9,2,40)",
@@ -169,6 +170,10 @@ function Runner.parse_args(args)
             local raw, err = take_value("--shards=")
             if raw == nil then return nil, err end
             shards = split_list(raw)
+        elseif argument:sub(1, 11) == "--manifest=" then
+            local raw, err = take_value("--manifest=")
+            if raw == nil then return nil, err end
+            opts.manifest = raw
         elseif argument:sub(1, 8) == "--cache=" then
             local raw = argument:match("^%-%-cache=(%d+)$")
             if raw == nil then

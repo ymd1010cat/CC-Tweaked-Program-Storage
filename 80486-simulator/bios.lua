@@ -51,6 +51,35 @@
 --   firmware it never returns from this interrupt; the CPU therefore
 --   suppresses the implicit IRET for this handler.
 --
+-- INT 16h keyboard
+--   00/10 blocking read: waits for a keystroke (internal buffer first, then
+--        the keyboard source) and returns AL = ASCII, AH = scan code
+--   01/11 non-blocking read: ZF = 1 and the buffer untouched when no key is
+--        pending; otherwise ZF = 0 and AX = (scan << 8) | ASCII, key kept
+--   02 read shift flags (no shift state is tracked yet, AL = 0)
+--   Keys can be injected with bios:push_key(scan, ascii) / push_char(ch).
+--   The default source reads CraftOS char/key events through os.pullEvent.
+--
+-- INT 12h memory size
+--   AX = conventional memory in KiB (default 640).
+--
+-- INT 15h system services
+--   AH = 88h: AX = extended memory in KiB (default 15 MiB = 15360 KiB).
+--
+-- INT 1Ah real-time clock / tick counter
+--   00 read system clock ticks (CX:DX = 32-bit count, AL = midnight flag)
+--   01 set system clock ticks (CX:DX)
+--   02 read RTC time (CH = hour, CL = minute, DH = second, CF = 0 binary)
+--   04 read RTC date (CH = century, CL = year, DH = month, DL = day)
+--   Reading uses the injected clock/date sources (os.clock / os.date by
+--   default); setting the RTC (AH = 03/05) raises because it is not
+--   emulated rather than pretending to work.
+--
+-- INT 08h system timer
+--   Advances the same tick counter read by INT 1Ah (18.2065 ticks/second,
+--   1573040 ticks per day).  There is no emulated PIC, so this handler runs
+--   when the guest executes INT 08h; there is no asynchronous IRQ0 source.
+--
 -- Error codes returned by INT 13h in AH:
 --   0x03 write protected      (AH = 03 write)
 --   0x04 sector not found     (invalid CHS, bad count, short read, read error)
@@ -73,6 +102,143 @@ local SECTOR_SIZE = 512
 local BOOT_ADDRESS = 0x7C00
 local BOOT_SIGNATURE = 0xAA55
 local BOOT_SIGNATURE_OFFSET = 511
+
+local CONVENTIONAL_KB = 640
+local EXTENDED_KB = 15 * 1024
+local KEYBOARD_BUFFER_MAX = 64
+local TICKS_PER_SECOND = 18.2065
+local TICKS_PER_DAY = 1573040
+
+---------------------------------------------------------------------------
+-- Keyboard translation tables (DOS scan code set 1)
+---------------------------------------------------------------------------
+
+local CHAR_SCAN = {
+    ["1"] = 0x02, ["2"] = 0x03, ["3"] = 0x04, ["4"] = 0x05,
+    ["5"] = 0x06, ["6"] = 0x07, ["7"] = 0x08, ["8"] = 0x09,
+    ["9"] = 0x0A, ["0"] = 0x0B,
+    ["-"] = 0x0C, ["="] = 0x0D,
+    ["q"] = 0x10, ["w"] = 0x11, ["e"] = 0x12, ["r"] = 0x13,
+    ["t"] = 0x14, ["y"] = 0x15, ["u"] = 0x16, ["i"] = 0x17,
+    ["o"] = 0x18, ["p"] = 0x19, ["["] = 0x1A, ["]"] = 0x1B,
+    ["a"] = 0x1E, ["s"] = 0x1F, ["d"] = 0x20, ["f"] = 0x21,
+    ["g"] = 0x22, ["h"] = 0x23, ["j"] = 0x24, ["k"] = 0x25,
+    ["l"] = 0x26, [";"] = 0x27, ["'"] = 0x28, ["`"] = 0x29,
+    ["\\"] = 0x2B,
+    ["z"] = 0x2C, ["x"] = 0x2D, ["c"] = 0x2E, ["v"] = 0x2F,
+    ["b"] = 0x30, ["n"] = 0x31, ["m"] = 0x32,
+    [","] = 0x33, ["."] = 0x34, ["/"] = 0x35,
+    [" "] = 0x39,
+}
+
+-- Shifted symbols keep the scan code of their unshifted key.
+local SHIFTED_BASE = {
+    ["~"] = "`", ["!"] = "1", ["@"] = "2", ["#"] = "3", ["$"] = "4",
+    ["%"] = "5", ["^"] = "6", ["&"] = "7", ["*"] = "8", ["("] = "9",
+    [")"] = "0", ["_"] = "-", ["+"] = "=", ["{"] = "[", ["}"] = "]",
+    ["|"] = "\\", [":"] = ";", ['"'] = "'", ["<"] = ",", [">"] = ".",
+    ["?"] = "/",
+}
+
+-- { ASCII, scan code } for keys that do not produce a char event.
+local SPECIAL_KEYS = {
+    enter     = {0x0D, 0x1C},
+    backspace = {0x08, 0x0E},
+    tab       = {0x09, 0x0F},
+    up        = {0x00, 0x48},
+    down      = {0x00, 0x50},
+    left      = {0x00, 0x4B},
+    right     = {0x00, 0x4D},
+    home      = {0x00, 0x47},
+    ["end"]   = {0x00, 0x4F},
+    pageUp    = {0x00, 0x49},
+    pageDown  = {0x00, 0x51},
+    insert    = {0x00, 0x52},
+    delete    = {0x00, 0x53},
+    ["f1"]    = {0x00, 0x3B}, ["f2"]  = {0x00, 0x3C},
+    ["f3"]    = {0x00, 0x3D}, ["f4"]  = {0x00, 0x3E},
+    ["f5"]    = {0x00, 0x3F}, ["f6"]  = {0x00, 0x40},
+    ["f7"]    = {0x00, 0x41}, ["f8"]  = {0x00, 0x42},
+    ["f9"]    = {0x00, 0x43}, ["f10"] = {0x00, 0x44},
+}
+
+local function char_scan(ch)
+    if type(ch) ~= "string" or #ch ~= 1 then
+        return 0
+    end
+    local scan = CHAR_SCAN[ch:lower()]
+    if scan ~= nil then
+        return scan
+    end
+    local base = SHIFTED_BASE[ch]
+    if base ~= nil then
+        return CHAR_SCAN[base] or 0
+    end
+    return 0
+end
+
+-- Default real-time clock date source: a table with hour/min/sec/year/
+-- month/day, or nil when the host has no clock.
+local function default_date_source()
+    local osapi = rawget(_G, "os")
+    if type(osapi) ~= "table" or type(osapi.date) ~= "function" then
+        return nil
+    end
+    local ok, value = pcall(osapi.date, "*t")
+    if ok and type(value) == "table" then
+        return value
+    end
+    return nil
+end
+
+-- Default blocking keyboard source: CraftOS key/char events.  Printable keys
+-- arrive as a key event followed by a char event, so the scan code is
+-- remembered and the char event returns the pair exactly once.
+local function default_keyboard_pull(bios)
+    local osapi = rawget(_G, "os")
+    if type(osapi) ~= "table" or type(osapi.pullEvent) ~= "function" then
+        error("INT 16h: no keyboard source available "
+            .. "(inject opts.keyboard_pull)", 0)
+    end
+    local keysapi = rawget(_G, "keys")
+    local pending_scan = nil
+    while true do
+        local event, first = osapi.pullEvent()
+        if event == "char" then
+            local text = tostring(first)
+            if #text >= 1 then
+                local ch = text:sub(1, 1)
+                local scan = pending_scan
+                if scan == nil then
+                    scan = char_scan(ch)
+                end
+                pending_scan = nil
+                return {ascii = byte(ch), scan = scan}
+            end
+        elseif event == "key" then
+            local name = nil
+            if type(keysapi) == "table"
+                and type(keysapi.getName) == "function" then
+                local ok, value = pcall(keysapi.getName, first)
+                if ok and type(value) == "string" then
+                    name = value
+                end
+            end
+            if name ~= nil then
+                local special = SPECIAL_KEYS[name]
+                if special ~= nil then
+                    pending_scan = nil
+                    return {ascii = special[1], scan = special[2]}
+                end
+                if #name == 1 then
+                    pending_scan = char_scan(name)
+                end
+            end
+        elseif event == "terminate" then
+            error("INT 16h: machine terminated while waiting for a key", 0)
+        end
+    end
+end
 
 local CPU_METHODS = {
     "get_reg8", "set_reg8",
@@ -180,8 +346,17 @@ Bios.DEFAULT_GEOMETRY = {sectors = 9, heads = 2, cylinders = 40}
 Bios.INT_VIDEO = 0x10
 Bios.INT_DISK = 0x13
 Bios.INT_BOOT = 0x19
+Bios.INT_TIMER = 0x08
+Bios.INT_MEMORY = 0x12
+Bios.INT_SYSTEM = 0x15
+Bios.INT_KEYBOARD = 0x16
+Bios.INT_TIME = 0x1A
 Bios.BOOT_ADDRESS = BOOT_ADDRESS
 Bios.BOOT_SIGNATURE = BOOT_SIGNATURE
+Bios.CONVENTIONAL_KB = CONVENTIONAL_KB
+Bios.EXTENDED_KB = EXTENDED_KB
+Bios.KEYBOARD_BUFFER_MAX = KEYBOARD_BUFFER_MAX
+Bios.TICKS_PER_DAY = TICKS_PER_DAY
 Bios.MAX_SECTORS_PER_READ = MAX_SECTORS_PER_READ
 Bios.TEXT_MODES = TEXT_MODES
 
@@ -248,6 +423,69 @@ function Bios.new(opts)
             .. "boolean (got %s)", type(check_boot_signature)), 0)
     end
 
+    local conventional_kb = opts.conventional_kb
+    if conventional_kb == nil then
+        conventional_kb = CONVENTIONAL_KB
+    end
+    if not is_integer(conventional_kb) or conventional_kb < 1
+        or conventional_kb > CONVENTIONAL_KB then
+        error(string.format("BIOS.new: opts.conventional_kb must be an "
+            .. "integer 1..%d (got %s)", CONVENTIONAL_KB,
+            tostring(conventional_kb)), 0)
+    end
+
+    local extended_kb = opts.extended_kb
+    if extended_kb == nil then
+        extended_kb = EXTENDED_KB
+    end
+    if not is_integer(extended_kb) or extended_kb < 0 or extended_kb > 65535 then
+        error(string.format("BIOS.new: opts.extended_kb must be an integer "
+            .. "0..65535 (got %s)", tostring(extended_kb)), 0)
+    end
+
+    local keyboard_max = opts.keyboard_max
+    if keyboard_max == nil then
+        keyboard_max = KEYBOARD_BUFFER_MAX
+    end
+    if not is_integer(keyboard_max) or keyboard_max < 1
+        or keyboard_max > 1024 then
+        error(string.format("BIOS.new: opts.keyboard_max must be an integer "
+            .. "1..1024 (got %s)", tostring(keyboard_max)), 0)
+    end
+
+    local keyboard_pull = opts.keyboard_pull
+    if keyboard_pull ~= nil and type(keyboard_pull) ~= "function" then
+        error("BIOS.new: opts.keyboard_pull must be a function", 0)
+    end
+
+    local keyboard_poll = opts.keyboard_poll
+    if keyboard_poll ~= nil and type(keyboard_poll) ~= "function" then
+        error("BIOS.new: opts.keyboard_poll must be a function", 0)
+    end
+
+    local clock = opts.clock
+    if clock == nil then
+        local osapi = rawget(_G, "os")
+        if type(osapi) == "table" and type(osapi.clock) == "function" then
+            clock = osapi.clock
+        else
+            clock = function()
+                return 0
+            end
+        end
+    end
+    if type(clock) ~= "function" then
+        error("BIOS.new: opts.clock must be a function", 0)
+    end
+
+    local date_source = opts.date
+    if date_source == nil then
+        date_source = default_date_source
+    end
+    if type(date_source) ~= "function" then
+        error("BIOS.new: opts.date must be a function", 0)
+    end
+
     local term = opts.term
     if term == false then
         term = nil
@@ -273,12 +511,33 @@ function Bios.new(opts)
         boot_drive   = boot_drive,
         check_boot_signature = check_boot_signature,
         boot_count   = 0,
+        conventional_kb = conventional_kb,
+        extended_kb     = extended_kb,
+        keyboard        = {
+            buffer  = {},
+            head    = 1,
+            tail    = 1,
+            count   = 0,
+            max     = keyboard_max,
+            pull    = keyboard_pull,
+            poll    = keyboard_poll,
+            dropped = 0,
+        },
+        clock           = clock,
+        date_source     = date_source,
+        tick_base       = 0,
+        tick_epoch      = clock(),
     }, Bios)
 
     self.interrupts = {
         [Bios.INT_VIDEO] = function(cpu) return self:int10(cpu) end,
         [Bios.INT_DISK] = function(cpu) return self:int13(cpu) end,
         [Bios.INT_BOOT] = function(cpu) return self:int19(cpu) end,
+        [Bios.INT_TIMER] = function(cpu) return self:int08(cpu) end,
+        [Bios.INT_MEMORY] = function(cpu) return self:int12(cpu) end,
+        [Bios.INT_SYSTEM] = function(cpu) return self:int15(cpu) end,
+        [Bios.INT_KEYBOARD] = function(cpu) return self:int16(cpu) end,
+        [Bios.INT_TIME] = function(cpu) return self:int1a(cpu) end,
     }
     return self
 end
@@ -316,6 +575,11 @@ function Bios:attach(cpu)
     cpu.interrupts[Bios.INT_VIDEO] = self.interrupts[Bios.INT_VIDEO]
     cpu.interrupts[Bios.INT_DISK] = self.interrupts[Bios.INT_DISK]
     cpu.interrupts[Bios.INT_BOOT] = self.interrupts[Bios.INT_BOOT]
+    cpu.interrupts[Bios.INT_TIMER] = self.interrupts[Bios.INT_TIMER]
+    cpu.interrupts[Bios.INT_MEMORY] = self.interrupts[Bios.INT_MEMORY]
+    cpu.interrupts[Bios.INT_SYSTEM] = self.interrupts[Bios.INT_SYSTEM]
+    cpu.interrupts[Bios.INT_KEYBOARD] = self.interrupts[Bios.INT_KEYBOARD]
+    cpu.interrupts[Bios.INT_TIME] = self.interrupts[Bios.INT_TIME]
 
     local ports = cpu.ports
     -- "in" is a Lua keyword, so the table fields are addressed as strings.
@@ -867,6 +1131,258 @@ function Bios:int19(cpu)
         cpu.ip = BOOT_ADDRESS
     end
     return true
+end
+
+---------------------------------------------------------------------------
+-- INT 16h: keyboard
+---------------------------------------------------------------------------
+
+function Bios:push_key(scan, ascii)
+    scan = scan or 0
+    ascii = ascii or 0
+    if not is_integer(scan) or scan < 0 or scan > 255 then
+        error("Bios:push_key: scan must be an integer 0..255 (got "
+            .. tostring(scan) .. ")", 0)
+    end
+    if not is_integer(ascii) or ascii < 0 or ascii > 255 then
+        error("Bios:push_key: ascii must be an integer 0..255 (got "
+            .. tostring(ascii) .. ")", 0)
+    end
+    local kb = self.keyboard
+    if kb.count >= kb.max then
+        -- Like a real BIOS buffer overflow: drop the oldest keystroke.
+        kb.head = kb.head % kb.max + 1
+        kb.count = kb.count - 1
+        kb.dropped = kb.dropped + 1
+    end
+    kb.buffer[kb.tail] = {scan = scan, ascii = ascii}
+    kb.tail = kb.tail % kb.max + 1
+    kb.count = kb.count + 1
+    return true
+end
+
+function Bios:push_char(ch)
+    if type(ch) == "number" then
+        ch = string.char(ch % 256)
+    end
+    if type(ch) ~= "string" or #ch < 1 then
+        error("Bios:push_char: expected a character", 0)
+    end
+    local first = ch:sub(1, 1)
+    return self:push_key(char_scan(first), byte(first))
+end
+
+function Bios:keyboard_count()
+    return self.keyboard.count
+end
+
+function Bios:keyboard_dropped()
+    return self.keyboard.dropped
+end
+
+function Bios:clear_keyboard()
+    local kb = self.keyboard
+    kb.buffer = {}
+    kb.head = 1
+    kb.tail = 1
+    kb.count = 0
+    return true
+end
+
+function Bios:_keyboard_peek()
+    local kb = self.keyboard
+    if kb.count == 0 then
+        return nil
+    end
+    return kb.buffer[kb.head]
+end
+
+function Bios:_keyboard_pop()
+    local kb = self.keyboard
+    if kb.count == 0 then
+        return nil
+    end
+    local entry = kb.buffer[kb.head]
+    kb.buffer[kb.head] = nil
+    kb.head = kb.head % kb.max + 1
+    kb.count = kb.count - 1
+    return entry
+end
+
+-- Optional opportunistic refill used by the non-blocking function (AH=01).
+function Bios:_keyboard_refill()
+    local kb = self.keyboard
+    if kb.poll == nil or kb.count >= kb.max then
+        return
+    end
+    local ok, result = pcall(kb.poll, self)
+    if not ok then
+        error(result, 0)
+    end
+    if type(result) == "table" then
+        self:push_key(result.scan or 0, result.ascii or 0)
+    end
+end
+
+function Bios:_keyboard_next()
+    local entry = self:_keyboard_pop()
+    if entry ~= nil then
+        return entry
+    end
+    local pull = self.keyboard.pull or default_keyboard_pull
+    local ok, result = pcall(pull, self)
+    if not ok then
+        error(result, 0)
+    end
+    if type(result) ~= "table" then
+        error("INT 16h: keyboard source did not return a key", 0)
+    end
+    return {
+        scan  = (result.scan or 0) % 256,
+        ascii = (result.ascii or 0) % 256,
+    }
+end
+
+function Bios:int16(cpu)
+    check_cpu(cpu, "INT 16h")
+    local ah = cpu:get_reg8(4)
+    if ah == 0x00 or ah == 0x10 then
+        local key = self:_keyboard_next()
+        cpu:set_reg8(0, key.ascii)
+        cpu:set_reg8(4, key.scan)
+        self:_log("INT16_READ ascii=%02X scan=%02X", key.ascii, key.scan)
+        return true
+    elseif ah == 0x01 or ah == 0x11 then
+        self:_keyboard_refill()
+        local key = self:_keyboard_peek()
+        if key == nil then
+            cpu:set_flag("ZF", true)
+        else
+            cpu:set_flag("ZF", false)
+            cpu:set_reg8(0, key.ascii)
+            cpu:set_reg8(4, key.scan)
+        end
+        return true
+    elseif ah == 0x02 then
+        -- No shift state is tracked yet, so report "no shift pressed".
+        cpu:set_reg8(0, 0)
+        return true
+    end
+    error(string.format("INT 16h: unsupported keyboard function AH=0x%02X",
+        ah), 0)
+end
+
+---------------------------------------------------------------------------
+-- INT 12h: conventional memory size
+---------------------------------------------------------------------------
+
+function Bios:int12(cpu)
+    check_cpu(cpu, "INT 12h")
+    cpu:set_reg16(0, self.conventional_kb)
+    self:_log("INT12_MEMORY kb=%d", self.conventional_kb)
+    return true
+end
+
+---------------------------------------------------------------------------
+-- INT 15h: system services (extended memory size)
+---------------------------------------------------------------------------
+
+function Bios:int15(cpu)
+    check_cpu(cpu, "INT 15h")
+    local ah = cpu:get_reg8(4)
+    if ah == 0x88 then
+        -- AX carries the number of KiB of extended memory (the high byte of
+        -- AX is part of the size, not a status code).
+        cpu:set_reg16(0, self.extended_kb)
+        cpu:set_flag("CF", false)
+        self:_log("INT15_EXTMEMORY kb=%d", self.extended_kb)
+        return true
+    end
+    error(string.format("INT 15h: unsupported system function AH=0x%02X",
+        ah), 0)
+end
+
+---------------------------------------------------------------------------
+-- INT 1Ah / INT 08h: tick counter and real-time clock
+---------------------------------------------------------------------------
+
+function Bios:_ticks()
+    local now = self.clock()
+    if type(now) ~= "number" then
+        now = 0
+    end
+    local elapsed = now - self.tick_epoch
+    if elapsed < 0 then
+        elapsed = 0
+    end
+    return (self.tick_base + floor(elapsed * TICKS_PER_SECOND))
+        % TICKS_PER_DAY
+end
+
+function Bios:_read_date()
+    local ok, value = pcall(self.date_source, self)
+    if not ok then
+        error(value, 0)
+    end
+    if type(value) ~= "table" then
+        error("INT 1Ah: no real time clock source is available", 0)
+    end
+    return value
+end
+
+function Bios:int08(cpu)
+    check_cpu(cpu, "INT 08h")
+    self.tick_base = (self:_ticks() + 1) % TICKS_PER_DAY
+    self.tick_epoch = self.clock()
+    self:_log("INT08_TICK ticks=%d", self.tick_base)
+    return true
+end
+
+function Bios:int1a(cpu)
+    check_cpu(cpu, "INT 1Ah")
+    local ah = cpu:get_reg8(4)
+    if ah == 0x00 then
+        local ticks = self:_ticks()
+        local low = ticks % 65536
+        local high = floor(ticks / 65536) % 65536
+        -- CX:DX is a 32-bit count: CX is the high word, DX the low word.
+        cpu:set_reg8(1, high % 256)                -- CL high word, low byte
+        cpu:set_reg8(5, floor(high / 256) % 256)   -- CH high word, high byte
+        cpu:set_reg8(2, low % 256)                 -- DL low word, low byte
+        cpu:set_reg8(6, floor(low / 256) % 256)    -- DH low word, high byte
+        cpu:set_reg8(0, 0)                         -- AL midnight flag
+        self:_log("INT1A_TICKS ticks=%d", ticks)
+        return true
+    elseif ah == 0x01 then
+        local low = cpu:get_reg8(2) + cpu:get_reg8(6) * 256
+        local high = cpu:get_reg8(1) + cpu:get_reg8(5) * 256
+        self.tick_base = (high * 65536 + low) % TICKS_PER_DAY
+        self.tick_epoch = self.clock()
+        self:_log("INT1A_SET ticks=%d", self.tick_base)
+        return true
+    elseif ah == 0x02 then
+        local date = self:_read_date()
+        cpu:set_flag("CF", false) -- CF = 0: binary number format
+        cpu:set_reg8(5, (date.hour or 0) % 256) -- CH hour
+        cpu:set_reg8(1, (date.min or 0) % 256)  -- CL minute
+        cpu:set_reg8(6, (date.sec or 0) % 256)  -- DH second
+        cpu:set_reg8(2, 0)                      -- DL daylight saving
+        self:_log("INT1A_TIME %02d:%02d:%02d", date.hour or 0,
+            date.min or 0, date.sec or 0)
+        return true
+    elseif ah == 0x04 then
+        local date = self:_read_date()
+        local year = date.year or 0
+        cpu:set_reg8(5, floor(year / 100) % 256) -- CH century
+        cpu:set_reg8(1, year % 100)              -- CL year
+        cpu:set_reg8(6, (date.month or 0) % 256) -- DH month
+        cpu:set_reg8(2, (date.day or 0) % 256)   -- DL day
+        self:_log("INT1A_DATE %04d-%02d-%02d", year, date.month or 0,
+            date.day or 0)
+        return true
+    end
+    error(string.format("INT 1Ah: unsupported clock function AH=0x%02X "
+        .. "(setting the RTC is not emulated)", ah), 0)
 end
 
 -- The machine entry point invokes the bootstrap exactly like real firmware.

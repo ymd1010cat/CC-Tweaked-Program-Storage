@@ -42,8 +42,8 @@ if (-not (Test-Path $Exe)) {
 $modules = @("memory.lua", "disk.lua", "cpu.lua", "vga.lua", "bios.lua",
              "runner.lua")
 $tests   = @("memory_test.lua", "disk_test.lua", "cpu_test.lua",
-             "vga_test.lua", "bios_test.lua", "runner_test.lua",
-             "test_integration.lua")
+             "vga_test.lua", "bios_test.lua", "bios_services_test.lua",
+             "runner_test.lua", "test_integration.lua")
 
 foreach ($module in $modules) {
     $path = Join-Path $simRoot $module
@@ -85,6 +85,7 @@ $shim = @(
     "    {`"cpu`", `"/tests/cpu_test.lua`"},",
     "    {`"vga`", `"/tests/vga_test.lua`"},",
     "    {`"bios`", `"/tests/bios_test.lua`"},",
+    "    {`"bios_services`", `"/tests/bios_services_test.lua`"},",
     "    {`"runner`", `"/tests/runner_test.lua`"},",
     "    {`"integration`", `"/tests/test_integration.lua`"},",
     "}",
@@ -193,7 +194,7 @@ foreach ($line in $reportLines) {
 $passed = $false
 if (($reportLines -contains "SUITE_PASS") -and $counts -ne $null) {
     $passed = ($counts.fail -eq 0) -and ($counts.skip -eq 0) `
-        -and ($suiteOk -eq $suiteCount) -and ($suiteCount -eq 7)
+        -and ($suiteOk -eq $suiteCount) -and ($suiteCount -eq 8)
 }
 
 if (-not $passed) {

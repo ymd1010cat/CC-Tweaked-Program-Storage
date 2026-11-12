@@ -453,6 +453,9 @@ test("parse_args understands the documented command line", function()
     eq(opts.disk_opts.dirs[1], "/a", "--dirs 1")
     eq(opts.disk_opts.dirs[2], "/b", "--dirs 2")
 
+    opts = Runner.parse_args({"--manifest=/a/image.crc32"})
+    eq(opts.manifest, "/a/image.crc32", "--manifest")
+
     opts = Runner.parse_args({"--shards=/a/0.dat,/b/1.dat"})
     eq(opts.disk_opts.shards[1], "/a/0.dat", "--shards 1")
     eq(opts.disk_opts.shards[2], "/b/1.dat", "--shards 2")

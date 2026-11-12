@@ -863,6 +863,16 @@ test("option validation", function()
         Disk.new{backend = backend, shards = paths, cache_sectors = "64"}
     end, "cache_sectors")
     expect_error(function()
+        Disk.new{backend = backend, shards = paths, cache_sectors = 4097}
+    end, "4096")
+    expect_error(function()
+        Disk.new{backend = backend, shards = paths, cache_sectors = 1000000}
+    end, "4096")
+    -- The documented upper bound itself is allowed.
+    local large = Disk.new{backend = backend, shards = paths,
+        cache_sectors = Disk.MAX_CACHE_SECTORS}
+    eq(large:get_cache_capacity(), 4096, "cache at the upper bound")
+    expect_error(function()
         Disk.new{backend = backend, shards = paths, prefix = 42}
     end, "prefix must be a string")
     expect_error(function()

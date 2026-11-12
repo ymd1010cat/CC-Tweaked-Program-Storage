@@ -24,7 +24,9 @@
 --     Such sectors are assembled by reading both shards.
 --   * Reads go through a small in-memory LRU cache of whole sectors
 --     (64 sectors = 32 KiB by default, per the design constraint).  Cached
---     sectors are served without touching the shard files.
+--     sectors are served without touching the shard files.  The cache size
+--     is capped at MAX_CACHE_SECTORS (4096 sectors = 2 MiB) so a typo in
+--     the configuration cannot exhaust the computer's memory.
 --   * Shard file handles are cached too, but only a bounded number of them
 --     (4 by default) using an LRU order, so a long chain of floppies cannot
 --     leak open files.
@@ -80,6 +82,7 @@
 local SECTOR_SIZE           = 512
 local DEFAULT_SHARD_SIZE    = 128 * 1024
 local DEFAULT_CACHE_SECTORS = 64
+local MAX_CACHE_SECTORS     = 4096
 local DEFAULT_PREFIX        = "img_"
 local DEFAULT_SUFFIX        = ".dat"
 local MAX_SHARD_INDEX       = 100000
@@ -1329,6 +1332,10 @@ local function validate_options(opts)
         fail("disk.new", "cache_sectors must be a positive integer (got %s)",
             tostring(cache_sectors))
     end
+    if cache_sectors > MAX_CACHE_SECTORS then
+        fail("disk.new", "cache_sectors must be <= %d (got %s)",
+            MAX_CACHE_SECTORS, tostring(cache_sectors))
+    end
 
     local prefix = opts.prefix
     if prefix == nil then
@@ -1743,6 +1750,7 @@ end
 Disk.SECTOR_SIZE           = SECTOR_SIZE
 Disk.DEFAULT_SHARD_SIZE    = DEFAULT_SHARD_SIZE
 Disk.DEFAULT_CACHE_SECTORS = DEFAULT_CACHE_SECTORS
+Disk.MAX_CACHE_SECTORS     = MAX_CACHE_SECTORS
 Disk.DEFAULT_PREFIX        = DEFAULT_PREFIX
 Disk.DEFAULT_SUFFIX        = DEFAULT_SUFFIX
 Disk.DEFAULT_DIRS          = DEFAULT_DIRS
