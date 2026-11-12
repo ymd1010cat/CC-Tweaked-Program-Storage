@@ -1,5 +1,7 @@
 # --- DSH 会话记忆（不属于项目本体，不入库）---
 /dsh_memory/
+# --- DSH 本地临时目录（scratch，不入库）---
+.dsh-tmp/
 
 # --- 真实部署时由服务器/终端生成的运行时文件，不入库 ---
 # 卡密服务器：卡密明文导出与密钥（泄露即可伪造卡密）
@@ -21,6 +23,7 @@ psk.txt
 /HANDOFF-*.md
 
 # offline test staging dirs (auto-deleted on PASS, kept on FAIL; never commit them)
+80486-simulator/.tests/
 cardkey/.offline/
 pyroet-os/.tests/
 pylib/.tests/
