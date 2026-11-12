@@ -15,6 +15,7 @@
 | [`pylib/`](pylib/) | 手写的 CC:Tweaked Python 子集解释器：`pkg/pylib/pythonlib.lua`（解释器本体）、`pkg/pyrepl.lua`（REPL 前端）、解释器 import 的 15 个 `.py` 模块，以及包管理器清单 `pkg/manifest`、还原说明 `MANIFEST.md` 与 `SHA256SUMS` 校验和。`pkg/legacy-py.lua` 是被取代的早期解释器，仅留档。 |
 | [`powergrid/`](powergrid/) | Power Grid Controller v2.1：CC:Tweaked 电站切换终端（主电网 / 备用电池 / 外部电网 / 关闭），状态存于 `PowerGrid.ini`，经**背面红石模拟输出**驱动供电；含 Windows 10 风格蓝屏模块、日志库与打印机分页打印日志功能。终端程序的原始部署文件归档，说明见目录内 `README.md`。 |
 | [`dcnet/`](dcnet/) | dcnet：CC:Tweaked 分布式计算网络——用有线局域网把多台电脑连成“主控 + 节点”集群，主控负责拆任务、派任务、收结果与超时重派，支持两级 reduce、云端卸载、文件通道和 HMAC 签名；显示器放在另一台电脑上时可用 `screen.lua` 当网络屏幕。纯 Lua、无第三方依赖，含 CraftOS-PC 真机回归套件与可部署的 Python 参考服务端；部署只需 `dist/master.lua` 与 `dist/worker.lua`（网络屏幕再加 `dist/screen.lua`）。 |
+| [`80486-simulator/`](80486-simulator/) | 跑在 CC:Tweaked 上的 80486 模拟器，目标是启动 **MS-DOS 2.0**，后续扩展到 MS-DOS 6：`cpu.lua` 是逐字节取指解码的 16 位实模式解释器（未实现的指令、没有处理器的 I/O 端口、找不到处理器的中断向量、除零都直接报错，不伪造结果）；`memory.lua` 提供稀疏分页的 16 MiB 内存（4 KiB 一页、按需分配，整机起步很小）；`bios.lua` 实现 INT 10h 文本显示与 INT 13h 只读磁盘服务；`runner.lua` 经 INT 19h 从分片 DOS 镜像的第 0 扇区取引导、校验 `0xAA55` 后跳到 `0000:7C00`，按固定指令片执行并把 `0xB8000` 文本平面同步回 CraftOS 终端。含 Lua 单元/集成测试与镜像切片工具 `tools/slice_image.py`。 |
 
 ## 约定
 
