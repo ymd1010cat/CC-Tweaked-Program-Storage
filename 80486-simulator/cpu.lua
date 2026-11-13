@@ -145,8 +145,13 @@ local function s32(v)
     return v
 end
 
--- Bit `n` (0 = least significant) of `value`, as 0 or 1.
+-- Bit `n` (0 = least significant) of `value`, as 0 or 1.  Out-of-range
+-- positions would index P2 outside 0 .. 32, so they are answered with 0
+-- instead of raising a Lua table index error.
 local function bit(value, n)
+    if n < 0 or n > 32 then
+        return 0
+    end
     return floor(value / P2[n]) % 2
 end
 
@@ -361,7 +366,11 @@ local function rotate_right(v, n, width)
 end
 
 -- Shift / rotate.  op: 0 ROL, 1 ROR, 2 RCL, 3 RCR, 4 SHL, 5 SHR, 6 SAL, 7 SAR.
--- A masked count of zero leaves the flags completely untouched.
+-- 80186 and later mask the count to five bits (0 .. 31).  A masked count of
+-- zero leaves the value and every flag untouched.  Counts that are a nonzero
+-- multiple of the operand width are the "full width" case: every bit of the
+-- operand is shifted out, so SHL/SHR produce 0, SAR produces the sign fill,
+-- and CF receives the bit that was the operand's most significant bit.
 local function shift_rotate(self, op, value, count, bits)
     local f = self.flags
     local cnt = count % 32
@@ -375,7 +384,8 @@ local function shift_rotate(self, op, value, count, bits)
 
     if op == 0 then -- ROL
         if n == 0 then
-            f.CF = (value >= sign)
+            -- Rotating a full width multiple is the identity; CF unused for
+            -- the no-op rotate and ROL leaves it untouched.
             return value
         end
         local r = rotate_left(value, n, bits)
@@ -384,7 +394,8 @@ local function shift_rotate(self, op, value, count, bits)
         return r
     elseif op == 1 then -- ROR
         if n == 0 then
-            f.CF = (value % 2 == 1)
+            -- Same as ROL: a full width multiple does not rotate and does not
+            -- touch CF.
             return value
         end
         local r = rotate_right(value, n, bits)
@@ -392,38 +403,69 @@ local function shift_rotate(self, op, value, count, bits)
         f.OF = ((r >= sign) ~= (bit(r, bits - 2) == 1))
         return r
     elseif op == 2 then -- RCL
-        if n == 0 then
+        -- Rotates through carry: the ring is bits + 1 bits wide.
+        local rn = cnt % (bits + 1)
+        if rn == 0 then
             return value
         end
         local tmp = value + (f.CF and size or 0)
-        local r9 = rotate_left(tmp, n, bits + 1)
+        local r9 = rotate_left(tmp, rn, bits + 1)
         f.CF = (r9 >= size)
         local r = r9 % size
         f.OF = ((r >= sign) ~= f.CF)
         return r
     elseif op == 3 then -- RCR
-        if n == 0 then
+        local rn = cnt % (bits + 1)
+        if rn == 0 then
             return value
         end
         local tmp = value + (f.CF and size or 0)
-        local r9 = rotate_right(tmp, n, bits + 1)
+        local r9 = rotate_right(tmp, rn, bits + 1)
         f.CF = (r9 >= size)
         local r = r9 % size
         f.OF = ((r >= sign) ~= (bit(r, bits - 2) == 1))
         return r
     elseif op == 4 or op == 6 then -- SHL / SAL
+        if n == 0 then
+            -- Every bit shifted out: the result is zero and CF holds the bit
+            -- that was the operand's most significant bit.
+            f.CF = (bit(value, bits - 1) == 1)
+            f.OF = f.CF
+            update_szp(self, 0, bits)
+            return 0
+        end
         local r = (value * P2[n]) % size
         f.CF = (bit(value, bits - n) == 1)
         f.OF = ((r >= sign) ~= f.CF)
         update_szp(self, r, bits)
         return r
     elseif op == 5 then -- SHR
+        if n == 0 then
+            -- Every bit shifted out: the result is zero and CF holds the bit
+            -- that was the operand's most significant bit.
+            f.CF = (bit(value, bits - 1) == 1)
+            f.OF = (value >= sign)
+            update_szp(self, 0, bits)
+            return 0
+        end
         local r = floor(value / P2[n])
         f.CF = (bit(value, n - 1) == 1)
         f.OF = (value >= sign)
         update_szp(self, r, bits)
         return r
     else -- SAR
+        if n == 0 then
+            -- Arithmetic full width shift repeats the sign bit for every
+            -- shifted position; CF receives the original sign bit.
+            f.CF = (bit(value, bits - 1) == 1)
+            f.OF = false
+            if value >= sign then
+                update_szp(self, size - 1, bits)
+                return size - 1
+            end
+            update_szp(self, 0, bits)
+            return 0
+        end
         local signed = (value >= sign) and (value - size) or value
         local r = floor(signed / P2[n]) % size
         f.CF = (bit(value, n - 1) == 1)
@@ -1446,8 +1488,10 @@ def(0xFF, function(self, ip, seg)
     local value = read_rm16(self, rm, addr)
     if reg == 0 then
         write_rm16(self, rm, addr, inc_dec(self, value, 16, 1))
+        return nip
     elseif reg == 1 then
         write_rm16(self, rm, addr, inc_dec(self, value, 16, -1))
+        return nip
     elseif reg == 2 then -- CALL near r/m16
         self:push16(nip)
         return value % BASE16
@@ -1647,7 +1691,18 @@ def(0x99, function(self, ip) -- CWD
     return ip
 end)
 
-def(0x9E, function(self, ip) -- LAHF
+def(0x9E, function(self, ip) -- SAHF
+    local f = self.flags
+    local v = self:get_reg8(4)
+    f.CF = (v % 2 == 1)
+    f.PF = (floor(v / 4) % 2 == 1)
+    f.AF = (floor(v / 16) % 2 == 1)
+    f.ZF = (floor(v / 64) % 2 == 1)
+    f.SF = (floor(v / 128) % 2 == 1)
+    return ip
+end)
+
+def(0x9F, function(self, ip) -- LAHF
     local f = self.flags
     local v = 2
     if f.CF then v = v + 1 end
@@ -1656,17 +1711,6 @@ def(0x9E, function(self, ip) -- LAHF
     if f.ZF then v = v + 64 end
     if f.SF then v = v + 128 end
     self:set_reg8(4, v)
-    return ip
-end)
-
-def(0x9F, function(self, ip) -- SAHF
-    local f = self.flags
-    local v = self:get_reg8(4)
-    f.CF = (v % 2 == 1)
-    f.PF = (floor(v / 4) % 2 == 1)
-    f.AF = (floor(v / 16) % 2 == 1)
-    f.ZF = (floor(v / 64) % 2 == 1)
-    f.SF = (floor(v / 128) % 2 == 1)
     return ip
 end)
 
@@ -1788,7 +1832,7 @@ end)
 ---------------------------------------------------------------------------
 
 -- DAA: decimal adjust AL after addition.
-def(0x27, function(self) -- DAA
+def(0x27, function(self, ip) -- DAA
     local al = self:get_reg8(0)
     local old_al = al
     local old_cf = self.flags.CF
@@ -1808,22 +1852,25 @@ def(0x27, function(self) -- DAA
     al = al % 256
     self:set_reg8(0, al)
     update_szp(self, al, 8)
-    return nil
+    return ip
 end)
 
 -- DAS: decimal adjust AL after subtraction.
-def(0x2F, function(self) -- DAS
+def(0x2F, function(self, ip) -- DAS
     local al = self:get_reg8(0)
-    local old_al = al
     local old_cf = self.flags.CF
     local f = self.flags
     if al % 16 > 9 or f.AF then
-        al = al - 6
+        al = (al - 6) % 256
         f.AF = true
     else
         f.AF = false
     end
-    if old_al > 0x99 or old_cf then
+    -- Intel's DAS second adjustment tests the ALREADY ADJUSTED AL against
+    -- 0x9F (not the original byte against 0x99).  With AL=0x9A the low-nibble
+    -- adjust yields 0x94, which must NOT take the second -0x60 step;
+    -- 0x9F yields 0x99; AL=0xA0 with AF=1 yields 0x9A.
+    if al > 0x9F or old_cf then
         al = al - 0x60
         f.CF = true
     else
@@ -1832,12 +1879,12 @@ def(0x2F, function(self) -- DAS
     al = al % 256
     self:set_reg8(0, al)
     update_szp(self, al, 8)
-    return nil
+    return ip
 end)
 
 -- AAA: ASCII adjust AL after addition (works on the low nibble; AH carries
 -- the decimal carry, SF/ZF/PF are undefined on the 8086 and left alone).
-def(0x37, function(self) -- AAA
+def(0x37, function(self, ip) -- AAA
     local al = self:get_reg8(0)
     local f = self.flags
     if al % 16 > 9 or f.AF then
@@ -1850,11 +1897,11 @@ def(0x37, function(self) -- AAA
         f.CF = false
     end
     self:set_reg8(0, al % 16)
-    return nil
+    return ip
 end)
 
 -- AAS: ASCII adjust AL after subtraction.
-def(0x3F, function(self) -- AAS
+def(0x3F, function(self, ip) -- AAS
     local al = self:get_reg8(0)
     local f = self.flags
     if al % 16 > 9 or f.AF then
@@ -1867,7 +1914,7 @@ def(0x3F, function(self) -- AAS
         f.CF = false
     end
     self:set_reg8(0, al % 16)
-    return nil
+    return ip
 end)
 
 -- AAM: ASCII adjust AX after multiply.  AH = AL / base, AL = AL % base;
@@ -2076,6 +2123,14 @@ function CPU:step()
     local new_ip = handler(self, ip, seg)
     if new_ip ~= nil then
         self.ip = new_ip % BASE16
+    elseif self.ip == start_ip and self.seg.cs == cs then
+        -- A handler that returns nil must have moved CS:IP itself (INT
+        -- dispatch through the IVT or IRET).  A legal dispatch may change CS
+        -- while the numeric IP happens to stay the same, so only an unchanged
+        -- CS:IP is treated as a stuck handler.
+        error(string.format(
+            "cpu: handler for opcode 0x%02X did not advance IP at CS:IP=%04X:%04X",
+            opcode, cs, start_ip), 0)
     end
 end
 
@@ -2226,5 +2281,9 @@ function M.new(opts)
         _flag_overrides = nil,
     }, CPU)
 end
+
+-- Exposed so tests (and an audit pass) can install a deliberately broken
+-- handler to prove the step() IP-advance assertion actually fires.
+M.handlers = handlers
 
 return M

@@ -319,6 +319,105 @@ test("MOV addressing: BP defaults to SS, prefixes override segments", function()
     eq(cpu:get_reg16(0), 0x2222, "DS override")
 end)
 
+test("DAS second adjustment uses the adjusted AL (0x9F boundary)", function()
+    -- 0x9A: low-nibble adjust -> 0x94, which is <= 0x9F, so no -0x60 step.
+    local cpu = new_cpu()
+    cpu:set_reg16(0, 0x009A)
+    cpu:set_flag("AF", false)
+    cpu:set_flag("CF", false)
+    cpu.ip = 0x0100
+    put(cpu, CS, 0x0100, { 0x2F })
+    cpu:step()
+    eq(cpu:get_reg8(0), 0x94, "DAS 0x9A -> 0x94")
+    eq(cpu:get_flag("CF"), false, "DAS 0x9A keeps CF clear")
+
+    -- 0x9F: -> 0x99.
+    cpu:set_reg16(0, 0x009F)
+    cpu:set_flag("AF", false)
+    cpu:set_flag("CF", false)
+    cpu.ip = 0x0101
+    put(cpu, CS, 0x0101, { 0x2F })
+    cpu:step()
+    eq(cpu:get_reg8(0), 0x99, "DAS 0x9F -> 0x99")
+    eq(cpu:get_flag("CF"), false, "DAS 0x9F keeps CF clear")
+
+    -- 0xA0 with AF=1: subtract 6 first -> 0x9A (no second step).
+    cpu:set_reg16(0, 0x00A0)
+    cpu:set_flag("AF", true)
+    cpu:set_flag("CF", false)
+    cpu.ip = 0x0102
+    put(cpu, CS, 0x0102, { 0x2F })
+    cpu:step()
+    eq(cpu:get_reg8(0), 0x9A, "DAS 0xA0+AF -> 0x9A")
+    eq(cpu:get_flag("AF"), true, "DAS 0xA0+AF sets AF")
+
+    -- A borrow across the nibble must take the second step: 0x00 with AF=1
+    -- becomes 0xFA, which is > 0x9F, so -0x60 -> 0x9A and CF=1.
+    cpu:set_reg16(0, 0x0000)
+    cpu:set_flag("AF", true)
+    cpu:set_flag("CF", false)
+    cpu.ip = 0x0103
+    put(cpu, CS, 0x0103, { 0x2F })
+    cpu:step()
+    eq(cpu:get_reg8(0), 0x9A, "DAS 0x00+AF -> 0x9A")
+    eq(cpu:get_flag("CF"), true, "DAS borrow sets CF")
+end)
+
+test("LAHF and SAHF move the low flag byte", function()
+    local cpu = new_cpu()
+
+    -- LAHF (9F) stores SF:ZF:0:AF:0:PF:1:CF in AH.
+    cpu:set_flag("CF", true)
+    cpu:set_flag("PF", false)
+    cpu:set_flag("AF", true)
+    cpu:set_flag("ZF", true)
+    cpu:set_flag("SF", false)
+    cpu.ip = 0x0100
+    put(cpu, CS, 0x0100, { 0x9F })
+    cpu:step()
+    eq(cpu:get_reg8(4), 0x53, "AH = packed flags")
+
+    -- SAHF (9E) restores CF/PF/AF/ZF/SF from AH and leaves OF alone.
+    cpu:set_flag("CF", false)
+    cpu:set_flag("PF", true)
+    cpu:set_flag("AF", false)
+    cpu:set_flag("ZF", false)
+    cpu:set_flag("SF", true)
+    cpu:set_flag("OF", true)
+    cpu.ip = 0x0101
+    put(cpu, CS, 0x0101, { 0x9E })
+    cpu:step()
+    eq(cpu:get_flag("CF"), true, "CF restored")
+    eq(cpu:get_flag("PF"), false, "PF restored")
+    eq(cpu:get_flag("AF"), true, "AF restored")
+    eq(cpu:get_flag("ZF"), true, "ZF restored")
+    eq(cpu:get_flag("SF"), false, "SF restored")
+    eq(cpu:get_flag("OF"), true, "OF untouched")
+end)
+
+test("LAHF/SAHF keep comparison flags across an arithmetic instruction", function()
+    -- COMMAND.COM's internal command lookup does: REPE CMPSB; LAHF;
+    -- ADD SI,CX (clobbers flags); SAHF; JNZ next-entry.  If LAHF and SAHF
+    -- are swapped, the match's ZF is lost and every command falls through to
+    -- the "external file" path (DOS: Bad command or file name).
+    local cpu = new_cpu()
+    cpu:set_flag("CF", true)
+    cpu:set_flag("ZF", true)
+    cpu:set_reg16(6, 0x0000) -- SI, ADD will clear ZF
+
+    put(cpu, CS, 0x0100, { 0x9F, -- LAHF: save CF/ZF
+        0x83, 0xC6, 0x01,      -- ADD SI, 1: clobbers ZF
+        0x9E })                -- SAHF: restore CF/ZF
+    cpu.ip = 0x0100
+    cpu:step()
+    cpu:step()
+    eq(cpu:get_reg16(6), 1, "ADD SI, 1 executed")
+    eq(cpu:get_flag("ZF"), false, "ADD clobbered ZF as expected")
+    cpu:step()
+    eq(cpu:get_flag("CF"), true, "SAHF restored CF")
+    eq(cpu:get_flag("ZF"), true, "SAHF restored ZF")
+end)
+
 test("LEA loads effective addresses, not memory", function()
     local cpu = new_cpu()
 
@@ -1606,6 +1705,79 @@ test("run calls the injected sleep every sleep_interval instructions", function(
     eq(calls[2], 0, "second sleep argument")
 end)
 
+test("group 5 INC/DEC memory operands advance the IP", function()
+    local cpu = new_cpu()
+    cpu:write16(DS, 0x0100, 0x1234)
+
+    put(cpu, CS, 0x0100, { 0xFF, 0x06, 0x00, 0x01 }) -- INC word [0x0100]
+    cpu.ip = 0x0100
+    cpu:step()
+    eq(cpu.ip, 0x0104, "INC word [mem] advances IP")
+    eq(cpu:read16(DS, 0x0100), 0x1235, "INC word [mem] increments")
+
+    put(cpu, CS, 0x0110, { 0xFF, 0x0E, 0x00, 0x01 }) -- DEC word [0x0100]
+    cpu.ip = 0x0110
+    cpu:step()
+    eq(cpu.ip, 0x0114, "DEC word [mem] advances IP")
+    eq(cpu:read16(DS, 0x0100), 0x1234, "DEC word [mem] decrements")
+
+    -- The CS: override form is the one COMMAND.COM's busy-wait loop uses.
+    cpu:write16(CS, 0x1200, 0x0001)
+    put(cpu, CS, 0x0120, { 0x2E, 0xFF, 0x06, 0x00, 0x12 })
+    cpu.ip = 0x0120
+    cpu:step()
+    eq(cpu.ip, 0x0125, "CS: INC word [mem] advances IP")
+    eq(cpu:read16(CS, 0x1200), 0x0002, "CS: INC word [mem] increments")
+end)
+
+test("BCD adjust instructions advance the IP", function()
+    local cpu = new_cpu()
+    local cases = {
+        {0x27, 1}, -- DAA
+        {0x2F, 1}, -- DAS
+        {0x37, 1}, -- AAA
+        {0x3F, 1}, -- AAS
+        {0xD4, 2}, -- AAM
+        {0xD5, 2}, -- AAD
+    }
+    for i = 1, #cases do
+        local op, len = cases[i][1], cases[i][2]
+        cpu.ip = 0x0200
+        if len == 1 then
+            put(cpu, CS, 0x0200, { op })
+        else
+            put(cpu, CS, 0x0200, { op, 0x0A })
+        end
+        cpu:step()
+        eq(cpu.ip, 0x0200 + len,
+            "opcode " .. string.format("%02X", op) .. " advances IP")
+    end
+end)
+
+test("step rejects a handler that does not advance the IP", function()
+    local cpu = new_cpu()
+    local original = Cpu.handlers[0x91] -- XCHG AX, CX
+    Cpu.handlers[0x91] = function()
+        return nil
+    end
+    local ok, err = pcall(function()
+        cpu.ip = 0x0100
+        put(cpu, CS, 0x0100, { 0x91 })
+        cpu:step()
+    end)
+    Cpu.handlers[0x91] = original
+    if ok then
+        error("step accepted a handler that left IP unchanged", 2)
+    end
+    local text = tostring(err)
+    if not text:find("did not advance IP", 1, true) then
+        error("unexpected diagnostic: " .. text, 2)
+    end
+    if not text:find("0x91", 1, true) then
+        error("diagnostic does not name the opcode: " .. text, 2)
+    end
+end)
+
 test("LAHF and SAHF", function()
     local cpu = new_cpu()
     cpu:set_flag("CF", true)
@@ -1614,16 +1786,16 @@ test("LAHF and SAHF", function()
     cpu:set_flag("ZF", true)
     cpu:set_flag("SF", true)
 
-    put(cpu, CS, 0x0100, { 0x9E }) -- LAHF
+    put(cpu, CS, 0x0100, { 0x9F }) -- LAHF (0x9F according to the Intel ISA)
     cpu.ip = 0x0100
     cpu:step()
     -- SF ZF 0 AF 0 PF 1 CF = 0xD7
     eq(cpu:get_reg8(4), 0xD7, "LAHF packed AH")
 
-    -- SAHF loads CF, PF, AF, ZF and SF from AH (0x53 = 0101 0011).
+    -- SAHF (0x9E) loads CF, PF, AF, ZF and SF from AH (0x53 = 0101 0011).
     cpu:set_reg8(4, 0x53)
     cpu:set_flag("OF", true)
-    put(cpu, CS, 0x0110, { 0x9F })
+    put(cpu, CS, 0x0110, { 0x9E })
     cpu.ip = 0x0110
     cpu:step()
     eq(cpu:get_flag("CF"), true, "SAHF CF")

@@ -48,8 +48,9 @@
 --   0C seek (CF = 0, AH = 0 for a valid CHS)
 --
 -- INT 11h equipment check
---   AX = equipment word (0x0021 by default: one floppy drive, 80x25 color,
---   no serial or parallel adapters).
+--   AX = equipment word derived from the attached disk (bit 0, one floppy)
+--   and the VGA width (bits 4-5, 40x25 or 80x25 color); opts.equipment_word
+--   can override the derived value.
 --
 -- INT 17h printer services
 --   00 print character, 01 initialize, 02 read status.  No parallel printer
@@ -106,6 +107,12 @@
 
 local floor = math.floor
 local byte  = string.byte
+local unpack_args = table.unpack or unpack
+
+-- Capture a variable-length event argument list (Lua 5.1 has no table.pack).
+local function pack_args(...)
+    return {n = select("#", ...), ...}
+end
 
 ---------------------------------------------------------------------------
 -- Constants
@@ -131,6 +138,14 @@ local EQUIPMENT_WORD = 0x0021
 -- reports a time-out instead of a ready printer.
 local PRINTER_STATUS = 0x0091
 local KEYBOARD_BUFFER_MAX = 64
+-- Upper bound on events consumed by one Bios:pump_events() call.  The rest
+-- stay queued for the next pump so a burst cannot stall the CPU yield path.
+local PUMP_EVENT_LIMIT = 16
+-- Private event name used to bound one pump call.  A custom event is used
+-- instead of os.startTimer(0): the mandatory os.sleep(0) yield owns the timer
+-- namespace and discards non-matching events, and a queued sentinel costs no
+-- CraftOS tick at all.
+local PUMP_SENTINEL = "__pump_sentinel__"
 local TICKS_PER_SECOND = 18.2065
 local TICKS_PER_DAY = 1573040
 
@@ -382,7 +397,7 @@ Bios.BOOT_ADDRESS = BOOT_ADDRESS
 Bios.BOOT_SIGNATURE = BOOT_SIGNATURE
 Bios.CONVENTIONAL_KB = CONVENTIONAL_KB
 Bios.EXTENDED_KB = EXTENDED_KB
-Bios.EQUIPMENT_WORD = EQUIPMENT_WORD
+Bios.DEFAULT_EQUIPMENT_WORD = EQUIPMENT_WORD
 Bios.PRINTER_STATUS = PRINTER_STATUS
 Bios.KEYBOARD_BUFFER_MAX = KEYBOARD_BUFFER_MAX
 Bios.TICKS_PER_DAY = TICKS_PER_DAY
@@ -515,6 +530,31 @@ function Bios.new(opts)
         error("BIOS.new: opts.date must be a function", 0)
     end
 
+    -- Equipment word for INT 11h, derived from what is really attached:
+    -- bit 0 = one floppy drive present, bits 4-5 = initial video mode
+    -- (01b = 40x25 color, 10b = 80x25 color).  Serial/parallel counts stay 0.
+    -- opts.equipment_word overrides the derivation for tests and unusual
+    -- machines instead of the value being hard coded.
+    local equipment_word = opts.equipment_word
+    if equipment_word ~= nil then
+        if not is_integer(equipment_word) or equipment_word < 0
+            or equipment_word > 65535 then
+            error(string.format("BIOS.new: opts.equipment_word must be an "
+                .. "integer 0..65535 (got %s)",
+                tostring(equipment_word)), 0)
+        end
+    else
+        equipment_word = 0
+        if disk ~= nil then
+            equipment_word = equipment_word + 1
+        end
+        local video_bits = 2
+        if type(vga.get_width) == "function" and vga:get_width() == 40 then
+            video_bits = 1
+        end
+        equipment_word = equipment_word + video_bits * 16
+    end
+
     local term = opts.term
     if term == false then
         term = nil
@@ -539,6 +579,7 @@ function Bios.new(opts)
         max_sectors_per_read = max_sectors,
         boot_drive   = boot_drive,
         check_boot_signature = check_boot_signature,
+        equipment_word  = equipment_word,
         boot_count   = 0,
         conventional_kb = conventional_kb,
         extended_kb     = extended_kb,
@@ -1223,6 +1264,104 @@ function Bios:clear_keyboard()
     return true
 end
 
+-- Non-blocking keyboard pump.  CraftOS delivers key/char events through the
+-- event queue, but a plain os.sleep(0) discards non-timer events (the CPU's
+-- mandatory 200-instruction yield calls exactly that).  The runner therefore
+-- calls this just before each yield: events that are already queued are
+-- translated into BIOS keyboard entries, so INT 16h AH=01 polling can see
+-- DOS keystrokes.
+--
+-- Details that matter:
+--   * os.pullEventRaw, not os.pullEvent: the filtered variant could hide
+--     key/char events.
+--   * Non-keyboard events (timer, peripheral, term_resize, ...) are put back
+--     with os.queueEvent unchanged.  The pump's own private sentinel event is
+--     the only event it swallows; re-queued events land behind that sentinel,
+--     so one pump call can never observe the same event twice.
+--   * A custom sentinel event (not a timer) keeps the pump independent from
+--     the timers used by os.sleep(0), and costs no CraftOS tick.
+--   * At most PUMP_EVENT_LIMIT events are consumed per call; the rest stay
+--     queued for the next pump so a burst cannot stall the CPU yield path.
+--   * Injected keyboard sources are left untouched: if keyboard.pull or
+--     keyboard.poll was supplied by the caller, this returns 0.
+function Bios:pump_events()
+    local kb = self.keyboard
+    if kb ~= nil and (kb.pull ~= nil or kb.poll ~= nil) then
+        return 0
+    end
+    local osapi = rawget(_G, "os")
+    if type(osapi) ~= "table" or type(osapi.queueEvent) ~= "function"
+        or type(osapi.pullEventRaw) ~= "function"
+        or unpack_args == nil then
+        return 0
+    end
+
+    self._pump_seq = (self._pump_seq or 0) + 1
+    local seq = self._pump_seq
+    osapi.queueEvent(PUMP_SENTINEL, seq)
+
+    local keysapi = rawget(_G, "keys")
+    local pushed = 0
+    local pending_scan = self._pump_scan
+    local consumed = 0
+    while consumed < PUMP_EVENT_LIMIT do
+        local args = pack_args(osapi.pullEventRaw())
+        consumed = consumed + 1
+        local event = args[1]
+
+        if event == PUMP_SENTINEL then
+            -- Our own bound marker: drop it, stop at the current one, and
+            -- ignore stale markers left by an earlier capped pump call.
+            if args[2] == seq then
+                break
+            end
+        elseif event == "char" then
+            local text = tostring(args[2])
+            if #text >= 1 then
+                local ch = text:sub(1, 1)
+                local scan = pending_scan
+                if scan == nil then
+                    scan = char_scan(ch)
+                end
+                pending_scan = nil
+                self:push_key(scan, byte(ch))
+                pushed = pushed + 1
+            end
+        elseif event == "key" then
+            local name = nil
+            if type(keysapi) == "table"
+                and type(keysapi.getName) == "function" then
+                local name_ok, value = pcall(keysapi.getName, args[2])
+                if name_ok and type(value) == "string" then
+                    name = value
+                end
+            end
+            if name ~= nil then
+                local special = SPECIAL_KEYS[name]
+                if special ~= nil then
+                    pending_scan = nil
+                    self:push_key(special[2], special[1])
+                    pushed = pushed + 1
+                elseif #name == 1 then
+                    pending_scan = char_scan(name)
+                end
+            end
+        elseif event == "terminate" then
+            self._pump_scan = nil
+            error("INT 16h: machine terminated while waiting for a key", 0)
+        else
+            -- Not a keyboard event: hand it back to CraftOS untouched.
+            osapi.queueEvent(event, unpack_args(args, 2, args.n))
+        end
+
+        if pushed >= KEYBOARD_BUFFER_MAX then
+            break
+        end
+    end
+    self._pump_scan = pending_scan
+    return pushed
+end
+
 function Bios:_keyboard_peek()
     local kb = self.keyboard
     if kb.count == 0 then
@@ -1312,8 +1451,8 @@ end
 
 function Bios:int11(cpu)
     check_cpu(cpu, "INT 11h")
-    cpu:set_reg16(0, EQUIPMENT_WORD)
-    self:_log("INT11_EQUIPMENT ax=%04X", EQUIPMENT_WORD)
+    cpu:set_reg16(0, self.equipment_word)
+    self:_log("INT11_EQUIPMENT ax=%04X", self.equipment_word)
     return true
 end
 

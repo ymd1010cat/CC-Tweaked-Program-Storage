@@ -729,11 +729,23 @@ function Runner.new(opts)
         }
     end
 
+    -- Every yield must first move already-queued CraftOS key/char events into
+    -- the BIOS keyboard buffer: os.sleep(0) discards non-timer events, so a
+    -- key typed between yields would otherwise be lost forever.  The required
+    -- sleep call itself is kept unchanged underneath.
+    local base_sleep = sleep
+    local function sleep_with_events(seconds)
+        if bios ~= nil and type(bios.pump_events) == "function" then
+            bios:pump_events()
+        end
+        base_sleep(seconds)
+    end
+
     local cpu = opts.cpu
     if cpu == nil then
         cpu = Cpu.new{
             memory = memory,
-            sleep = sleep,
+            sleep = sleep_with_events,
             watchdog_max_tick = config.watchdog_max_tick,
         }
     end
@@ -749,7 +761,7 @@ function Runner.new(opts)
         bios      = bios,
         cpu       = cpu,
         term      = term,
-        sleep     = sleep,
+        sleep     = sleep_with_events,
         slice     = slice,
         max_steps = opts.max_steps,
         booted    = false,

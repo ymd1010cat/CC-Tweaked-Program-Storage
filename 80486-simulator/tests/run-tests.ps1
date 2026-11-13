@@ -45,8 +45,9 @@ $modules = @("memory.lua", "disk.lua", "cpu.lua", "vga.lua", "bios.lua",
              "config_parser.lua", "runner.lua")
 $tests   = @("memory_test.lua", "disk_test.lua", "cpu_test.lua",
              "vga_test.lua", "bios_test.lua", "bios_services_test.lua",
-             "test_config_parser.lua", "runner_test.lua",
-             "test_integration.lua", "test_config_integration.lua")
+             "test_config_parser.lua", "test_cpu_matrix.lua",
+             "runner_test.lua", "test_integration.lua",
+             "test_config_integration.lua")
 $configs = @("80486.cfg")
 
 foreach ($module in $modules) {
@@ -104,6 +105,7 @@ $shim = @(
     "    {`"bios`", `"/tests/bios_test.lua`"},",
     "    {`"bios_services`", `"/tests/bios_services_test.lua`"},",
     "    {`"config_parser`", `"/tests/test_config_parser.lua`"},",
+    "    {`"cpu_matrix`", `"/tests/test_cpu_matrix.lua`"},",
     "    {`"runner`", `"/tests/runner_test.lua`"},",
     "    {`"integration`", `"/tests/test_integration.lua`"},",
     "    {`"config_integration`", `"/tests/test_config_integration.lua`"},",

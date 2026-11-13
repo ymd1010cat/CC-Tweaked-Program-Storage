@@ -116,13 +116,18 @@ end
 local function new_machine(opts)
     opts = opts or {}
     local memory = Memory.new()
-    local vga = Vga.new{memory = memory}
+    local vga = Vga.new{
+        memory = memory,
+        width  = opts.vga_width,
+        height = opts.vga_height,
+    }
     local clock = opts.clock or function()
         return 0
     end
     local bios = Bios.new{
         memory = memory,
         vga = vga,
+        disk = opts.disk,
         term = false,
         clock = clock,
         date = opts.date,
@@ -131,6 +136,7 @@ local function new_machine(opts)
         keyboard_max = opts.keyboard_max,
         conventional_kb = opts.conventional_kb,
         extended_kb = opts.extended_kb,
+        equipment_word = opts.equipment_word,
     }
     local cpu = Cpu.new{memory = memory, sleep = function() end}
     bios:attach(cpu)
@@ -200,9 +206,11 @@ end)
 -- INT 11h equipment check
 ---------------------------------------------------------------------------
 
-test("INT 11h reports the equipment word", function()
-    eq(Bios.EQUIPMENT_WORD, 0x0021, "equipment word constant")
-    local bios, cpu, memory = new_machine()
+test("INT 11h reports the derived equipment word", function()
+    local fake_disk = {try_read_sectors = function()
+        return nil, "no disk"
+    end}
+    local bios, cpu, memory = new_machine{disk = fake_disk}
     local steps, reason = run_program(cpu, memory, string.char(
         0xCD, 0x11, -- int 0x11
         0xF4))      -- hlt
@@ -210,7 +218,40 @@ test("INT 11h reports the equipment word", function()
     if steps < 2 then
         error("INT 11h was never executed")
     end
-    eq(ax(cpu), 0x0021, "AX = equipment word")
+    eq(ax(cpu), 0x0021, "AX = one floppy + 80x25 colour")
+end)
+
+test("INT 11h derives the equipment word from the hardware", function()
+    eq(Bios.DEFAULT_EQUIPMENT_WORD, 0x0021, "documented default")
+    local fake_disk = {try_read_sectors = function()
+        return nil, "no disk"
+    end}
+
+    local bios, cpu = new_machine{}
+    bios:int11(cpu)
+    eq(ax(cpu), 0x0020, "no disk: bit 0 clear, 80x25 colour")
+
+    bios, cpu = new_machine{disk = fake_disk}
+    bios:int11(cpu)
+    eq(ax(cpu), 0x0021, "disk: bit 0 set, 80x25 colour")
+
+    bios, cpu = new_machine{disk = fake_disk, vga_width = 40}
+    bios:int11(cpu)
+    eq(ax(cpu), 0x0011, "disk + 40x25 colour video")
+
+    bios, cpu = new_machine{equipment_word = 0x1234}
+    bios:int11(cpu)
+    eq(ax(cpu), 0x1234, "opts.equipment_word overrides")
+
+    expect_error(function()
+        new_machine{equipment_word = -1}
+    end, "equipment_word")
+    expect_error(function()
+        new_machine{equipment_word = 65536}
+    end, "equipment_word")
+    expect_error(function()
+        new_machine{equipment_word = 1.5}
+    end, "equipment_word")
 end)
 
 ---------------------------------------------------------------------------
@@ -382,6 +423,207 @@ test("INT 16h AH=01 uses the non-blocking poll hook", function()
     eq(cpu:get_reg8(0), 0x7A, "AL = polled ASCII")
     eq(cpu:get_reg8(4), 0x2C, "AH = polled scan")
     eq(bios:keyboard_count(), 1, "polled key was queued")
+end)
+
+local function keys_api()
+    local api = rawget(_G, "keys")
+    if type(api) == "table" then
+        return api
+    end
+    local ok, mod = pcall(require, "keys")
+    if ok and type(mod) == "table" then
+        _G.keys = mod
+        return mod
+    end
+    return nil
+end
+
+-- The CraftOS event queue is shared by every test in this file.  Drain it
+-- around the pump tests so a leftover timer from one test cannot be counted
+-- as a key/timer seen by the next one.
+local function drain_event_queue()
+    local timer = os.startTimer(0)
+    while true do
+        local event, p1 = os.pullEventRaw()
+        if event == "timer" and p1 == timer then
+            break
+        end
+    end
+end
+
+local function pack_args(...)
+    return {n = select("#", ...), ...}
+end
+
+-- Pull events until a fresh zero-delay timer marker and return them.
+local function drain_until_marker()
+    local marker = os.startTimer(0)
+    local seen = {}
+    while true do
+        local args = pack_args(os.pullEventRaw())
+        if args[1] == "timer" and args[2] == marker then
+            break
+        end
+        seen[#seen + 1] = args
+    end
+    return seen
+end
+
+local function event_seen(events, name, first)
+    for i = 1, #events do
+        if events[i][1] == name
+            and (first == nil or events[i][2] == first) then
+            return true
+        end
+    end
+    return false
+end
+
+test("bios:pump_events maps an Enter key event to scan 0x1C", function()
+    local keysapi = keys_api()
+    if keysapi == nil then
+        error("CraftOS keys API is required for this test", 2)
+    end
+    local bios, cpu = new_machine()
+    drain_event_queue()
+
+    os.queueEvent("key", keysapi.enter)
+    eq(bios:pump_events(), 1, "enter event pumped")
+    eq(bios:keyboard_count(), 1, "key buffered")
+    cpu:set_reg8(4, 0x01)
+    bios:int16(cpu)
+    eq(cpu:get_flag("ZF"), false, "DOS polling sees the key")
+    eq(cpu:get_reg8(0), 0x0D, "AL = CR")
+    eq(cpu:get_reg8(4), 0x1C, "AH = enter scan code")
+end)
+
+test("bios:pump_events maps a char event to ASCII and scan code", function()
+    local bios, cpu = new_machine()
+    drain_event_queue()
+
+    os.queueEvent("char", "d")
+    eq(bios:pump_events(), 1, "char event pumped")
+    eq(bios:keyboard_count(), 1, "key buffered")
+    cpu:set_reg8(4, 0x01)
+    bios:int16(cpu)
+    eq(cpu:get_flag("ZF"), false, "DOS polling sees the key")
+    eq(cpu:get_reg8(0), 100, "AL = 'd'")
+    eq(cpu:get_reg8(4), 0x20, "AH = scan code for 'd'")
+end)
+
+test("bios:pump_events re-queues non-keyboard events", function()
+    local bios = new_machine()
+    drain_event_queue()
+
+    os.queueEvent("timer", 12345)
+    bios:pump_events()
+
+    -- Pull events until the re-queued timer or a short timeout appears.
+    local timeout = os.startTimer(0.2)
+    local found = false
+    while true do
+        local event, p1 = os.pullEventRaw()
+        if event == "timer" and p1 == 12345 then
+            found = true
+            break
+        end
+        if event == "timer" and p1 == timeout then
+            break
+        end
+    end
+    eq(found, true, "the timer event survived the pump")
+    drain_event_queue()
+end)
+
+test("bios:pump_events consumes at most 16 events per call", function()
+    local bios = new_machine()
+    drain_event_queue()
+
+    for i = 1, 20 do
+        os.queueEvent("char", string.char(96 + i))
+    end
+    eq(bios:pump_events(), 16, "first pump is capped")
+    eq(bios:keyboard_count(), 16, "16 keys buffered")
+    eq(bios:pump_events(), 4, "second pump drains the rest")
+    eq(bios:keyboard_count(), 20, "all 20 keys buffered")
+    drain_event_queue()
+end)
+
+test("sleep(0) keeps buffered keys and later events still pump", function()
+    local keysapi = keys_api()
+    if keysapi == nil then
+        error("CraftOS keys API is required for this test", 2)
+    end
+    local bios = new_machine()
+    drain_event_queue()
+
+    os.queueEvent("char", "a")
+    eq(bios:pump_events(), 1, "first pump")
+    os.sleep(0)
+    eq(bios:keyboard_count(), 1, "sleep(0) kept the buffered key")
+
+    os.queueEvent("key", keysapi.enter)
+    eq(bios:pump_events(), 1, "second pump")
+    eq(bios:keyboard_count(), 2, "later event was pumped")
+    drain_event_queue()
+end)
+
+test("pump stays leak-free across 1000 rounds", function()
+    local bios, cpu = new_machine()
+    drain_event_queue()
+
+    for round = 1, 1000 do
+        -- Every 100 rounds a timer event must be re-queued, not swallowed.
+        if round % 100 == 0 then
+            os.queueEvent("timer", 1)
+            bios:pump_events()
+            local seen = drain_until_marker()
+            eq(event_seen(seen, "timer", 1), true,
+                "timer re-queued at round " .. round)
+        end
+
+        -- Every 50 rounds a peripheral event must be re-queued as well.
+        if round % 50 == 0 then
+            os.queueEvent("peripheral", "left", "keyboard")
+            bios:pump_events()
+            local seen = drain_until_marker()
+            eq(event_seen(seen, "peripheral", "left"), true,
+                "peripheral re-queued at round " .. round)
+        end
+
+        -- One key per round: it must be pumped immediately, survive the
+        -- os.sleep(0) yield and be the only key visible to INT 16h.
+        eq(bios:keyboard_count(), 0, "no stale key before round " .. round)
+        os.queueEvent("char", "x")
+        eq(bios:pump_events() >= 1, true, "x pumped at round " .. round)
+        os.sleep(0)
+        eq(bios:keyboard_count(), 1, "x survived sleep at round " .. round)
+
+        cpu:set_reg8(4, 0x01)
+        bios:int16(cpu)
+        eq(cpu:get_reg8(0), 120, "AL = 'x' at round " .. round)
+        cpu:set_reg8(4, 0x00)
+        bios:int16(cpu)
+        eq(bios:keyboard_count(), 0, "x consumed at round " .. round)
+    end
+end)
+
+test("bios:pump_events leaves injected keyboard sources alone", function()
+    local bios, cpu = new_machine{
+        keyboard_pull = function()
+            return {ascii = 0x41, scan = 0x1E}
+        end,
+    }
+    os.queueEvent("char", "z")
+    eq(bios:pump_events(), 0, "no pumping with an injected source")
+    eq(bios:keyboard_count(), 0, "buffer untouched")
+
+    -- Drain the queued event so later tests start from a clean queue.
+    local timer = os.startTimer(0)
+    while true do
+        local event, p1 = os.pullEventRaw()
+        if event == "timer" and p1 == timer then break end
+    end
 end)
 
 test("INT 16h AH=02 reports no shift flags", function()

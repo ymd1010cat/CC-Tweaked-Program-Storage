@@ -384,6 +384,14 @@ test("headless mode never touches a terminal", function()
     eq(machine.memory:read8(0xB8000), 0x42, "VGA memory still written")
 end)
 
+test("the main loop pumps CraftOS key events into the BIOS", function()
+    local machine = mount_sector(make_boot_sector(BOOT_PROGRAM))
+    os.queueEvent("char", "q")
+    machine:run(1000)
+    eq(machine.bios:keyboard_count() >= 1, true,
+        "queued CraftOS key reached the BIOS buffer")
+end)
+
 test("an endless boot sector obeys max_steps", function()
     -- EB FE = jmp $ (infinite loop) placed at 0x7C00.
     local machine = mount_sector(
