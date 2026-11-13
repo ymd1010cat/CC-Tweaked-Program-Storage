@@ -30,9 +30,11 @@
 --   * Shard file handles are cached too, but only a bounded number of them
 --     (4 by default) using an LRU order, so a long chain of floppies cannot
 --     leak open files.
---   * A single multi-sector request is capped at MAX_SECTORS_PER_READ (128)
---     sectors.  Reading more at once would materialise large parts of the
---     image in memory for no reason.
+--   * A single multi-sector request is capped at opts.max_sectors_per_read
+--     (default MAX_SECTORS_PER_READ = 128 sectors).  Reading more at once
+--     would materialise large parts of the image in memory for no reason.
+--     The configured cap is also published as device.MAX_SECTORS_PER_READ so
+--     the INT 13h layer applies the same limit before touching the image.
 --   * Shard integrity is checked with CRC32.  Expected checksums may come
 --     from an explicit `opts.checksums` table, from `<shard>.crc32` sidecar
 --     files, or from an `image.crc32` manifest (lines `crc32hex name`,
@@ -42,9 +44,11 @@
 --   * Physical read failures (open/seek/read error, short read, seek that
 --     does not land on the requested offset) are retried `opts.read_retries`
 --     times (2 by default) with a fresh handle before the read fails.
---   * The image is read-only.  write_sector() raises instead of pretending
---     to write: the 80486 side must observe a real disk error and a future
---     module decides how to persist writes.  Nothing here fakes success.
+--   * The image is read-only.  [disk] read_only=true (the default) makes
+--     write_sector() reject every write with a clear error instead of
+--     pretending to succeed; write-back is not implemented, so even
+--     read_only=false raises instead of faking a successful write.  The
+--     80486 side must observe a real disk error.
 --
 -- Failure policy:
 --   * A missing, duplicated, empty or gapped shard chain is an error at
@@ -67,6 +71,8 @@
 --         dirs = {"/disk", "/disk5"},               -- search order
 --         prefix = "img_", suffix = ".dat",         -- file naming
 --         cache_sectors = 64,                       -- LRU capacity
+--         read_only = true,                         -- reject writes
+--         max_sectors_per_read = 128,               -- multi-sector cap
 --     }
 --     local disk = Disk.new{ shards = {             -- bypass discovery
 --         "/disk/img_00.dat", "/disk2/img_01.dat",
@@ -1371,6 +1377,28 @@ local function validate_options(opts)
             .. "(got %s)", tostring(retries))
     end
 
+    local read_only = opts.read_only
+    if read_only == nil then
+        read_only = true
+    end
+    if type(read_only) ~= "boolean" then
+        fail("disk.new", "read_only must be a boolean (got %s)",
+            type(read_only))
+    end
+
+    local max_read = opts.max_sectors_per_read
+    if max_read == nil then
+        max_read = MAX_SECTORS_PER_READ
+    end
+    if not is_integer(max_read) or max_read < 1 then
+        fail("disk.new", "max_sectors_per_read must be a positive integer "
+            .. "(got %s)", tostring(max_read))
+    end
+    if max_read > MAX_CACHE_SECTORS then
+        fail("disk.new", "max_sectors_per_read must be <= %d (got %s)",
+            MAX_CACHE_SECTORS, tostring(max_read))
+    end
+
     local checksums = opts.checksums
     if checksums ~= nil and type(checksums) ~= "table" then
         fail("disk.new", "checksums must be a table (got %s)",
@@ -1398,6 +1426,8 @@ local function validate_options(opts)
         explicit         = explicit,
         max_open_handles = max_open,
         read_retries     = retries,
+        read_only        = read_only,
+        max_sectors_per_read = max_read,
         checksums        = checksums,
         manifest         = manifest,
     }
@@ -1427,6 +1457,8 @@ function Disk.new(opts)
         _handle_count     = 0,
         _max_open_handles = options.max_open_handles,
         _read_retries     = options.read_retries,
+        _read_only        = options.read_only,
+        _max_sectors_per_read = options.max_sectors_per_read,
         _opt_checksums    = options.checksums,
         _manifest         = options.manifest,
         _expected         = {},
@@ -1440,6 +1472,9 @@ function Disk.new(opts)
     local shards, total = load_layout(device, "disk.new")
     install_layout(device, shards, total)
     setup_checksums(device, "disk.new")
+    -- The BIOS reads this field when it installs the INT 13h multi-sector
+    -- cap; publishing the configured limit keeps both layers in agreement.
+    device.MAX_SECTORS_PER_READ = options.max_sectors_per_read
     return device
 end
 
@@ -1472,9 +1507,9 @@ function Device:try_read_sectors(lba, count)
         return nil, "count must be a non-negative integer (got "
             .. tostring(count) .. ")"
     end
-    if count > MAX_SECTORS_PER_READ then
+    if count > self._max_sectors_per_read then
         return nil, string.format("count %s exceeds MAX_SECTORS_PER_READ "
-            .. "(%d)", tostring(count), MAX_SECTORS_PER_READ)
+            .. "(%d)", tostring(count), self._max_sectors_per_read)
     end
     if not is_integer(lba) or lba < 0 then
         return nil, "LBA must be a non-negative integer (got "
@@ -1555,6 +1590,17 @@ end
 
 function Device:get_size()
     return self._size
+end
+
+-- True when [disk] read_only left the device in its default write-rejecting
+-- mode.  Writes are never implemented; this reports the configured policy.
+function Device:is_read_only()
+    return self._read_only
+end
+
+-- Effective multi-sector read cap (default 128, configurable per device).
+function Device:get_max_sectors_per_read()
+    return self._max_sectors_per_read
 end
 
 function Device:get_sector_count()
@@ -1738,9 +1784,16 @@ end
 
 -- Deliberately unimplemented: the DOS image is mounted read-only for now.
 -- The INT 13h layer must see a real failure rather than a fake success.
+-- [disk] read_only=true (the default) rejects the write here; read_only=false
+-- is not implemented either, so the write-back path still raises instead of
+-- pretending that the shard image was modified.
 function Device:write_sector(lba, data)
-    error("disk.write_sector: the shard image is read-only "
-        .. "(write-back is not implemented)", 0)
+    if self._read_only then
+        error("disk.write_sector: write rejected, disk is read-only "
+            .. "([disk] read_only=true)", 0)
+    end
+    error("disk.write_sector: write-back is not implemented "
+        .. "(the shard backend is read-only)", 0)
 end
 
 ---------------------------------------------------------------------------

@@ -28,3 +28,7 @@ cardkey/.offline/
 pyroet-os/.tests/
 pylib/.tests/
 rpv1/craftos-offline/
+
+# Local copyrighted DOS images and temporary demo staging must never be committed
+80486-simulator/disk/*.img
+80486-simulator/.demo/

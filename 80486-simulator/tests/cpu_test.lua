@@ -319,6 +319,126 @@ test("MOV addressing: BP defaults to SS, prefixes override segments", function()
     eq(cpu:get_reg16(0), 0x2222, "DS override")
 end)
 
+test("LEA loads effective addresses, not memory", function()
+    local cpu = new_cpu()
+
+    -- LEA AX, [0x1234] (mod=0, rm=6): the offset only, DS is not applied.
+    cpu.ip = 0x0100
+    put(cpu, CS, 0x0100, { 0x8D, 0x06, 0x34, 0x12 })
+    cpu:step()
+    eq(cpu:get_reg16(0), 0x1234, "LEA AX, [0x1234]")
+    eq(cpu.ip, 0x0104, "IP after four bytes")
+
+    -- LEA DX, [BX+SI+0x10] computes BX+SI+disp8.
+    cpu:set_reg16(3, 0x0100) -- BX
+    cpu:set_reg16(6, 0x0020) -- SI
+    cpu.ip = 0x0200
+    put(cpu, CS, 0x0200, { 0x8D, 0x50, 0x10 })
+    cpu:step()
+    eq(cpu:get_reg16(2), 0x0130, "LEA DX, [BX+SI+0x10]")
+
+    -- LEA DI, [BP+disp8] uses the segment offset, not the SS:BP address.
+    cpu:set_reg16(5, 0xFF00) -- BP
+    cpu.ip = 0x0300
+    put(cpu, CS, 0x0300, { 0x8D, 0x7E, 0x40 })
+    cpu:step()
+    eq(cpu:get_reg16(7), 0xFF40, "LEA DI, [BP+0x40]")
+
+    -- A high segment must not leak into the offset: DS=0xFFFF with a direct
+    -- displacement still loads the plain 16-bit offset.
+    cpu.seg.ds = 0xFFFF
+    cpu.ip = 0x0400
+    put(cpu, CS, 0x0400, { 0x8D, 0x1E, 0x00, 0x10 })
+    cpu:step()
+    eq(cpu:get_reg16(3), 0x1000, "DS does not leak into LEA")
+
+    -- mod=3 is not a valid LEA encoding; the 80186+ executes it as MOV.
+    cpu:set_reg16(3, 0x2468)
+    cpu.ip = 0x0500
+    put(cpu, CS, 0x0500, { 0x8D, 0xC3 })
+    cpu:step()
+    eq(cpu:get_reg16(0), 0x2468, "LEA with mod=3 behaves as MOV")
+end)
+
+test("BCD and ASCII adjust instructions", function()
+    local cpu = new_cpu()
+
+    -- AAM (D4 0A): 0x2F -> AH=4, AL=7.
+    cpu:set_reg16(0, 0x002F)
+    cpu.ip = 0x0100
+    put(cpu, CS, 0x0100, { 0xD4, 0x0A })
+    cpu:step()
+    eq(cpu:get_reg16(0), 0x0407, "AAM 0x2F")
+
+    -- AAD (D5 0A): 0x0407 -> 0x002F, AH cleared.
+    cpu.ip = 0x0102
+    put(cpu, CS, 0x0102, { 0xD5, 0x0A })
+    cpu:step()
+    eq(cpu:get_reg16(0), 0x002F, "AAD 0x0407")
+    eq(cpu:get_reg8(4), 0, "AAD clears AH")
+
+    -- DAA: AL=0x0A -> 0x10, no carry.
+    cpu:set_reg16(0, 0x000A)
+    cpu:set_flag("AF", false)
+    cpu:set_flag("CF", false)
+    cpu.ip = 0x0104
+    put(cpu, CS, 0x0104, { 0x27 })
+    cpu:step()
+    eq(cpu:get_reg8(0), 0x10, "DAA 0x0A")
+    eq(cpu:get_flag("CF"), false, "DAA CF")
+
+    -- DAA with a decimal carry: AL=0x9A -> 0x00, CF=1.
+    cpu:set_reg16(0, 0x009A)
+    cpu:set_flag("AF", false)
+    cpu:set_flag("CF", false)
+    cpu.ip = 0x0105
+    put(cpu, CS, 0x0105, { 0x27 })
+    cpu:step()
+    eq(cpu:get_reg8(0), 0x00, "DAA 0x9A")
+    eq(cpu:get_flag("CF"), true, "DAA carry")
+
+    -- AAA: AL=0x0A -> AL=0, AH + 1, CF=AF=1.
+    cpu:set_reg16(0, 0x020A)
+    cpu:set_flag("AF", false)
+    cpu.ip = 0x0106
+    put(cpu, CS, 0x0106, { 0x37 })
+    cpu:step()
+    eq(cpu:get_reg16(0), 0x0300, "AAA 0x0A")
+    eq(cpu:get_flag("CF"), true, "AAA CF")
+
+    -- AAS: AL=0x0A -> AL=4, AH - 1, CF=AF=1.
+    cpu:set_reg16(0, 0x030A)
+    cpu:set_flag("AF", false)
+    cpu.ip = 0x0108
+    put(cpu, CS, 0x0108, { 0x3F })
+    cpu:step()
+    eq(cpu:get_reg16(0), 0x0204, "AAS 0x0A")
+    eq(cpu:get_flag("CF"), true, "AAS CF")
+
+    -- DAS: AL=0x0A -> 0x04, no carry.
+    cpu:set_reg16(0, 0x000A)
+    cpu:set_flag("AF", false)
+    cpu:set_flag("CF", false)
+    cpu.ip = 0x010A
+    put(cpu, CS, 0x010A, { 0x2F })
+    cpu:step()
+    eq(cpu:get_reg8(0), 0x04, "DAS 0x0A")
+    eq(cpu:get_flag("CF"), false, "DAS CF")
+
+    -- AAM with a zero base is a divide error.
+    cpu.ip = 0x010C
+    put(cpu, CS, 0x010C, { 0xD4, 0x00 })
+    expect_error(function() cpu:step() end, "divide error")
+
+    -- AAD with a zero base is legal: AL = (0 * AH + AL) = AL, AH = 0 and
+    -- no division is performed.
+    cpu:set_reg16(0, 0x1234)
+    cpu.ip = 0x010E
+    put(cpu, CS, 0x010E, { 0xD5, 0x00 })
+    cpu:step()
+    eq(cpu:get_reg16(0), 0x0034, "AAD base 0 leaves AL")
+end)
+
 test("MOV immediates, moffs and segment registers", function()
     local cpu = new_cpu()
 

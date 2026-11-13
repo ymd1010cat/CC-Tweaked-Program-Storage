@@ -6,8 +6,10 @@
 # Stages a throw-away CraftOS-PC data directory at 80486-simulator/.tests:
 #
 #     .tests/computer/20/startup.lua                    generated runner shim
-#     .tests/computer/20/{memory,disk,cpu,vga,bios}.lua  modules (require path)
+#     .tests/computer/20/{memory,disk,cpu,vga,bios,config_parser}.lua
+#                                                         modules (require path)
 #     .tests/computer/20/runner.lua                      machine entry point
+#     .tests/computer/20/80486.cfg                       default machine config
 #     .tests/computer/20/80486-simulator/*.lua           loadfile fallback path
 #     .tests/computer/20/tests/*.lua                     the suites
 #
@@ -40,10 +42,12 @@ if (-not (Test-Path $Exe)) {
 }
 
 $modules = @("memory.lua", "disk.lua", "cpu.lua", "vga.lua", "bios.lua",
-             "runner.lua")
+             "config_parser.lua", "runner.lua")
 $tests   = @("memory_test.lua", "disk_test.lua", "cpu_test.lua",
              "vga_test.lua", "bios_test.lua", "bios_services_test.lua",
-             "runner_test.lua", "test_integration.lua")
+             "test_config_parser.lua", "runner_test.lua",
+             "test_integration.lua", "test_config_integration.lua")
+$configs = @("80486.cfg")
 
 foreach ($module in $modules) {
     $path = Join-Path $simRoot $module
@@ -56,6 +60,13 @@ foreach ($name in $tests) {
     $path = Join-Path $simRoot ("tests\" + $name)
     if (-not (Test-Path $path)) {
         Write-Output "TEST_ERROR missing test file: $path"
+        exit 2
+    }
+}
+foreach ($name in $configs) {
+    $path = Join-Path $simRoot $name
+    if (-not (Test-Path $path)) {
+        Write-Output "TEST_ERROR missing config file: $path"
         exit 2
     }
 }
@@ -74,6 +85,12 @@ foreach ($module in $modules) {
 foreach ($name in $tests) {
     Copy-Item (Join-Path $simRoot ("tests\" + $name)) (Join-Path $comp ("tests\" + $name)) -Force
 }
+# The runner reads the default machine config at startup, so every suite sees
+# the same 80486.cfg.  Stage it under both spellings, like the modules.
+foreach ($name in $configs) {
+    Copy-Item (Join-Path $simRoot $name) (Join-Path $comp $name) -Force
+    Copy-Item (Join-Path $simRoot $name) (Join-Path $comp "80486-simulator\$name") -Force
+}
 
 # CraftOS runs /startup.lua at boot.  The shim keeps crashes visible as
 # normal SUITE_FAIL lines and aggregates the per-suite counters itself.
@@ -86,8 +103,10 @@ $shim = @(
     "    {`"vga`", `"/tests/vga_test.lua`"},",
     "    {`"bios`", `"/tests/bios_test.lua`"},",
     "    {`"bios_services`", `"/tests/bios_services_test.lua`"},",
+    "    {`"config_parser`", `"/tests/test_config_parser.lua`"},",
     "    {`"runner`", `"/tests/runner_test.lua`"},",
     "    {`"integration`", `"/tests/test_integration.lua`"},",
+    "    {`"config_integration`", `"/tests/test_config_integration.lua`"},",
     "}",
     "local captured = {}",
     "local real_print = print",
@@ -194,7 +213,7 @@ foreach ($line in $reportLines) {
 $passed = $false
 if (($reportLines -contains "SUITE_PASS") -and $counts -ne $null) {
     $passed = ($counts.fail -eq 0) -and ($counts.skip -eq 0) `
-        -and ($suiteOk -eq $suiteCount) -and ($suiteCount -eq 8)
+        -and ($suiteOk -eq $suiteCount) -and ($suiteCount -eq $tests.Count)
 }
 
 if (-not $passed) {

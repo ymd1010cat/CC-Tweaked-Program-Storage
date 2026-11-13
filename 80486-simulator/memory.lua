@@ -17,6 +17,13 @@
 --
 -- All multi-byte values are little-endian, as required by the 80486.
 -- No CPU cache / TLB behaviour is modelled here; this is functional memory.
+--
+-- Optional write protection: Memory.new(size, opts) accepts
+-- opts.protect_start / opts.protect_end to mark a byte range (for example the
+-- 0xF0000..0xFFFFF BIOS ROM window) that the write paths reject.  A write
+-- that touches the protected range raises "Memory Write Protection Fault";
+-- reads are never affected.  Memory.new(size) leaves protection disabled so
+-- the module stays usable as a plain RAM object.
 ---------------------------------------------------------------------------
 
 local PAGE_SIZE  = 4096
@@ -92,6 +99,23 @@ local function check_value(op, value, max_value)
             op, tostring(max_value), tostring(value)
         ), 0)
     end
+end
+
+-- Write protection.  Called by every write path after the range/value checks
+-- and before any page is touched.  A zero-length write never faults.
+local function check_write_protection(self, addr, len, op)
+    local protect_start = self._protect_start
+    if protect_start == nil or len <= 0 then
+        return
+    end
+    local protect_end = self._protect_end
+    if addr + len - 1 < protect_start or addr > protect_end then
+        return
+    end
+    error(op .. ": Memory Write Protection Fault: addr="
+        .. fmt_number(addr) .. " len=" .. tostring(len)
+        .. " protected=" .. fmt_number(protect_start)
+        .. ".." .. fmt_number(protect_end), 0)
 end
 
 ---------------------------------------------------------------------------
@@ -229,7 +253,7 @@ end
 -- Construction / introspection
 ---------------------------------------------------------------------------
 
-function Memory.new(size)
+function Memory.new(size, opts)
     if size == nil then
         size = MAX_SIZE
     end
@@ -241,12 +265,69 @@ function Memory.new(size)
         ), 0)
     end
 
+    local protect_start, protect_end
+    if opts ~= nil then
+        if type(opts) ~= "table" then
+            error("memory.new: opts must be a table (got "
+                .. type(opts) .. ")", 0)
+        end
+        protect_start = opts.protect_start
+        protect_end = opts.protect_end
+        if (protect_start == nil) ~= (protect_end == nil) then
+            error("memory.new: protect_start and protect_end must be "
+                .. "given together", 0)
+        end
+        if protect_start ~= nil then
+            if type(protect_start) ~= "number" or protect_start % 1 ~= 0
+                or type(protect_end) ~= "number" or protect_end % 1 ~= 0 then
+                error("memory.new: protect_start and protect_end must be "
+                    .. "integers", 0)
+            end
+            if protect_start < 0 or protect_end < protect_start
+                or protect_end >= size then
+                error("memory.new: write protection range "
+                    .. fmt_number(protect_start) .. ".."
+                    .. fmt_number(protect_end) .. " does not fit in "
+                    .. tostring(size) .. " bytes of memory", 0)
+            end
+        end
+    end
+
     return setmetatable({
-        _size       = size,
-        _page_count = floor((size + PAGE_SIZE - 1) / PAGE_SIZE),
-        _pages      = {},
-        _nonzero    = {},
+        _size          = size,
+        _page_count    = floor((size + PAGE_SIZE - 1) / PAGE_SIZE),
+        _pages         = {},
+        _nonzero       = {},
+        _protect_start = protect_start,
+        _protect_end   = protect_end,
     }, Memory)
+end
+
+-- Replaces the protected window; pass nil to disable protection.
+function Memory:set_write_protection(protect_start, protect_end)
+    if protect_start == nil then
+        self._protect_start = nil
+        self._protect_end = nil
+        return self
+    end
+    if type(protect_start) ~= "number" or protect_start % 1 ~= 0
+        or type(protect_end) ~= "number" or protect_end % 1 ~= 0 then
+        error("memory.set_write_protection: range bounds must be integers", 0)
+    end
+    if protect_start < 0 or protect_end < protect_start
+        or protect_end >= self._size then
+        error("memory.set_write_protection: range "
+            .. fmt_number(protect_start) .. ".." .. fmt_number(protect_end)
+            .. " does not fit in " .. tostring(self._size) .. " bytes", 0)
+    end
+    self._protect_start = protect_start
+    self._protect_end = protect_end
+    return self
+end
+
+-- Returns protect_start, protect_end (both nil when protection is off).
+function Memory:get_write_protection()
+    return self._protect_start, self._protect_end
 end
 
 function Memory:get_size()
@@ -336,6 +417,7 @@ end
 function Memory:write8(addr, value)
     check_range(self, addr, 1, "memory.write8")
     check_value("memory.write8", value, 255)
+    check_write_protection(self, addr, 1, "memory.write8")
     store8(self, addr, value)
     return self
 end
@@ -343,6 +425,7 @@ end
 function Memory:write16(addr, value)
     check_range(self, addr, 2, "memory.write16")
     check_value("memory.write16", value, 65535)
+    check_write_protection(self, addr, 2, "memory.write16")
 
     local b1 = value % 256
     local b2 = (value - b1) / 256
@@ -353,6 +436,7 @@ end
 function Memory:write32(addr, value)
     check_range(self, addr, 4, "memory.write32")
     check_value("memory.write32", value, 4294967295)
+    check_write_protection(self, addr, 4, "memory.write32")
 
     local b1 = value % 256
     local b2 = floor(value / 256) % 256
@@ -414,6 +498,7 @@ function Memory:write(addr, data)
     end
     check_block("memory.write", #data)
     check_range(self, addr, #data, "memory.write")
+    check_write_protection(self, addr, #data, "memory.write")
     store_bytes(self, addr, data)
     return self
 end
@@ -423,6 +508,7 @@ function Memory:fill(addr, len, value)
     check_block("memory.fill", len)
     check_range(self, addr, len, "memory.fill")
     check_value("memory.fill", value, 255)
+    check_write_protection(self, addr, len, "memory.fill")
 
     if len == 0 then
         return self
@@ -492,12 +578,14 @@ function Memory:fill(addr, len, value)
     return self
 end
 
--- memmove semantics.  Overlapping copies are safe.
+-- memmove semantics.  Overlapping copies are safe.  The destination range is
+-- write-protected exactly like write(): copying into it raises.
 function Memory:copy(dst, src, len)
     validate_length("memory.copy", len)
     check_block("memory.copy", len)
     check_range(self, dst, len, "memory.copy(dst)")
     check_range(self, src, len, "memory.copy(src)")
+    check_write_protection(self, dst, len, "memory.copy(dst)")
 
     if len == 0 or dst == src then
         return self
@@ -543,7 +631,7 @@ return {
     MAX_SIZE   = MAX_SIZE,
     MAX_BLOCK  = MAX_BLOCK,
     Memory     = Memory,
-    new        = function(size)
-        return Memory.new(size)
+    new        = function(size, opts)
+        return Memory.new(size, opts)
     end,
 }

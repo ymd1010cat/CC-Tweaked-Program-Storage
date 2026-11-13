@@ -18,8 +18,10 @@
 --     interrupt and the AH value.  Nothing is silently ignored.
 --   * Unimplemented CRTC registers (anything but the cursor position
 --     registers 0x0E / 0x0F) raise instead of pretending to be programmed.
---   * INT 13h AH=03 fails with "write protected" (AH=0x03) because the disk
---     image is read-only; it never reports a successful write.
+--   * INT 13h AH=03 never touches the disk: a well-formed request fails with
+--     "write protected" (AH=0x03) because the image is read-only, while an
+--     invalid sector count or CHS fails earlier with AH=0x04.  It never
+--     reports a successful write.
 --   * A failed disk transfer really reports an error code and the reason is
 --     kept in bios.last_error for diagnostics.
 --
@@ -40,9 +42,21 @@
 -- INT 13h functions implemented
 --   00 reset disk system (CF = 0, AH = 0)
 --   02 read sectors (AL, CH/CL/DH/DL CHS, ES:BX destination)
---   03 write sectors (always fails: the image is read-only, AH = 0x03)
+--   03 write sectors (well-formed requests fail with AH=0x03, image is
+--      read-only; an invalid count or CHS fails earlier with AH=0x04)
 --   08 read drive parameters (CH/CL/DH, DL = 0)
 --   0C seek (CF = 0, AH = 0 for a valid CHS)
+--
+-- INT 11h equipment check
+--   AX = equipment word (0x0021 by default: one floppy drive, 80x25 color,
+--   no serial or parallel adapters).
+--
+-- INT 17h printer services
+--   00 print character, 01 initialize, 02 read status.  No parallel printer
+--   is emulated; every function returns AH = 0x91 (bit 7 = not busy,
+--   bit 4 = selected, bit 0 = time-out) and no character is ever sent
+--   anywhere.  Bit 7 is deliberately set so a DOS kernel probing for a
+--   printer never waits for a "ready" state that cannot happen.
 --
 -- INT 19h bootstrap
 --   Reads sector 0 (the boot sector) from the attached disk into memory at
@@ -105,6 +119,17 @@ local BOOT_SIGNATURE_OFFSET = 511
 
 local CONVENTIONAL_KB = 640
 local EXTENDED_KB = 15 * 1024
+-- Equipment word returned by INT 11h: bit 0 = one floppy drive present,
+-- bits 4-5 = 10b (80x25 color), no serial/parallel adapters.  This is the
+-- classic PC/XT value and is what DOS 2.x expects from the boot floppy.
+local EQUIPMENT_WORD = 0x0021
+-- INT 17h status for "no printer attached".  Bit 7 (not busy) MUST be set:
+-- a DOS kernel probing the printer treats "busy" as "wait for ready" and
+-- would spin forever on a machine with no printer.  The value is the
+-- reviewer-suggested 0x90 (bit 7 not busy, bit 4 selected/on-line) with
+-- bit 0 (time-out) added: no device ever acknowledges, so the status
+-- reports a time-out instead of a ready printer.
+local PRINTER_STATUS = 0x0091
 local KEYBOARD_BUFFER_MAX = 64
 local TICKS_PER_SECOND = 18.2065
 local TICKS_PER_DAY = 1573040
@@ -344,7 +369,9 @@ end
 
 Bios.DEFAULT_GEOMETRY = {sectors = 9, heads = 2, cylinders = 40}
 Bios.INT_VIDEO = 0x10
+Bios.INT_EQUIPMENT = 0x11
 Bios.INT_DISK = 0x13
+Bios.INT_PRINTER = 0x17
 Bios.INT_BOOT = 0x19
 Bios.INT_TIMER = 0x08
 Bios.INT_MEMORY = 0x12
@@ -355,6 +382,8 @@ Bios.BOOT_ADDRESS = BOOT_ADDRESS
 Bios.BOOT_SIGNATURE = BOOT_SIGNATURE
 Bios.CONVENTIONAL_KB = CONVENTIONAL_KB
 Bios.EXTENDED_KB = EXTENDED_KB
+Bios.EQUIPMENT_WORD = EQUIPMENT_WORD
+Bios.PRINTER_STATUS = PRINTER_STATUS
 Bios.KEYBOARD_BUFFER_MAX = KEYBOARD_BUFFER_MAX
 Bios.TICKS_PER_DAY = TICKS_PER_DAY
 Bios.MAX_SECTORS_PER_READ = MAX_SECTORS_PER_READ
@@ -531,7 +560,9 @@ function Bios.new(opts)
 
     self.interrupts = {
         [Bios.INT_VIDEO] = function(cpu) return self:int10(cpu) end,
+        [Bios.INT_EQUIPMENT] = function(cpu) return self:int11(cpu) end,
         [Bios.INT_DISK] = function(cpu) return self:int13(cpu) end,
+        [Bios.INT_PRINTER] = function(cpu) return self:int17(cpu) end,
         [Bios.INT_BOOT] = function(cpu) return self:int19(cpu) end,
         [Bios.INT_TIMER] = function(cpu) return self:int08(cpu) end,
         [Bios.INT_MEMORY] = function(cpu) return self:int12(cpu) end,
@@ -573,7 +604,9 @@ function Bios:attach(cpu)
     end
 
     cpu.interrupts[Bios.INT_VIDEO] = self.interrupts[Bios.INT_VIDEO]
+    cpu.interrupts[Bios.INT_EQUIPMENT] = self.interrupts[Bios.INT_EQUIPMENT]
     cpu.interrupts[Bios.INT_DISK] = self.interrupts[Bios.INT_DISK]
+    cpu.interrupts[Bios.INT_PRINTER] = self.interrupts[Bios.INT_PRINTER]
     cpu.interrupts[Bios.INT_BOOT] = self.interrupts[Bios.INT_BOOT]
     cpu.interrupts[Bios.INT_TIMER] = self.interrupts[Bios.INT_TIMER]
     cpu.interrupts[Bios.INT_MEMORY] = self.interrupts[Bios.INT_MEMORY]
@@ -1050,8 +1083,9 @@ function Bios:int13_write(cpu)
     if cylinder == nil then
         return self:disk_fail(cpu, 0x04, chs_error)
     end
-    -- The shard image is read-only by design; report the real write
-    -- protection error instead of a fake success.
+    -- The shard image is read-only by design.  The request is well-formed at
+    -- this point (count and CHS already validated), so report the real
+    -- write-protection error (AH=0x03) instead of a fake success.
     return self:disk_fail(cpu, 0x03, string.format(
         "disk image is read-only: INT 13h AH=03 write of %d sector(s) at "
         .. "cyl=%d head=%d sector=%d is not implemented",
@@ -1269,6 +1303,33 @@ function Bios:int16(cpu)
         return true
     end
     error(string.format("INT 16h: unsupported keyboard function AH=0x%02X",
+        ah), 0)
+end
+
+---------------------------------------------------------------------------
+-- INT 11h: equipment check
+---------------------------------------------------------------------------
+
+function Bios:int11(cpu)
+    check_cpu(cpu, "INT 11h")
+    cpu:set_reg16(0, EQUIPMENT_WORD)
+    self:_log("INT11_EQUIPMENT ax=%04X", EQUIPMENT_WORD)
+    return true
+end
+
+---------------------------------------------------------------------------
+-- INT 17h: printer services (no printer is emulated)
+---------------------------------------------------------------------------
+
+function Bios:int17(cpu)
+    check_cpu(cpu, "INT 17h")
+    local ah = cpu:get_reg8(4)
+    if ah == 0x00 or ah == 0x01 or ah == 0x02 then
+        -- Report a printer that is not there; never blocks or retries.
+        cpu:set_reg8(4, PRINTER_STATUS)
+        self:_log("INT17_PRINTER ah=0x%02X status=0x%02X", ah, PRINTER_STATUS)
+        return true
+    end    error(string.format("INT 17h: unsupported printer function AH=0x%02X",
         ah), 0)
 end
 

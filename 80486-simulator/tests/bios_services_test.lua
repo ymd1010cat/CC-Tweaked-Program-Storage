@@ -178,13 +178,15 @@ end
 
 test("the DOS service vectors are registered and attached", function()
     eq(Bios.INT_TIMER, 0x08, "INT 08h")
+    eq(Bios.INT_EQUIPMENT, 0x11, "INT 11h")
     eq(Bios.INT_MEMORY, 0x12, "INT 12h")
     eq(Bios.INT_SYSTEM, 0x15, "INT 15h")
     eq(Bios.INT_KEYBOARD, 0x16, "INT 16h")
+    eq(Bios.INT_PRINTER, 0x17, "INT 17h")
     eq(Bios.INT_TIME, 0x1A, "INT 1Ah")
 
     local bios, cpu = new_machine()
-    local vectors = {0x08, 0x12, 0x15, 0x16, 0x1A}
+    local vectors = {0x08, 0x11, 0x12, 0x15, 0x16, 0x17, 0x1A}
     for i = 1, #vectors do
         local vector = vectors[i]
         eq(type(bios.interrupts[vector]), "function",
@@ -192,6 +194,57 @@ test("the DOS service vectors are registered and attached", function()
         eq(type(cpu.interrupts[vector]), "function",
             "CPU handler for vector " .. vector)
     end
+end)
+
+---------------------------------------------------------------------------
+-- INT 11h equipment check
+---------------------------------------------------------------------------
+
+test("INT 11h reports the equipment word", function()
+    eq(Bios.EQUIPMENT_WORD, 0x0021, "equipment word constant")
+    local bios, cpu, memory = new_machine()
+    local steps, reason = run_program(cpu, memory, string.char(
+        0xCD, 0x11, -- int 0x11
+        0xF4))      -- hlt
+    eq(reason, "halted", "halted")
+    if steps < 2 then
+        error("INT 11h was never executed")
+    end
+    eq(ax(cpu), 0x0021, "AX = equipment word")
+end)
+
+---------------------------------------------------------------------------
+-- INT 17h printer services
+---------------------------------------------------------------------------
+
+test("INT 17h reports no printer attached", function()
+    eq(Bios.PRINTER_STATUS, 0x0091, "printer status constant")
+    local bios, cpu, memory = new_machine()
+    local steps, reason = run_program(cpu, memory, string.char(
+        0xB4, 0x00, -- mov ah, 0x00 (print character)
+        0xB0, 0x41, -- mov al, 'A'
+        0xCD, 0x17, -- int 0x17
+        0xF4))      -- hlt
+    eq(reason, "halted", "halted")
+    if steps < 4 then
+        error("INT 17h was never executed")
+    end
+    local status = cpu:get_reg8(4)
+    eq(status, 0x0091, "AH = no-printer status")
+    eq(floor(status / 128) % 2, 1, "bit 7 = not busy")
+    eq(status % 2, 1, "bit 0 = time-out")
+end)
+
+test("INT 17h accepts initialize and read-status", function()
+    local bios, cpu = new_machine()
+    cpu:set_reg8(4, 0x01)
+    bios:int17(cpu)
+    eq(cpu:get_reg8(4), 0x0091, "initialize status")
+    eq(floor(cpu:get_reg8(4) / 128) % 2, 1, "initialize bit 7 = not busy")
+    cpu:set_reg8(4, 0x02)
+    bios:int17(cpu)
+    eq(cpu:get_reg8(4), 0x0091, "read status")
+    eq(floor(cpu:get_reg8(4) / 128) % 2, 1, "read-status bit 7 = not busy")
 end)
 
 ---------------------------------------------------------------------------

@@ -19,9 +19,12 @@
 --
 -- Public surface used by bios.lua and the tests:
 --   Cpu.new(opts)                 opts.memory (required), opts.sleep,
---                                 opts.sleep_interval
+--                                 opts.sleep_interval, opts.clock,
+--                                 opts.watchdog_max_tick
 --   Cpu.Device                    instance metatable
 --   Cpu.SLEEP_INTERVAL            200
+--   Cpu.WATCHDOG_SECONDS_PER_TICK 0.05
+--   cpu.watchdog_max_tick         -1 disables the watchdog; > 0 arms it
 --   cpu.reg[0..7]                 AX CX DX BX SP BP SI DI (32-bit integers)
 --   cpu.seg                       { cs =, ds =, es =, ss = }
 --   cpu.ip                        instruction pointer (wraps at 0x10000)
@@ -50,6 +53,10 @@ CPU.__index = CPU
 
 M.Device         = CPU
 M.SLEEP_INTERVAL = 200
+-- One watchdog tick is 0.05 seconds of wall clock time; [watchdog] max_tick
+-- multiplies this.  -1 (the default) disables the watchdog completely and
+-- leaves only the instruction-count based sleep(0) yield in CPU:run.
+M.WATCHDOG_SECONDS_PER_TICK = 0.05
 
 local BASE8  = 256
 local BASE16 = 65536
@@ -539,6 +546,10 @@ end
 --   rm       the raw 3-bit r/m register when mod == 3, otherwise nil
 --   addr     the linear address of the memory operand when mod ~= 3
 --   new_ip   the instruction pointer after the ModR/M bytes
+--   offset   the 16-bit effective address (segment offset) when mod ~= 3;
+--            nil for register operands.  LEA needs this value because the
+--            linear address alone cannot recover it once a high segment
+--            (>= 0x10000 / 16) has been added.
 --
 -- `seg_override` is the segment register named by a prefix ("es", "cs",
 -- "ss", "ds") or nil.
@@ -551,7 +562,7 @@ local function decode_modrm(self, ip, seg_override)
     local rm  = modrm % 8
 
     if mod == 3 then
-        return reg, rm, nil, ip
+        return reg, rm, nil, ip, nil
     end
 
     local offset
@@ -581,7 +592,7 @@ local function decode_modrm(self, ip, seg_override)
             local direct
             direct, ip = fetch16(self, ip)
             local base = self.seg[seg_override or "ds"] * 16
-            return reg, nil, base + direct, ip
+            return reg, nil, base + direct, ip, direct
         end
         offset = self:get_reg16(5) -- BP
         default_seg = "ss"
@@ -602,7 +613,7 @@ local function decode_modrm(self, ip, seg_override)
 
     offset = offset % BASE16
     local base = self.seg[seg_override or default_seg] * 16
-    return reg, nil, base + offset, ip
+    return reg, nil, base + offset, ip, offset
 end
 
 ---------------------------------------------------------------------------
@@ -954,6 +965,19 @@ end)
 def(0x8B, function(self, ip, seg) -- MOV r16, r/m16
     local reg, rm, addr, nip = decode_modrm(self, ip, seg)
     self:set_reg16(reg, read_rm16(self, rm, addr))
+    return nip
+end)
+
+def(0x8D, function(self, ip, seg) -- LEA r16, m
+    local reg, rm, _, nip, offset = decode_modrm(self, ip, seg)
+    if offset == nil then
+        -- ModR/M form with mod=3 is not a valid LEA encoding.  The 80186+
+        -- treats it as MOV r16, r/m16, so do the same instead of inventing
+        -- an address; nothing is silently skipped.
+        self:set_reg16(reg, self:get_reg16(rm))
+        return nip
+    end
+    self:set_reg16(reg, offset % BASE16)
     return nip
 end)
 
@@ -1760,6 +1784,123 @@ def(0xCF, function(self, ip) -- IRET
 end)
 
 ---------------------------------------------------------------------------
+-- BCD / ASCII adjust instructions
+---------------------------------------------------------------------------
+
+-- DAA: decimal adjust AL after addition.
+def(0x27, function(self) -- DAA
+    local al = self:get_reg8(0)
+    local old_al = al
+    local old_cf = self.flags.CF
+    local f = self.flags
+    if al % 16 > 9 or f.AF then
+        al = al + 6
+        f.AF = true
+    else
+        f.AF = false
+    end
+    if old_al > 0x99 or old_cf then
+        al = al + 0x60
+        f.CF = true
+    else
+        f.CF = false
+    end
+    al = al % 256
+    self:set_reg8(0, al)
+    update_szp(self, al, 8)
+    return nil
+end)
+
+-- DAS: decimal adjust AL after subtraction.
+def(0x2F, function(self) -- DAS
+    local al = self:get_reg8(0)
+    local old_al = al
+    local old_cf = self.flags.CF
+    local f = self.flags
+    if al % 16 > 9 or f.AF then
+        al = al - 6
+        f.AF = true
+    else
+        f.AF = false
+    end
+    if old_al > 0x99 or old_cf then
+        al = al - 0x60
+        f.CF = true
+    else
+        f.CF = false
+    end
+    al = al % 256
+    self:set_reg8(0, al)
+    update_szp(self, al, 8)
+    return nil
+end)
+
+-- AAA: ASCII adjust AL after addition (works on the low nibble; AH carries
+-- the decimal carry, SF/ZF/PF are undefined on the 8086 and left alone).
+def(0x37, function(self) -- AAA
+    local al = self:get_reg8(0)
+    local f = self.flags
+    if al % 16 > 9 or f.AF then
+        al = (al + 6) % 256
+        self:set_reg8(4, (self:get_reg8(4) + 1) % 256)
+        f.AF = true
+        f.CF = true
+    else
+        f.AF = false
+        f.CF = false
+    end
+    self:set_reg8(0, al % 16)
+    return nil
+end)
+
+-- AAS: ASCII adjust AL after subtraction.
+def(0x3F, function(self) -- AAS
+    local al = self:get_reg8(0)
+    local f = self.flags
+    if al % 16 > 9 or f.AF then
+        al = (al - 6) % 256
+        self:set_reg8(4, (self:get_reg8(4) - 1) % 256)
+        f.AF = true
+        f.CF = true
+    else
+        f.AF = false
+        f.CF = false
+    end
+    self:set_reg8(0, al % 16)
+    return nil
+end)
+
+-- AAM: ASCII adjust AX after multiply.  AH = AL / base, AL = AL % base;
+-- SF/ZF/PF reflect the new AL.  A zero base raises a divide error, exactly
+-- like the hardware exception (the immediate form is undocumented on the
+-- 8086 but is what real CPUs execute).
+def(0xD4, function(self, ip) -- AAM
+    local base, nip = fetch8(self, ip)
+    if base == 0 then
+        raise_divide(self)
+    end
+    local al = self:get_reg8(0)
+    local remainder = al % base
+    self:set_reg8(4, floor(al / base))
+    self:set_reg8(0, remainder)
+    update_szp(self, remainder, 8)
+    return nip
+end)
+
+-- AAD: ASCII adjust AX before divide.  AL = (AH * base + AL) % 256, AH = 0;
+-- SF/ZF/PF reflect the new AL.
+def(0xD5, function(self, ip) -- AAD
+    local base, nip = fetch8(self, ip)
+    local al = self:get_reg8(0)
+    local ah = self:get_reg8(4)
+    local value = (ah * base + al) % 256
+    self:set_reg8(4, 0)
+    self:set_reg8(0, value)
+    update_szp(self, value, 8)
+    return nip
+end)
+
+---------------------------------------------------------------------------
 -- CPU methods
 ---------------------------------------------------------------------------
 
@@ -1940,13 +2081,30 @@ end
 
 -- Run until HLT or until max_steps instructions have executed.  Every
 -- sleep_interval instructions the injected sleep function is called with 0
--- so the caller can yield to CraftOS.
+-- so the caller can yield to CraftOS.  This instruction-count yield is always
+-- active and must never be removed.
+--
+-- Optional watchdog: when watchdog_max_tick > 0 the run gets a wall-clock
+-- budget of watchdog_max_tick * WATCHDOG_SECONDS_PER_TICK seconds, armed on
+-- the first run call and never reset.  At each yield point the CPU checks the
+-- deadline; when it has passed it forces one more sleep(0) yield and then
+-- raises a clear error, so a runaway guest cannot monopolise the computer.
+-- The clock is injectable (opts.clock) so the behaviour is testable.
 function CPU:run(max_steps)
     if max_steps == nil then
         max_steps = 1000000
     end
     local executed = 0
     local interval = self._sleep_interval
+    local watchdog = self._watchdog_seconds
+
+    local deadline = nil
+    if watchdog ~= nil then
+        if self._watchdog_deadline == nil then
+            self._watchdog_deadline = self._clock() + watchdog
+        end
+        deadline = self._watchdog_deadline
+    end
 
     while executed < max_steps do
         if self.halted then
@@ -1956,6 +2114,15 @@ function CPU:run(max_steps)
         executed = executed + 1
         if executed % interval == 0 then
             self._sleep(0)
+            if deadline ~= nil and self._clock() >= deadline then
+                -- Force a final yield, then stop with a diagnostic instead
+                -- of letting the guest keep the computer busy forever.
+                self._sleep(0)
+                error("cpu.run: watchdog timeout: max_tick="
+                    .. self.watchdog_max_tick .. " ("
+                    .. tostring(watchdog) .. " s) exceeded at CS:IP="
+                    .. string.format("%04X:%04X", self.seg.cs, self.ip), 0)
+            end
         end
     end
 
@@ -1995,6 +2162,29 @@ function M.new(opts)
         error("cpu.new: opts.sleep_interval must be a positive integer", 0)
     end
 
+    local watchdog_tick = opts.watchdog_max_tick
+    if watchdog_tick == nil then
+        watchdog_tick = -1
+    end
+    if type(watchdog_tick) ~= "number" or watchdog_tick % 1 ~= 0
+        or (watchdog_tick ~= -1 and watchdog_tick < 1) then
+        error("cpu.new: opts.watchdog_max_tick must be -1 (disabled) or a "
+            .. "positive integer", 0)
+    end
+
+    local clock = opts.clock
+    if clock == nil then
+        clock = rawget(_G, "os") and os.clock or function() return 0 end
+    end
+    if type(clock) ~= "function" then
+        error("cpu.new: opts.clock must be a function", 0)
+    end
+
+    local watchdog_seconds = nil
+    if watchdog_tick > 0 then
+        watchdog_seconds = watchdog_tick * M.WATCHDOG_SECONDS_PER_TICK
+    end
+
     local reg = {}
     for i = 0, 7 do
         reg[i] = 0
@@ -2022,6 +2212,10 @@ function M.new(opts)
         ports      = { ["in"] = {}, out = {} },
         _sleep          = sleep,
         _sleep_interval = interval,
+        watchdog_max_tick  = watchdog_tick,
+        _watchdog_seconds  = watchdog_seconds,
+        _watchdog_deadline = nil,
+        _clock             = clock,
         _err_cs         = 0,
         _err_ip         = 0,
         _op             = 0,
